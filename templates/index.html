@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>parsedwg</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 760px;
+            margin: 40px auto;
+            padding: 0 16px;
+            line-height: 1.5;
+        }
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+        }
+        input, button {
+            margin-top: 8px;
+            margin-bottom: 16px;
+        }
+        button {
+            background: #0d6efd;
+            color: #fff;
+            border: 0;
+            padding: 10px 18px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>parsedwg</h1>
+        <p>
+            Загрузите <strong>DWG/DXF</strong> и, при необходимости,
+            <strong>пояснительную записку</strong>, чтобы получить Excel-файл
+            с листами <em>СО</em>, <em>ВОР</em> и <em>Смета</em>.
+        </p>
+
+        <form action="/process" method="post" enctype="multipart/form-data">
+            <label for="drawing">Чертёж (DWG/DXF)</label><br>
+            <input id="drawing" name="drawing" type="file" accept=".dwg,.dxf" required><br>
+
+            <label for="note">Пояснительная записка (TXT/RST/MD/DOCX, необязательно)</label><br>
+            <input id="note" name="note" type="file" accept=".txt,.rst,.md,.docx"><br>
+
+            <button type="submit">Сформировать отчёт</button>
+        </form>
+    </div>
+</body>
+</html>
