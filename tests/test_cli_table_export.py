@@ -203,3 +203,20 @@ def test_analyze_text_table_uses_top_y_for_row_clusters() -> None:
     analysis = DXFExplorer._analyze_text_table(block, y_tolerance=3.0)
 
     assert [cluster.center for cluster in analysis.y_clusters] == [20.0, 10.0]
+
+
+def test_describe_entity_includes_point_coordinates_and_insert_block_name() -> None:
+    doc = new()
+    block = doc.blocks.new("MARKER")
+    block.add_circle((0, 0, 0), radius=1)
+
+    point = doc.modelspace().add_point((1, 2, 3))
+    insert = doc.modelspace().add_blockref("MARKER", (10, 20, 0))
+
+    point_params = DXFExplorer._get_entity_params(point)
+    insert_params = DXFExplorer._get_entity_params(insert)
+
+    assert point_params["location"] == "(1.00, 2.00, 3.00)"
+    assert insert_params["block"] == "MARKER"
+    assert "location=(1.00, 2.00, 3.00)" in DXFExplorer._describe_entity(point_params)
+    assert "block='MARKER'" in DXFExplorer._describe_entity(insert_params)

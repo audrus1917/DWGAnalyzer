@@ -9,8 +9,34 @@ def test_main_list_layouts_prints_table_for_single_file(tmp_path, capsys) -> Non
     source_path = tmp_path / "layouts.dxf"
 
     doc = new()
-    doc.layouts.new("Sheet1")
+    doc.layers.add("MODEL_NOTES")
+    doc.layers.add("SHEET_NOTES")
+    doc.modelspace().add_text("Модель", dxfattribs={"layer": "MODEL_NOTES"})
+    sheet = doc.layouts.new("Sheet1")
+    sheet.add_text("Лист", dxfattribs={"layer": "SHEET_NOTES"})
     doc.saveas(source_path)
+
+    exit_code = main(["list-layouts", str(source_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Sheet1" in captured.out
+    assert "layout" in captured.out.lower()
+    assert "layers" in captured.out.lower()
+    assert "MODEL_NOTES" in captured.out
+    assert "SHEET_NOTES" in captured.out
+
+
+def test_main_list_layouts_converts_dwg_before_reading(tmp_path, monkeypatch, capsys) -> None:
+    source_path = tmp_path / "layouts.dwg"
+    converted_path = tmp_path / "layouts.converted.dxf"
+
+    doc = new()
+    doc.layouts.new("Sheet1")
+    doc.saveas(converted_path)
+    source_path.write_bytes(b"stub")
+
+    monkeypatch.setattr("parsedwg.explorer._convert_dwg_to_dxf", lambda path: converted_path)
 
     exit_code = main(["list-layouts", str(source_path)])
 
