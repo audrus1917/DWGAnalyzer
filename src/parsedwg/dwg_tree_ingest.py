@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import tempfile
 import zipfile
 from concurrent.futures import ProcessPoolExecutor
@@ -161,14 +162,102 @@ def _collect_entity_layers(doc, entity, seen_blocks: set[str] | None = None) -> 
 def _collect_layout_layers(doc, layout) -> list[str]:
     layers: set[str] = set()
     for entity in layout:
+        logger.debug("  Entity: %s", _describe_entity(entity))
         layers.update(_collect_entity_layers(doc, entity))
     return sorted(layers)
+
+
+def _format_point(point: object | None) -> str:
+    if point is None:
+        return "n/a"
+
+    x = getattr(point, "x", None)
+    y = getattr(point, "y", None)
+    z = getattr(point, "z", 0.0)
+    if x is not None and y is not None:
+        return f"({x:.2f}, {y:.2f}, {z:.2f})"
+
+    if isinstance(point, (tuple, list)) and len(point) >= 2:
+        try:
+            px = float(point[0])
+            py = float(point[1])
+            pz = float(point[2]) if len(point) >= 3 else 0.0
+        except (TypeError, ValueError):
+            return str(point)
+        return f"({px:.2f}, {py:.2f}, {pz:.2f})"
+
+    return str(point)
+
+
+def _is_point_like(value: object) -> bool:
+    if hasattr(value, "x") and hasattr(value, "y"):
+        return True
+
+    if isinstance(value, (tuple, list)) and len(value) >= 2:
+        try:
+            float(value[0])
+            float(value[1])
+        except (TypeError, ValueError):
+            return False
+        return True
+
+    return False
+
+
+def _get_text_content(entity) -> str:
+    entity_type = entity.dxftype()
+    if entity_type == "TEXT" and entity.dxf.hasattr("text"):
+        return str(entity.dxf.text).strip()
+
+    if entity_type == "MTEXT":
+        plain_text = getattr(entity, "plain_text", None)
+        if callable(plain_text):
+            return str(plain_text()).strip()
+
+    return ""
+
+
+def _describe_entity(entity) -> str:
+    params: dict[str, str] = {"type": entity.dxftype()}
+
+    if entity.dxftype() == "INSERT" and entity.dxf.hasattr("name"):
+        params["block"] = str(entity.dxf.name)
+
+    for attr_name, value in entity.dxf.all_existing_dxf_attribs().items():
+        if _is_point_like(value):
+            params[attr_name] = _format_point(value)
+
+    if entity.dxftype() == "LWPOLYLINE":
+        get_points = getattr(entity, "get_points", None)
+        if callable(get_points):
+            raw_points = get_points("xy")
+            if isinstance(raw_points, (list, tuple)):
+                points = [
+                    f"({float(point[0]):.2f}, {float(point[1]):.2f}, 0.00)"
+                    for point in raw_points
+                ]
+                if points:
+                    params["points"] = f"[{', '.join(points)}]"
+
+    text_value = _get_text_content(entity)
+    if text_value:
+        # Сохраняем в логе только первую строку текста, чтобы не раздувать debug-вывод.
+        params["text"] = re.sub(r"\s+", " ", text_value).strip()[:200]
+
+    rendered: list[str] = []
+    for key, value in params.items():
+        if key in {"block", "text"}:
+            rendered.append(f"{key}={value!r}")
+        else:
+            rendered.append(f"{key}={value}")
+    return ", ".join(rendered)
 
 
 def _collect_dxf_summary(dxf_path: Path) -> dict[str, object]:
     doc = readfile(str(dxf_path))
     layouts: list[dict[str, object]] = []
     for layout in doc.layouts:
+        logger.debug("Layout: %s", layout.name)
         layers = _collect_layout_layers(doc, layout)
         layouts.append({"name": layout.name, "layers": layers})
 
@@ -179,6 +268,10 @@ def _collect_dxf_summary(dxf_path: Path) -> dict[str, object]:
         }
         for block in doc.blocks
     ]
+    for block in doc.blocks:
+        logger.debug("Block: %s", block.name)
+        for entity in block:
+            logger.debug("  Entity: %s", _describe_entity(entity))
     return {"layouts": layouts, "blocks": blocks}
 
 

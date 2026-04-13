@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import sys
+
 from collections.abc import Callable
 from pathlib import Path
 
@@ -15,13 +16,15 @@ from .dwg_tree_ingest import run_dwg_tree_ingest
 from .docs_ingest import run_documents_ingest
 from .name_tags import collect_name_tags
 
+type ResultRow = dict[str, object]
+
+
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-type ResultRow = dict[str, object]
 
 SUPPORTED_DRAWING_SUFFIXES = {".dxf", ".dwg"}
 
