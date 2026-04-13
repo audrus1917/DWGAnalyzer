@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from ezdxf.filemanagement import new
 
@@ -92,3 +93,107 @@ def test_main_list_blocks_recurses_directory_and_creates_output_dir(tmp_path) ->
     second_rows = json.loads(second_json.read_text(encoding="utf-8"))
     assert any(row["block"] == "BLOCK_ONE" for row in first_rows)
     assert any(row["block"] == "BLOCK_TWO" for row in second_rows)
+
+
+def test_main_extract_name_tags_recurses_and_writes_json(tmp_path) -> None:
+    source_dir = tmp_path / "tower_A"
+    nested_dir = source_dir / "nested"
+    nested_dir.mkdir(parents=True)
+
+    roof_file = source_dir / "План кровли.dwg"
+    floor_file = nested_dir / "ПЛАН_ЭО_6-9 эт..dwg"
+    roof_file.write_text("stub", encoding="utf-8")
+    floor_file.write_text("stub", encoding="utf-8")
+
+    output_path = tmp_path / "name-tags.json"
+    exit_code = main(["extract-name-tags", str(source_dir), "-o", str(output_path)])
+
+    assert exit_code == 0
+    assert output_path.exists()
+
+    rows = json.loads(output_path.read_text(encoding="utf-8"))
+    indexed = {Path(row["file"]).name: row for row in rows}
+    assert indexed["План кровли.dwg"]["entities"] == ["Кровля"]
+    assert indexed["ПЛАН_ЭО_6-9 эт..dwg"]["entities"] == [
+        "6-й этаж",
+        "7-й этаж",
+        "8-й этаж",
+        "9-й этаж",
+    ]
+
+
+def test_main_ingest_dwg_tree_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
+    source_dir = tmp_path / "tower_A"
+    source_dir.mkdir(parents=True)
+
+    captured_args: dict[str, object] = {}
+
+    def fake_run(source_path: Path, conversion_workers: int = 2) -> dict[str, object]:
+        captured_args["source_path"] = source_path
+        captured_args["conversion_workers"] = conversion_workers
+        return {
+            "manifest": "/tmp/manifest.json",
+            "converted_manifest": "/tmp/converted.json",
+            "dwg_count": 3,
+            "dxf_count": 3,
+            "created_entities": 42,
+        }
+
+    monkeypatch.setattr("parsedwg.cli.run_dwg_tree_ingest", fake_run)
+
+    exit_code = main(["ingest-dwg-tree", str(source_dir), "--workers", "2"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_args["source_path"] == source_dir
+    assert captured_args["conversion_workers"] == 2
+    assert "Найдено DWG: 3" in captured.out
+    assert "Сконвертировано DXF: 3" in captured.out
+    assert "Создано сущностей в БД: 42" in captured.out
+
+
+def test_main_search_passes_parent_id_to_search_entities(monkeypatch, capsys) -> None:
+    captured_kwargs: dict = {}
+
+    async def fake_search(query, entity_type=None, limit=20, parent_id=None):
+        captured_kwargs["query"] = query
+        captured_kwargs["entity_type"] = entity_type
+        captured_kwargs["limit"] = limit
+        captured_kwargs["parent_id"] = parent_id
+        return []
+
+    monkeypatch.setattr("parsedwg.db.search_entities", fake_search)
+
+    pid = "11111111-1111-1111-1111-111111111111"
+    exit_code = main(["search", "блок", "--parent-id", pid, "--limit", "5"])
+
+    assert exit_code == 0
+    assert captured_kwargs["query"] == "блок"
+    assert captured_kwargs["parent_id"] == pid
+    assert captured_kwargs["limit"] == 5
+    assert captured_kwargs["entity_type"] is None
+
+
+def test_main_ingest_docs_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
+    source_dir = tmp_path / "docs"
+    source_dir.mkdir(parents=True)
+
+    captured_args: dict[str, object] = {}
+
+    def fake_run(source_path: Path) -> dict[str, object]:
+        captured_args["source_path"] = source_path
+        return {
+            "doc_count": 4,
+            "created_entities": 4,
+            "source": str(source_path),
+        }
+
+    monkeypatch.setattr("parsedwg.cli.run_documents_ingest", fake_run)
+
+    exit_code = main(["ingest-docs", str(source_dir)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_args["source_path"] == source_dir
+    assert "Найдено документов: 4" in captured.out
+    assert "Создано сущностей в БД: 4" in captured.out
