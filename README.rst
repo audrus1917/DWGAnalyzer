@@ -64,6 +64,19 @@ CLI-режим
        --note path/to/note.docx \
        --output reports/result.xlsx
 
+Также доступна фильтрация DXF с копированием только ``TEXT`` и ``MTEXT``:
+
+.. code-block:: bash
+
+   PYTHONPATH=src ./.venv/bin/python -m parsedwg copy-text path/to/source.dxf path/to/text-only.dxf
+
+Если нужно брать только объекты из modelspace без листов, используйте:
+
+.. code-block:: bash
+
+   PYTHONPATH=src ./.venv/bin/python -m parsedwg copy-text \
+       path/to/source.dxf path/to/text-only.dxf --modelspace-only
+
 Структура проекта
 =================
 
@@ -80,7 +93,7 @@ CLI-режим
    templates/
      index.html
    docs/
-     architecture.md
+     architecture.rst
 
 Ограничения MVP
 ===============
