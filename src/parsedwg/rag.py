@@ -196,6 +196,71 @@ async def similarity_search(
     ]
 
 
+async def hybrid_search(
+    query: str,
+    entity_type: str | None = None,
+    top_k: int = 5,
+    alpha: float = 0.5,
+) -> list[dict]:
+    """Гибридный поиск: BM25 + векторный с объединением результатов.
+
+    Args:
+        query: текст запроса.
+        entity_type: фильтр по типу сущности.
+        top_k: количество результатов.
+        alpha: вес BM25 (0..1); вес вектора = 1 - alpha. По умолчанию 0.5 (50/50).
+
+    Returns:
+        Список результатов, отсортированный по комбинированному рейтингу.
+    """
+    from .db import search_entities
+
+    # Запросить оба поиска параллельно
+    bm25_results = await search_entities(query, entity_type=entity_type, limit=top_k * 2)
+    vector_results = await similarity_search(query, entity_type=entity_type, top_k=top_k * 2)
+
+    # Нормализовать BM25 ранги (0..1, где 1 лучше: индекс в списке)
+    bm25_map: dict[str, float] = {}
+    for i, doc in enumerate(bm25_results):
+        # Обратный ранг: первый (i=0) получает 1.0, последний 0.0
+        bm25_map[doc["id"]] = 1.0 - (i / (len(bm25_results) + 1))
+
+    # Нормализовать вектор скоры (инвертировать расстояния)
+    vector_map: dict[str, tuple[float, dict]] = {}
+    if vector_results:
+        max_distance = max(r.get("distance", 0) for r in vector_results)
+        for doc in vector_results:
+            # Чем меньше расстояние, тем выше скор
+            distance = doc.get("distance", max_distance)
+            if max_distance > 0:
+                score = 1.0 - (distance / max_distance)
+            else:
+                score = 1.0
+            vector_map[doc["id"]] = (score, doc)
+
+    # Объединить результаты
+    combined: dict[str, dict] = {}
+    for doc_id, bm25_score in bm25_map.items():
+        vector_score, vector_doc = vector_map.get(doc_id, (0.0, None))
+        # Комбинированный скор
+        combined_score = (bm25_score * alpha) + (vector_score * (1 - alpha))
+        # Используем BM25 результат как основу (может быть и vector_doc)
+        doc = bm25_results[[d["id"] for d in bm25_results].index(doc_id)]
+        doc["hybrid_score"] = round(combined_score, 4)
+        combined[doc_id] = doc
+
+    # Добавить векторные результаты, которых нет в BM25
+    for doc_id, (vector_score, vector_doc) in vector_map.items():
+        if doc_id not in combined:
+            combined_score = vector_score * (1 - alpha)
+            vector_doc["hybrid_score"] = round(combined_score, 4)
+            combined[doc_id] = vector_doc
+
+    # Отсортировать по скору и вернуть top_k
+    results = sorted(combined.values(), key=lambda x: x.get("hybrid_score", 0), reverse=True)
+    return results[:top_k]
+
+
 async def ask(
     question: str,
     entity_type: str | None = None,
@@ -206,7 +271,7 @@ async def ask(
     Returns:
         {"answer": str, "sources": list[dict]}
     """
-    sources = await similarity_search(question, entity_type=entity_type, top_k=top_k)
+    sources = await hybrid_search(question, entity_type=entity_type, top_k=top_k)
     context_docs = [
         f"{s['name']}: {s['description']}" if s["description"] else s["name"]
         for s in sources

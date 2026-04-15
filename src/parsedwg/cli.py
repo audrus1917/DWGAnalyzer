@@ -170,7 +170,7 @@ def _handle_extract_name_tags_command(source_path: Path, output_path: Path | Non
     return 0
 
 
-def _handle_ingest_dwg_tree_command(source_path: Path, workers: int) -> int:
+def handle_ingest_dwg_tree_command(source_path: Path, workers: int) -> int:
     """Сканирует DWG/ZIP, конвертирует в DXF в 2 процессах и сохраняет дерево в БД."""
 
     summary = run_dwg_tree_ingest(source_path, conversion_workers=workers)
@@ -401,7 +401,7 @@ def main(argv: list[str] | None = None) -> int:
         return _handle_extract_name_tags_command(Path(args.path), output_path)
 
     if args.command == "ingest-dwg-tree":
-        return _handle_ingest_dwg_tree_command(Path(args.path), workers=max(1, args.workers))
+        return handle_ingest_dwg_tree_command(Path(args.path), workers=max(1, args.workers))
 
     if args.command == "ingest-docs":
         return _handle_ingest_docs_command(Path(args.path))

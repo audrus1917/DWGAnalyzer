@@ -3,7 +3,7 @@ from zipfile import ZipFile
 
 from ezdxf.filemanagement import new
 
-from parsedwg.dwg_tree_ingest import _discover_dwg_sources
+from parsedwg.dwg_tree_ingest import discover_dwg_sources
 from parsedwg.dwg_tree_ingest import _describe_entity
 
 
@@ -20,7 +20,7 @@ def test_discover_dwg_sources_finds_regular_and_zipped_dwg(tmp_path: Path) -> No
         archive.writestr("inside/a/model.dwg", b"dwg")
         archive.writestr("inside/a/readme.txt", b"txt")
 
-    entries = _discover_dwg_sources(root)
+    entries = discover_dwg_sources(root)
 
     assert len(entries) == 2
 

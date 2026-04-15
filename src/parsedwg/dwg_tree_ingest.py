@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 type ManifestEntry = dict[str, str]
 
 
-def _discover_dwg_sources(root_path: Path) -> list[ManifestEntry]:
+def discover_dwg_sources(root_path: Path) -> list[ManifestEntry]:
     if not root_path.exists():
         raise FileNotFoundError(f"Путь {root_path} не найден.")
 
@@ -410,8 +410,16 @@ def _ingest_manifest_to_db(converted_manifest_path: str, root_path: str) -> int:
     return asyncio.run(_save_tree_to_db(root_path, entries))
 
 
-def run_dwg_tree_ingest(source_path: Path, conversion_workers: int = 2) -> dict[str, object]:
-    entries = _discover_dwg_sources(source_path)
+def run_dwg_tree_ingest(
+    source_path: Path, 
+    conversion_workers: int = 2
+) -> dict[str, object]:
+    """
+    Обходит каталог с DWG-файлами (включая ZIP), конвертирует их в DXF, 
+    сохраняет структуру в БД и возвращает статистику.
+    """
+
+    entries = discover_dwg_sources(source_path)
     if not entries:
         raise ValueError(f"В каталоге {source_path} не найдено DWG-файлов (включая ZIP).")
 

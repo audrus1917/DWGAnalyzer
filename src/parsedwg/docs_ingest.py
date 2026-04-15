@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import re
+
+from dataclasses import dataclass
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -11,6 +14,30 @@ from .db import async_session_factory
 from .orm import Entity, EntityType
 
 SUPPORTED_DOC_SUFFIXES = {".pdf", ".docx", ".xlsx"}
+
+_GLOSSARY_ARTICLE_RE = re.compile(
+    r"^(?P<article_no>\d+\.\d+\.\d+)\s+"
+    r"(?P<term>.+)\s+\((?P<english_term>[^()]+)\):\s*(?P<definition>.*)$"
+)
+_SECTION_HEADING_RE = re.compile(r"^\d+(?:\.\d+)?\s+.+$")
+
+
+@dataclass(frozen=True, slots=True)
+class GlossaryTerm:
+    article_no: str
+    term: str
+    english_term: str
+    definition: str
+    page: int
+
+
+@dataclass(slots=True)
+class _GlossaryTermBuilder:
+    article_no: str
+    term: str
+    english_term: str
+    definition_parts: list[str]
+    page: int
 
 
 def _discover_documents(source_path: Path) -> list[Path]:
@@ -79,6 +106,89 @@ def _extract_pdf_text(path: Path) -> str:
     return "\n\n".join(chunks)
 
 
+def _normalize_pdf_page_text(text: str) -> list[str]:
+    normalized = text.replace("\x00", "").replace("\u00ad", "")
+    normalized = re.sub(r"(?<=[A-Za-zА-Яа-я])-\n(?=[A-Za-zА-Яа-я])", "", normalized)
+    normalized = re.sub(r"(?<=[A-Za-zА-Яа-я])\n(?=[a-zа-я])", "", normalized)
+    return [line.strip() for line in normalized.splitlines() if line.strip()]
+
+
+def _should_skip_pdf_line(line: str) -> bool:
+    if re.fullmatch(r"\d+", line):
+        return True
+    if line.startswith("ГОСТ"):
+        return True
+    if line == "Издание официальное":
+        return True
+    return False
+
+
+def _clean_definition_text(parts: list[str]) -> str:
+    text = " ".join(part.strip() for part in parts if part.strip())
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _extract_glossary_terms_from_pages(pages: list[tuple[int, str]]) -> list[GlossaryTerm]:
+    terms: list[GlossaryTerm] = []
+    current: _GlossaryTermBuilder | None = None
+
+    def flush_current() -> None:
+        nonlocal current
+        if current is None:
+            return
+
+        definition = _clean_definition_text(current.definition_parts)
+        if definition:
+            terms.append(
+                GlossaryTerm(
+                    article_no=current.article_no,
+                    term=current.term,
+                    english_term=current.english_term,
+                    definition=definition,
+                    page=current.page,
+                )
+            )
+        current = None
+
+    for page_num, page_text in pages:
+        for line in _normalize_pdf_page_text(page_text):
+            if _should_skip_pdf_line(line):
+                continue
+
+            match = _GLOSSARY_ARTICLE_RE.match(line)
+            if match:
+                flush_current()
+                current = _GlossaryTermBuilder(
+                    article_no=match.group("article_no"),
+                    term=match.group("term").strip(),
+                    english_term=match.group("english_term").strip(),
+                    definition_parts=[match.group("definition").strip()],
+                    page=page_num,
+                )
+                continue
+
+            if current is None:
+                continue
+
+            if _SECTION_HEADING_RE.match(line):
+                continue
+
+            current.definition_parts.append(line)
+
+    flush_current()
+    return terms
+
+
+def _extract_glossary_terms(path: Path) -> list[GlossaryTerm]:
+    reader = PdfReader(str(path))
+    pages = [
+        (page_num, page.extract_text() or "")
+        for page_num, page in enumerate(reader.pages, start=1)
+    ]
+    return _extract_glossary_terms_from_pages(pages)
+
+
 def _extract_text(path: Path) -> str:
     suffix = path.suffix.lower()
     if suffix == ".docx":
@@ -108,6 +218,7 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
 
         for doc_path in documents:
             text = _extract_text(doc_path)
+            glossary_terms = _extract_glossary_terms(doc_path) if doc_path.suffix.lower() == ".pdf" else []
             try:
                 rel_path = str(doc_path.relative_to(source_path))
             except ValueError:
@@ -126,7 +237,27 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
                 parent_id=root.id,
             )
             session.add(entity)
+            await session.flush()
             created += 1
+
+            for term in glossary_terms:
+                session.add(
+                    Entity(
+                        name=term.term,
+                        description=term.definition,
+                        entity_type=EntityType.primitive,
+                        data={
+                            "article_no": term.article_no,
+                            "english_term": term.english_term,
+                            "page": term.page,
+                            "source_kind": "glossary_term",
+                            "source_file": rel_path,
+                        },
+                        start_from=f"{doc_path}#page={term.page}",
+                        parent_id=entity.id,
+                    )
+                )
+                created += 1
 
         await session.commit()
 
@@ -146,4 +277,9 @@ def run_documents_ingest(source_path: Path) -> dict[str, object]:
     }
 
 
-__all__ = ["run_documents_ingest", "SUPPORTED_DOC_SUFFIXES"]
+__all__ = [
+    "GlossaryTerm",
+    "SUPPORTED_DOC_SUFFIXES",
+    "run_documents_ingest",
+    "_extract_glossary_terms_from_pages",
+]
