@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from typing import Any, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from .settings import settings
@@ -26,7 +27,7 @@ async def search_entities(
     limit: int = 20,
     parent_id: str | None = None,
 ) -> list[dict]:
-    """Полнотекстовый поиск по полям name и description таблицы entity.
+    """Полнотекстовый поиск по entity_text с fallback на name и description.
 
     Использует PostgreSQL websearch_to_tsquery (поддерживает кавычки, минус, OR)
     и to_tsvector с конфигурацией 'russian'.
@@ -34,11 +35,15 @@ async def search_entities(
     from .orm import Entity  # local import to avoid circular deps
 
     tsquery = func.websearch_to_tsquery("russian", query)
-    tsvector = func.to_tsvector(
+    fallback_tsvector = func.to_tsvector(
         "russian",
         func.concat_ws(" ", Entity.name, Entity.description),
     )
-    rank = func.ts_rank(tsvector, tsquery)
+    entity_match = Entity.entity_text.op("@@")(tsquery)
+    fallback_match = fallback_tsvector.op("@@")(tsquery)
+    entity_rank = cast(Any, func.coalesce(func.ts_rank(Entity.entity_text, tsquery), 0.0))
+    fallback_rank = cast(Any, func.coalesce(func.ts_rank(fallback_tsvector, tsquery), 0.0))
+    priority = case((entity_match, 1), else_=0)
 
     stmt = (
         select(
@@ -48,8 +53,13 @@ async def search_entities(
             Entity.entity_type,
             Entity.start_from,
         )
-        .where(tsvector.op("@@")(tsquery))
-        .order_by(rank.desc())
+        .where(
+            or_(
+                entity_match,
+                fallback_match,
+            )
+        )
+        .order_by(priority.desc(), entity_rank.desc(), fallback_rank.desc())
         .limit(limit)
     )
     if entity_type is not None:

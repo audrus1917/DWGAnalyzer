@@ -3,9 +3,8 @@ from zipfile import ZipFile
 
 from ezdxf.filemanagement import new
 
-from parsedwg.dwg_tree_ingest import discover_dwg_sources
+from parsedwg.dwg_tree_ingest import DWGTreeProcessor
 from parsedwg.dwg_tree_ingest import _describe_entity
-from parsedwg.dwg_tree_ingest import _compute_md5_hex
 from parsedwg.dwg_tree_ingest import collect_dxf_summary
 
 
@@ -22,7 +21,7 @@ def test_discover_dwg_sources_finds_regular_and_zipped_dwg(tmp_path: Path) -> No
         archive.writestr("inside/a/model.dwg", b"dwg")
         archive.writestr("inside/a/readme.txt", b"txt")
 
-    entries = discover_dwg_sources(root)
+    entries = list(DWGTreeProcessor(root).walk(root))
 
     assert len(entries) == 2
 
@@ -51,7 +50,7 @@ def test_compute_md5_hex_returns_32_char_hash(tmp_path: Path) -> None:
     source = tmp_path / "sample.dwg"
     source.write_bytes(b"abc")
 
-    digest = _compute_md5_hex(source)
+    digest = DWGTreeProcessor.file_md5(source)
 
     assert digest == "900150983cd24fb0d6963f7d28e17f72"
 

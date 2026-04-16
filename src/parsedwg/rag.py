@@ -131,8 +131,11 @@ async def index_entities(
                 except httpx.HTTPError as exc:
                     logger.warning("Ошибка эмбеддинга для %s: %s", entity.id, exc)
                     continue
-                await session.merge(entity)
-                entity.embedding = vec
+                managed_entity = await session.get(Entity, entity.id)
+                if managed_entity is None:
+                    logger.warning("Сущность %s не найдена при сохранении эмбеддинга", entity.id)
+                    continue
+                managed_entity.embedding = vec
                 total += 1
             await session.commit()
         logger.info("Проиндексировано %d / %d", min(i + batch_size, len(entities)), len(entities))
@@ -215,9 +218,9 @@ async def hybrid_search(
     """
     from .db import search_entities
 
-    # Запросить оба поиска параллельно
     bm25_results = await search_entities(query, entity_type=entity_type, limit=top_k * 2)
     vector_results = await similarity_search(query, entity_type=entity_type, top_k=top_k * 2)
+    logger.debug("Step 1")
 
     # Нормализовать BM25 ранги (0..1, где 1 лучше: индекс в списке)
     bm25_map: dict[str, float] = {}
@@ -225,6 +228,7 @@ async def hybrid_search(
         # Обратный ранг: первый (i=0) получает 1.0, последний 0.0
         bm25_map[doc["id"]] = 1.0 - (i / (len(bm25_results) + 1))
 
+    logger.debug("Step 2")
     # Нормализовать вектор скоры (инвертировать расстояния)
     vector_map: dict[str, tuple[float, dict]] = {}
     if vector_results:
@@ -238,6 +242,8 @@ async def hybrid_search(
                 score = 1.0
             vector_map[doc["id"]] = (score, doc)
 
+    logger.debug("Step 3")
+
     # Объединить результаты
     combined: dict[str, dict] = {}
     for doc_id, bm25_score in bm25_map.items():
@@ -249,12 +255,16 @@ async def hybrid_search(
         doc["hybrid_score"] = round(combined_score, 4)
         combined[doc_id] = doc
 
+    logger.debug("Step 4")
+
     # Добавить векторные результаты, которых нет в BM25
-    for doc_id, (vector_score, vector_doc) in vector_map.items():
-        if doc_id not in combined:
-            combined_score = vector_score * (1 - alpha)
-            vector_doc["hybrid_score"] = round(combined_score, 4)
-            combined[doc_id] = vector_doc
+    # for doc_id, (vector_score, vector_doc) in vector_map.items():
+    #     if doc_id not in combined:
+    #         combined_score = vector_score * (1 - alpha)
+    #         vector_doc["hybrid_score"] = round(combined_score, 4)
+    #         combined[doc_id] = vector_doc
+
+    logger.debug("Step 5")
 
     # Отсортировать по скору и вернуть top_k
     results = sorted(combined.values(), key=lambda x: x.get("hybrid_score", 0), reverse=True)

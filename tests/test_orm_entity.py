@@ -1,3 +1,5 @@
+from sqlalchemy.dialects.postgresql import TSVECTOR
+
 from parsedwg.orm import Entity
 
 
@@ -22,3 +24,10 @@ def test_entity_has_is_table_column() -> None:
     is_table_column = Entity.__table__.c.is_table
 
     assert is_table_column.nullable is True
+
+
+def test_entity_has_entity_text_tsvector_column() -> None:
+    entity_text_column = Entity.__table__.c.entity_text
+
+    assert entity_text_column.nullable is True
+    assert isinstance(entity_text_column.type, TSVECTOR)

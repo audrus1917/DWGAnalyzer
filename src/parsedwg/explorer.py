@@ -205,7 +205,7 @@ class DXFExplorer:
         cls,
         block,
         x_tolerance: float = 10.0,
-        y_tolerance: float = 3.0,
+        y_tolerance: float = 30.0,
     ) -> TableAnalysis:
         return TextClusterAnalyzer.analyze_table(
             block,
