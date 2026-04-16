@@ -23,6 +23,7 @@ logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
+logging.getLogger("ezdxf").disabled = True
 logger = logging.getLogger(__name__)
 
 
@@ -171,7 +172,7 @@ def _handle_extract_name_tags_command(source_path: Path, output_path: Path | Non
 
 
 def handle_ingest_dwg_tree_command(source_path: Path, workers: int) -> int:
-    """Сканирует DWG/ZIP, конвертирует в DXF в 2 процессах и сохраняет дерево в БД."""
+    """Сканирует DWG/ZIP, конвертирует в DXF и сохраняет дерево в БД."""
 
     summary = run_dwg_tree_ingest(source_path, conversion_workers=workers)
     print(f"Найдено DWG: {summary['dwg_count']}")
@@ -183,7 +184,7 @@ def handle_ingest_dwg_tree_command(source_path: Path, workers: int) -> int:
 
 
 def _handle_ingest_docs_command(source_path: Path) -> int:
-    """Рекурсивно индексирует PDF/DOCX/XLSX документы в таблицу entity."""
+    """Рекурсивно индексирует PDF/DOCX/XLSX/CSV документы в таблицу entity."""
 
     summary = run_documents_ingest(source_path)
     print(f"Найдено документов: {summary['doc_count']}")
@@ -274,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
     ingest_dwg_tree_parser = subparsers.add_parser(
         "ingest-dwg-tree",
         help=(
-            "Рекурсивно найти DWG (включая ZIP), сконвертировать в DXF в 2 процессах "
+            "Рекурсивно найти DWG (включая ZIP), сконвертировать в DXF в пуле процессов "
             "и загрузить дерево блоков/layers в БД."
         ),
     )
@@ -285,13 +286,16 @@ def main(argv: list[str] | None = None) -> int:
     ingest_dwg_tree_parser.add_argument(
         "--workers",
         type=int,
-        default=2,
-        help="Количество процессов для этапа конвертации DWG в DXF (по умолчанию: 2).",
+        default=0,
+        help=(
+            "Количество процессов для этапа конвертации DWG в DXF "
+            "(<=0: авторасчет по CPU)."
+        ),
     )
 
     ingest_docs_parser = subparsers.add_parser(
         "ingest-docs",
-        help="Рекурсивно найти PDF/DOCX/XLSX и загрузить в БД для RAG.",
+        help="Рекурсивно найти PDF/DOCX/XLSX/CSV и загрузить в БД для RAG.",
     )
     ingest_docs_parser.add_argument(
         "path",

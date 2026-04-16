@@ -1,16 +1,20 @@
+"""Класс для получения данных о свойствах DWG/DXF файлов и выполнения операций с ними."""
+
 from __future__ import annotations
 
 import logging
 import re
 from collections.abc import Iterable
+
 from pathlib import Path
 
+from ezdxf.document import Drawing
 from ezdxf.filemanagement import readfile
+from ezdxf.addons.odafc import readfile as read_odafc
 from openpyxl import Workbook
 from openpyxl.styles import Alignment
 from openpyxl.utils import get_column_letter
 
-from .parsers import _convert_dwg_to_dxf
 from .table_analysis import TableAnalysis, TextClusterAnalyzer
 
 logger = logging.getLogger(__name__)
@@ -23,7 +27,6 @@ class DXFExplorer:
 
     def __init__(self, drawing: Path | str):
         self.drawing = Path(drawing)
-        self._readable_drawing: Path | None = None
         if not self.drawing.is_file():
             logger.error("Файл %s не найден.", self.drawing)
             raise FileNotFoundError(f"Файл {self.drawing} не найден.")
@@ -32,28 +35,22 @@ class DXFExplorer:
         logger.info("Обрабатываемый файл: %s", self.drawing)
         logger.info("Размер файла: %.2f МБ", size_mb)
 
-    def _get_readable_drawing(self) -> Path:
-        if self._readable_drawing is not None:
-            return self._readable_drawing
+    def _read_document(self) -> Drawing:
+        """Читает DWG/DXF файл и возвращает объект документа ezdxf."""
 
+        logger.debug("Читаем файл через ezdxf: %s", self.drawing)
         if self.drawing.suffix.lower() == ".dwg":
             logger.info(
                 "Файл %s имеет формат DWG, сначала конвертируем его в DXF.",
                 self.drawing,
             )
-            self._readable_drawing = _convert_dwg_to_dxf(self.drawing)
+            return read_odafc(self.drawing, "ACAD2018")
         else:
-            self._readable_drawing = self.drawing
-
-        return self._readable_drawing
-
-    def _read_document(self):
-        readable_drawing = self._get_readable_drawing()
-        logger.debug("Читаем файл через ezdxf: %s", readable_drawing)
-        return readfile(str(readable_drawing))
+            return readfile(self.drawing)
 
     @staticmethod
-    def _format_point(point: object | None) -> str:
+    def format_point(point: object | None) -> str:
+        """Возвращает строку с представлением координат точки."""
         if point is None:
             return "n/a"
 
@@ -75,7 +72,10 @@ class DXFExplorer:
         return str(point)
 
     @staticmethod
-    def _is_point_like(value: object) -> bool:
+    def is_point(value: object) -> bool:
+        """Возвращает True, если значение похоже на точку с координатами 
+        (имеет x/y или похожую структуру).
+        """
         if hasattr(value, "x") and hasattr(value, "y"):
             return True
 
@@ -90,7 +90,9 @@ class DXFExplorer:
         return False
 
     @staticmethod
-    def _get_text_content(entity) -> str:
+    def get_text_content(entity) -> str:
+        """Возвращает содержимое атрибута `text` объекта."""
+
         entity_type = entity.dxftype()
         if entity_type == "TEXT" and entity.dxf.hasattr("text"):
             return entity.dxf.text.strip()
@@ -109,6 +111,7 @@ class DXFExplorer:
         entity,
         seen_blocks: set[str] | None = None,
     ) -> set[str]:
+        """Собирает все слои, на которых находится сущность, включая вложенные блоки."""
         layers: set[str] = set()
         layer_name = getattr(entity.dxf, "layer", "")
         if layer_name:
@@ -135,6 +138,7 @@ class DXFExplorer:
 
     @classmethod
     def _get_layout_layers(cls, doc, layout) -> str:
+        """Возвращает строку с перечислением всех слоев, на которых находятся сущности в макете."""
         layers: set[str] = set()
         for entity in layout:
             layers.update(cls._collect_entity_layers(doc, entity))
@@ -142,6 +146,7 @@ class DXFExplorer:
 
     @classmethod
     def _get_entity_params(cls, entity) -> dict[str, str]:
+        """Возвращает словарь с параметрами сущности."""
         entity_type = entity.dxftype()
         params: dict[str, str] = {"type": entity_type}
 
@@ -149,10 +154,10 @@ class DXFExplorer:
             params["block"] = entity.dxf.name
 
         for attr_name, value in entity.dxf.all_existing_dxf_attribs().items():
-            if cls._is_point_like(value):
-                params[attr_name] = cls._format_point(value)
+            if cls.is_point(value):
+                params[attr_name] = cls.format_point(value)
 
-        text_value = cls._get_text_content(entity)
+        text_value = cls.get_text_content(entity)
         if text_value:
             params["text"] = text_value
 
@@ -172,14 +177,14 @@ class DXFExplorer:
             if callable(get_points):
                 raw_points = get_points()
                 if isinstance(raw_points, Iterable):
-                    points = [cls._format_point(point) for point in raw_points]
+                    points = [cls.format_point(point) for point in raw_points]
                     if points:
                         params["points"] = f"[{', '.join(points)}]"
         elif entity_type == "SOLID":
             solid_points = []
             for attr_name in ("vtx0", "vtx1", "vtx2", "vtx3"):
                 if entity.dxf.hasattr(attr_name):
-                    solid_points.append(cls._format_point(getattr(entity.dxf, attr_name)))
+                    solid_points.append(cls.format_point(getattr(entity.dxf, attr_name)))
             if solid_points:
                 params["points"] = f"[{', '.join(solid_points)}]"
 

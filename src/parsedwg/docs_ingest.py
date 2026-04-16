@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import hashlib
 import re
 
 from dataclasses import dataclass
@@ -13,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .db import async_session_factory
 from .orm import Entity, EntityType
 
-SUPPORTED_DOC_SUFFIXES = {".pdf", ".docx", ".xlsx"}
+SUPPORTED_DOC_SUFFIXES = {".pdf", ".docx", ".xlsx", ".csv"}
 
 _GLOSSARY_ARTICLE_RE = re.compile(
     r"^(?P<article_no>\d+\.\d+\.\d+)\s+"
@@ -40,13 +42,21 @@ class _GlossaryTermBuilder:
     page: int
 
 
+def _compute_md5_hex(path: Path) -> str:
+    digest = hashlib.md5(usedforsecurity=False)
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _discover_documents(source_path: Path) -> list[Path]:
     if not source_path.exists():
         raise FileNotFoundError(f"Путь {source_path} не найден.")
 
     if source_path.is_file():
         if source_path.suffix.lower() not in SUPPORTED_DOC_SUFFIXES:
-            raise ValueError("Поддерживаются только PDF, DOCX и XLSX файлы.")
+            raise ValueError("Поддерживаются только PDF, DOCX, XLSX и CSV файлы.")
         return [source_path]
 
     files = sorted(
@@ -55,7 +65,7 @@ def _discover_documents(source_path: Path) -> list[Path]:
         if item.is_file() and item.suffix.lower() in SUPPORTED_DOC_SUFFIXES
     )
     if not files:
-        raise ValueError(f"В каталоге {source_path} не найдено PDF/DOCX/XLSX файлов.")
+        raise ValueError(f"В каталоге {source_path} не найдено PDF/DOCX/XLSX/CSV файлов.")
     return files
 
 
@@ -104,6 +114,26 @@ def _extract_pdf_text(path: Path) -> str:
         if normalized:
             chunks.append(normalized)
     return "\n\n".join(chunks)
+
+
+def _extract_csv_text(path: Path) -> str:
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    sample = raw[:4096]
+    delimiter = ","
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+        delimiter = dialect.delimiter
+    except csv.Error:
+        if ";" in sample and "," not in sample:
+            delimiter = ";"
+
+    chunks: list[str] = []
+    reader = csv.reader(raw.splitlines(), delimiter=delimiter)
+    for row in reader:
+        values = [cell.strip() for cell in row if cell and cell.strip()]
+        if values:
+            chunks.append(" | ".join(values))
+    return "\n".join(chunks)
 
 
 def _normalize_pdf_page_text(text: str) -> list[str]:
@@ -197,6 +227,8 @@ def _extract_text(path: Path) -> str:
         return _extract_xlsx_text(path)
     if suffix == ".pdf":
         return _extract_pdf_text(path)
+    if suffix == ".csv":
+        return _extract_csv_text(path)
     raise ValueError(f"Неподдерживаемый тип документа: {path.suffix}")
 
 
@@ -208,7 +240,7 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
 
         root = Entity(
             name=source_path.name if source_path.name else str(source_path),
-            description="Корневая папка импортированных документов PDF/DOCX/XLSX",
+            description="Корневая папка импортированных документов PDF/DOCX/XLSX/CSV",
             entity_type=EntityType.folder,
             data={"path": str(source_path)},
             start_from=str(source_path),
@@ -233,6 +265,7 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
                     "relative_path": rel_path,
                     "size_bytes": doc_path.stat().st_size,
                 },
+                file_md5=_compute_md5_hex(doc_path),
                 start_from=str(doc_path),
                 parent_id=root.id,
             )
@@ -265,7 +298,7 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
 
 
 def run_documents_ingest(source_path: Path) -> dict[str, object]:
-    """Рекурсивно импортирует PDF/DOCX/XLSX документы в таблицу entity."""
+    """Рекурсивно импортирует PDF/DOCX/XLSX/CSV документы в таблицу entity."""
 
     source = source_path.resolve()
     documents = _discover_documents(source)
