@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Generator
+from typing import Generator
 
 import asyncio
 import hashlib
@@ -15,15 +15,17 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from ezdxf.filemanagement import readfile
+from sqlalchemy import func
 
 from .db import async_session_factory
 from .orm import Entity, EntityToEntity, EntityType
 from .parsers import _convert_dwg_to_dxf
+from .redis_queue import load_converted, new_job_id, push_converted, push_sources
 from .table_analysis import TextClusterAnalyzer
 
 logger = logging.getLogger(__name__)
 
-type ManifestEntry = dict[str, str]
+type JobEntry = dict[str, str]
 
 
 class _QueueLike(Protocol):
@@ -37,58 +39,66 @@ _QUEUE_EVENT_DONE = "converter_done"
 _QUEUE_EVENT_ERROR = "converter_error"
 
 
-def _compute_md5_hex(path: Path) -> str:
-    digest = hashlib.md5(usedforsecurity=False)
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+class DWGTreeProcessor:
+    """Основной обработчик. Обходит каталог."""
 
+    def __init__(
+        self, 
+        source_path: Path, 
+        conversion_workers: int = 2,
+        root_path: Path | None = None,
+    ):
+        """Инициализация процессора. Принимает путь к каталогу с DWG-файлами и количество рабочих
+        процессов для конвертации."""
+        
+        self.source_path = source_path
+        self.root_path = root_path or source_path
+        if not self.root_path.exists():
+            raise FileNotFoundError(f"Путь {self.root_path} не найден.")
 
-def discover_dwg_sources(root_path: Path) -> list[ManifestEntry]:
-    if not root_path.exists():
-        raise FileNotFoundError(f"Путь {root_path} не найден.")
+        self.conversion_workers = conversion_workers
 
-    entries: list[ManifestEntry] = []
-    for file_path in sorted(path for path in root_path.rglob("*") if path.is_file()):
-        suffix = file_path.suffix.lower()
-        if suffix == ".dwg":
-            entries.append(
-                {
+    @staticmethod
+    def file_md5(path: Path) -> str:
+        """Вычисляет MD5-хеш файла для идентификации его содержимого."""
+
+        digest = hashlib.md5(usedforsecurity=False)
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def walk(self, root_path: Path) -> Generator[JobEntry, None, None]:
+        """Обходит каталог и находит все подкаталоги, DWG-файлы, включая те, что внутри ZIP-архивов."""
+
+        for file_path in sorted(path for path in root_path.rglob("*") if path.is_file()):
+            suffix = file_path.suffix.lower()
+            if suffix == ".dwg":
+                yield {
                     "kind": "file",
                     "root": str(root_path),
                     "source": str(file_path),
                     "name": file_path.name,
                 }
-            )
-            continue
+            if suffix == ".zip":
+                try:
+                    with zipfile.ZipFile(file_path) as archive:
+                        for member_name in sorted(info.filename for info in archive.infolist()):
+                            if member_name.endswith("/"):
+                                continue
+                            if Path(member_name).suffix.lower() != ".dwg":
+                                continue
+                            yield {
+                                "kind": "zipped_file",
+                                "root": str(root_path),
+                                "source": str(file_path),
+                                "member": member_name,
+                                "name": Path(member_name).name,
+                            }
+                except zipfile.BadZipFile:
+                    logger.warning("Пропускаем поврежденный ZIP: %s", file_path)
 
-        if suffix != ".zip":
-            continue
-
-        try:
-            with zipfile.ZipFile(file_path) as archive:
-                for member_name in sorted(info.filename for info in archive.infolist()):
-                    if member_name.endswith("/"):
-                        continue
-                    if Path(member_name).suffix.lower() != ".dwg":
-                        continue
-                    entries.append(
-                        {
-                            "kind": "zipped_file",
-                            "root": str(root_path),
-                            "source": str(file_path),
-                            "member": member_name,
-                            "name": Path(member_name).name,
-                        }
-                    )
-        except zipfile.BadZipFile:
-            logger.warning("Пропускаем поврежденный ZIP: %s", file_path)
-
-    return entries
-
-
-def _write_temp_json_file(entries: list[ManifestEntry], prefix: str) -> Path:
+def _write_temp_json_file(entries: list[JobEntry], prefix: str) -> Path:
     with tempfile.NamedTemporaryFile(
         mode="w",
         encoding="utf-8",
@@ -100,13 +110,13 @@ def _write_temp_json_file(entries: list[ManifestEntry], prefix: str) -> Path:
         return Path(temp_file.name)
 
 
-def _load_manifest(manifest_path: str) -> list[ManifestEntry]:
-    return json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+def _load_entries_from_json(json_path: str) -> list[JobEntry]:
+    return json.loads(Path(json_path).read_text(encoding="utf-8"))
 
 
-def _split_to_batches(entries: list[ManifestEntry], workers: int) -> list[list[ManifestEntry]]:
+def _split_to_batches(entries: list[JobEntry], workers: int) -> list[list[JobEntry]]:
     normalized_workers = max(1, workers)
-    batches: list[list[ManifestEntry]] = [[] for _ in range(normalized_workers)]
+    batches: list[list[JobEntry]] = [[] for _ in range(normalized_workers)]
     for index, entry in enumerate(entries):
         batches[index % normalized_workers].append(entry)
     return [batch for batch in batches if batch]
@@ -145,7 +155,7 @@ def _extract_dwg_from_zip(zip_path: Path, member: str, temp_dir: Path) -> Path:
     return target_path
 
 
-def _convert_entry(entry: ManifestEntry, converted_dir: str) -> ManifestEntry:
+def _convert_entry(entry: JobEntry, converted_dir: str) -> JobEntry:
     source = Path(entry["source"])
     converted_root = Path(converted_dir)
     converted_root.mkdir(parents=True, exist_ok=True)
@@ -163,14 +173,14 @@ def _convert_entry(entry: ManifestEntry, converted_dir: str) -> ManifestEntry:
             working_dwg = _extract_dwg_from_zip(source, member_name, temp_dir)
             source_ref = f"{entry['source']}::{member_name}"
 
-        file_md5 = _compute_md5_hex(working_dwg)
+        file_md5 = DWGTreeProcessor.file_md5(working_dwg)
 
         converted_temp_path = _convert_dwg_to_dxf(working_dwg)
         target_name = hashlib.sha1(source_ref.encode("utf-8")).hexdigest() + ".dxf"
         target_path = converted_root / target_name
         target_path.write_bytes(converted_temp_path.read_bytes())
 
-    converted_entry: ManifestEntry = {
+    converted_entry: JobEntry = {
         **entry,
         "source_ref": source_ref,
         "dxf": str(target_path),
@@ -179,11 +189,11 @@ def _convert_entry(entry: ManifestEntry, converted_dir: str) -> ManifestEntry:
     return converted_entry
 
 
-def _queue_done_event() -> ManifestEntry:
+def _queue_done_event() -> JobEntry:
     return {_QUEUE_EVENT_KEY: _QUEUE_EVENT_DONE}
 
 
-def _queue_error_event(message: str) -> ManifestEntry:
+def _queue_error_event(message: str) -> JobEntry:
     return {_QUEUE_EVENT_KEY: _QUEUE_EVENT_ERROR, "message": message}
 
 
@@ -195,15 +205,18 @@ def _queue_event_type(item: object) -> str | None:
 
 
 def _convert_batch(
-    batch: list[ManifestEntry],
+    batch: list[JobEntry],
     converted_dir: str,
     converted_queue: _QueueLike | None = None,
-) -> list[ManifestEntry]:
-    converted: list[ManifestEntry] = []
+    job_id: str | None = None,
+) -> list[JobEntry]:
+    converted: list[JobEntry] = []
     try:
         for entry in batch:
             converted_entry = _convert_entry(entry, converted_dir)
             converted.append(converted_entry)
+            if job_id is not None:
+                push_converted(job_id, converted_entry)
             if converted_queue is not None:
                 converted_queue.put(converted_entry)
     except Exception as error:
@@ -215,6 +228,12 @@ def _convert_batch(
             converted_queue.put(_queue_done_event())
 
     return converted
+
+
+def _build_entity_text(text_value: str | None):
+    if text_value is None or not text_value.strip():
+        return None
+    return func.to_tsvector("russian", text_value)
 
 
 def _collect_entity_layers(doc, entity, seen_blocks: set[str] | None = None) -> set[str]:
@@ -365,9 +384,9 @@ def _collect_text_primitives(doc) -> list[dict[str, str]]:
     return primitives
 
 
-def collect_dxf_summary(dxf_path: Path) -> Generator[Any, None, None]:
+def collect_dxf_summary(dxf_path: Path):
 
-    doc = readfile(dxf_path))
+    doc = readfile(dxf_path)
     layouts: list[dict[str, object]] = []
     for layout in doc.layouts:
         logger.debug("Layout: %s", layout.name)
@@ -393,8 +412,8 @@ def collect_dxf_summary(dxf_path: Path) -> Generator[Any, None, None]:
             }
         )
         logger.debug("Block: %s", block.name)
-        # for entity in block:
-        #     logger.debug("  Entity: %s", _describe_entity(entity))
+        for entity in block:
+            logger.debug("  Entity: %s", _describe_entity(entity))
 
     primitives = _collect_text_primitives(doc)
 
@@ -405,11 +424,12 @@ def collect_dxf_summary(dxf_path: Path) -> Generator[Any, None, None]:
     }
 
 
-async def _save_tree_to_db(root_path: str, entries: list[ManifestEntry]) -> int:
+async def _save_tree_to_db(root_path: str, entries: list[JobEntry]) -> int:
     async with async_session_factory() as session:
         root_entity = Entity(
             name=Path(root_path).name or root_path,
             description=f"Источник сканирования: {root_path}",
+            entity_text=_build_entity_text(f"Источник сканирования: {root_path}"),
             entity_type=EntityType.folder,
             data={"path": root_path},
             start_from=root_path,
@@ -433,6 +453,7 @@ async def _save_tree_to_db(root_path: str, entries: list[ManifestEntry]) -> int:
                         parent_id=root_entity.id,
                         name=Path(zip_source).name,
                         description=f"ZIP-архив: {zip_source}",
+                        entity_text=_build_entity_text(f"ZIP-архив: {zip_source}"),
                         entity_type=EntityType.zipfile,
                         data={"path": zip_source},
                         start_from=zip_source,
@@ -454,6 +475,7 @@ async def _save_tree_to_db(root_path: str, entries: list[ManifestEntry]) -> int:
                 parent_id=parent_entity.id,
                 name=entry["name"],
                 description=f"Исходный файл: {source_ref}",
+                entity_text=_build_entity_text(f"Исходный файл: {source_ref}"),
                 entity_type=file_type,
                 data={"source_ref": source_ref, "dxf_path": entry["dxf"]},
                 file_md5=entry.get("file_md5"),
@@ -476,6 +498,7 @@ async def _save_tree_to_db(root_path: str, entries: list[ManifestEntry]) -> int:
                     parent_id=file_entity.id,
                     name=str(layout["name"]),
                     description=f"Layout файла {entry['name']}",
+                    entity_text=_build_entity_text(f"Layout файла {entry['name']}"),
                     entity_type=EntityType.layout,
                     data={"dxf_path": entry["dxf"]},
                     start_from=source_ref,
@@ -496,6 +519,7 @@ async def _save_tree_to_db(root_path: str, entries: list[ManifestEntry]) -> int:
                         parent_id=layout_entity.id,
                         name=str(layer_name),
                         description=f"Layer layout {layout['name']}",
+                        entity_text=_build_entity_text(f"Layer layout {layout['name']}"),
                         entity_type=EntityType.layer,
                         data={"layout": layout["name"], "dxf_path": entry["dxf"]},
                         start_from=source_ref,
@@ -523,6 +547,7 @@ async def _save_tree_to_db(root_path: str, entries: list[ManifestEntry]) -> int:
                     parent_id=file_entity.id,
                     name=str(block["name"]),
                     description=f"Block файла {entry['name']}",
+                    entity_text=_build_entity_text(f"Block файла {entry['name']}"),
                     entity_type=EntityType.block,
                     data=block_data,
                     is_table=cast(bool, block["is_table"]),
@@ -544,12 +569,12 @@ async def _save_tree_to_db(root_path: str, entries: list[ManifestEntry]) -> int:
                     parent_id=file_entity.id,
                     name=str(primitive["type"]),
                     description=str(primitive["text"]),
+                    entity_text=_build_entity_text(str(primitive["text"])),
                     entity_type=EntityType.primitive,
                     data={
                         "layout": primitive["layout"],
                         "layer": primitive["layer"],
                         "location": primitive["location"],
-                        "text": primitive["text"],
                         "dxf_path": entry["dxf"],
                     },
                     start_from=source_ref,
@@ -580,6 +605,7 @@ async def _save_tree_to_db_from_queue(
         root_entity = Entity(
             name=Path(root_path).name or root_path,
             description=f"Обрабатываемый каталог: {root_path}",
+            entity_text=_build_entity_text(f"Обрабатываемый каталог: {root_path}"),
             entity_type=EntityType.folder,
             data={"path": root_path},
             start_from=root_path,
@@ -603,7 +629,7 @@ async def _save_tree_to_db_from_queue(
                     message = str(queue_item.get("message", message))
                 raise RuntimeError(message)
 
-            entry = cast(ManifestEntry, queue_item)
+            entry = cast(JobEntry, queue_item)
             source_ref = entry["source_ref"]
             file_type = EntityType.file if entry["kind"] == "file" else EntityType.zipped_file
 
@@ -616,6 +642,7 @@ async def _save_tree_to_db_from_queue(
                         parent_id=root_entity.id,
                         name=Path(zip_source).name,
                         description=f"ZIP-архив: {zip_source}",
+                        entity_text=_build_entity_text(f"ZIP-архив: {zip_source}"),
                         entity_type=EntityType.zipfile,
                         data={"path": zip_source},
                         start_from=zip_source,
@@ -637,6 +664,7 @@ async def _save_tree_to_db_from_queue(
                 parent_id=parent_entity.id,
                 name=entry["name"],
                 description=f"Исходный файл: {source_ref}",
+                entity_text=_build_entity_text(f"Исходный файл: {source_ref}"),
                 entity_type=file_type,
                 data={"source_ref": source_ref, "dxf_path": entry["dxf"]},
                 file_md5=entry.get("file_md5"),
@@ -659,6 +687,7 @@ async def _save_tree_to_db_from_queue(
                     parent_id=file_entity.id,
                     name=str(layout["name"]),
                     description=f"Layout файла {entry['name']}",
+                    entity_text=_build_entity_text(f"Layout файла {entry['name']}"),
                     entity_type=EntityType.layout,
                     data={"dxf_path": entry["dxf"]},
                     start_from=source_ref,
@@ -679,6 +708,7 @@ async def _save_tree_to_db_from_queue(
                         parent_id=layout_entity.id,
                         name=str(layer_name),
                         description=f"Layer layout {layout['name']}",
+                        entity_text=_build_entity_text(f"Layer layout {layout['name']}"),
                         entity_type=EntityType.layer,
                         data={"layout": layout["name"], "dxf_path": entry["dxf"]},
                         start_from=source_ref,
@@ -706,6 +736,7 @@ async def _save_tree_to_db_from_queue(
                     parent_id=file_entity.id,
                     name=str(block["name"]),
                     description=f"Block файла {entry['name']}",
+                    entity_text=_build_entity_text(f"Block файла {entry['name']}"),
                     entity_type=EntityType.block,
                     data=block_data,
                     is_table=cast(bool, block["is_table"]),
@@ -727,12 +758,12 @@ async def _save_tree_to_db_from_queue(
                     parent_id=file_entity.id,
                     name=str(primitive["type"]),
                     description=str(primitive["text"]),
+                    entity_text=_build_entity_text(str(primitive["text"])),
                     entity_type=EntityType.primitive,
                     data={
                         "layout": primitive["layout"],
                         "layer": primitive["layer"],
                         "location": primitive["location"],
-                        "text": primitive["text"],
                         "dxf_path": entry["dxf"],
                     },
                     start_from=source_ref,
@@ -754,7 +785,7 @@ async def _save_tree_to_db_from_queue(
     return created_entities
 
 
-def _ingest_manifest_to_db(
+def _ingest_queue_to_db(
     converted_queue: _QueueLike,
     root_path: str,
     producer_count: int,
@@ -771,30 +802,31 @@ def run_dwg_tree_ingest(
     сохраняет структуру в БД и возвращает статистику.
     """
 
-    entries = discover_dwg_sources(source_path)
+    entries = list(DWGTreeProcessor(source_path).walk(source_path))
     if not entries:
         raise ValueError(f"В каталоге {source_path} не найдено DWG-файлов (включая ZIP).")
 
-    manifest_path = _write_temp_json_file(entries, prefix="parsedwg-dwg-manifest-")
-    logger.info("Временный список DWG сохранен: %s", manifest_path)
+    job_id = new_job_id()
+    push_sources(job_id, entries)
+    logger.info("Список DWG сохранён в Redis, job_id=%s, count=%d", job_id, len(entries))
 
     effective_workers = _resolve_conversion_workers(conversion_workers)
     converted_dir = Path(tempfile.mkdtemp(prefix="parsedwg-dxf-cache-"))
     batches = _split_to_batches(entries, workers=effective_workers)
 
-    converted_entries: list[ManifestEntry] = []
+    converted_entries: list[JobEntry] = []
     with mp.Manager() as manager:
         converted_queue = manager.Queue()
 
         with ProcessPoolExecutor(max_workers=max(2, effective_workers + 1)) as executor:
             ingest_future = executor.submit(
-                _ingest_manifest_to_db,
+                _ingest_queue_to_db,
                 converted_queue,
                 str(source_path),
                 len(batches),
             )
             futures = [
-                executor.submit(_convert_batch, batch, str(converted_dir), converted_queue)
+                executor.submit(_convert_batch, batch, str(converted_dir), converted_queue, job_id)
                 for batch in batches
             ]
             for future in futures:
@@ -803,15 +835,16 @@ def run_dwg_tree_ingest(
             created_entities = ingest_future.result()
 
     converted_entries.sort(key=lambda item: item["source_ref"])
-    converted_manifest_path = _write_temp_json_file(
-        converted_entries,
-        prefix="parsedwg-converted-dxf-",
+    redis_converted_count = len(load_converted(job_id))
+    logger.info(
+        "Конвертация завершена: job_id=%s, dxf_count=%d (redis=%d)",
+        job_id,
+        len(converted_entries),
+        redis_converted_count,
     )
-    logger.info("Временный список DXF сохранен: %s", converted_manifest_path)
 
     return {
-        "manifest": str(manifest_path),
-        "converted_manifest": str(converted_manifest_path),
+        "job_id": job_id,
         "dwg_count": len(entries),
         "dxf_count": len(converted_entries),
         "conversion_workers": effective_workers,

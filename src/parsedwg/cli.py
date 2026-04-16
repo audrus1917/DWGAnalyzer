@@ -178,8 +178,9 @@ def handle_ingest_dwg_tree_command(source_path: Path, workers: int) -> int:
     print(f"Найдено DWG: {summary['dwg_count']}")
     print(f"Сконвертировано DXF: {summary['dxf_count']}")
     print(f"Создано сущностей в БД: {summary['created_entities']}")
-    print(f"Временный список DWG: {summary['manifest']}")
-    print(f"Временный список DXF: {summary['converted_manifest']}")
+    print(summary)
+    # print(f"Список источников DWG: {summary['source_list']}")
+    # print(f"Список сконвертированных DXF: {summary['converted_list']}")
     return 0
 
 

@@ -239,8 +239,11 @@ class TextClusterAnalyzer:
         assigned_count = 0
 
         for row in row_groups:
-            if len(row) < len(column_ranges):
+            if not row:
                 continue
+
+            for x in row:
+                print(x)
 
             cells = ["" for _ in column_ranges]
             assignments = cls._assign_columns_for_row(row, column_ranges)
@@ -255,7 +258,8 @@ class TextClusterAnalyzer:
                     cells[column_index] = text_value
                 assigned_count += 1
 
-            if any(cell.strip() for cell in cells):
+            cell_checks = [cell.strip() for cell in cells]
+            if any(cell_checks):
                 rows.append(cells)
 
         return rows, assigned_count, centered_rows

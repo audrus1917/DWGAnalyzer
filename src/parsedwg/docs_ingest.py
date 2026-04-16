@@ -10,6 +10,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 from pypdf import PdfReader
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import async_session_factory
@@ -232,6 +233,12 @@ def _extract_text(path: Path) -> str:
     raise ValueError(f"Неподдерживаемый тип документа: {path.suffix}")
 
 
+def _build_entity_text(text_value: str | None):
+    if text_value is None or not text_value.strip():
+        return None
+    return func.to_tsvector("russian", text_value)
+
+
 async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int:
     created = 0
 
@@ -241,6 +248,9 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
         root = Entity(
             name=source_path.name if source_path.name else str(source_path),
             description="Корневая папка импортированных документов PDF/DOCX/XLSX/CSV",
+            entity_text=_build_entity_text(
+                "Корневая папка импортированных документов PDF/DOCX/XLSX/CSV"
+            ),
             entity_type=EntityType.folder,
             data={"path": str(source_path)},
             start_from=str(source_path),
@@ -259,6 +269,7 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
             entity = Entity(
                 name=doc_path.name,
                 description=text,
+                entity_text=_build_entity_text(text),
                 entity_type=EntityType.file,
                 data={
                     "doc_type": doc_path.suffix.lower().lstrip("."),
@@ -278,6 +289,7 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
                     Entity(
                         name=term.term,
                         description=term.definition,
+                        entity_text=_build_entity_text(term.definition),
                         entity_type=EntityType.primitive,
                         data={
                             "article_no": term.article_no,

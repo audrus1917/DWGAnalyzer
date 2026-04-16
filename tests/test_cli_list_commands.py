@@ -139,8 +139,8 @@ def test_main_ingest_dwg_tree_runs_pipeline(tmp_path, monkeypatch, capsys) -> No
         captured_args["source_path"] = source_path
         captured_args["conversion_workers"] = conversion_workers
         return {
-            "manifest": "/tmp/manifest.json",
-            "converted_manifest": "/tmp/converted.json",
+            "source_list": "/tmp/sources.json",
+            "converted_list": "/tmp/converted.json",
             "dwg_count": 3,
             "dxf_count": 3,
             "created_entities": 42,

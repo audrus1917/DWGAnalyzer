@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -42,6 +42,7 @@ class Entity(Base):
     )
     name: Mapped[str] = mapped_column(String(512), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    entity_text: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
     entity_type: Mapped[EntityType] = mapped_column(
         Enum(EntityType, name="entity_type_enum"), nullable=False
     )
