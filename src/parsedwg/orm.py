@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -57,6 +57,8 @@ class Entity(Base):
         DateTime(timezone=True), nullable=True, onupdate=_utcnow
     )
     updated_by: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    file_md5: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    is_table: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     start_from: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     parent: Mapped[Entity | None] = relationship(

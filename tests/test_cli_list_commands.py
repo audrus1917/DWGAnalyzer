@@ -30,19 +30,26 @@ def test_main_list_layouts_prints_table_for_single_file(tmp_path, capsys) -> Non
 
 def test_main_list_layouts_converts_dwg_before_reading(tmp_path, monkeypatch, capsys) -> None:
     source_path = tmp_path / "layouts.dwg"
-    converted_path = tmp_path / "layouts.converted.dxf"
+    source_path.write_bytes(b"stub")
 
     doc = new()
     doc.layouts.new("Sheet1")
-    doc.saveas(converted_path)
-    source_path.write_bytes(b"stub")
 
-    monkeypatch.setattr("parsedwg.explorer._convert_dwg_to_dxf", lambda path: converted_path)
+    captured_args: dict[str, object] = {}
+
+    def fake_read_odafc(path, version):
+        captured_args["path"] = path
+        captured_args["version"] = version
+        return doc
+
+    monkeypatch.setattr("parsedwg.explorer.read_odafc", fake_read_odafc)
 
     exit_code = main(["list-layouts", str(source_path)])
 
     captured = capsys.readouterr()
     assert exit_code == 0
+    assert captured_args["path"] == source_path
+    assert captured_args["version"] == "ACAD2018"
     assert "Sheet1" in captured.out
     assert "layout" in captured.out.lower()
 
@@ -152,7 +159,7 @@ def test_main_ingest_dwg_tree_runs_pipeline(tmp_path, monkeypatch, capsys) -> No
     assert "Создано сущностей в БД: 42" in captured.out
 
 
-def test_main_search_passes_parent_id_to_search_entities(monkeypatch, capsys) -> None:
+def test_main_search_passes_parent_id_to_search_entities(monkeypatch) -> None:
     captured_kwargs: dict = {}
 
     async def fake_search(query, entity_type=None, limit=20, parent_id=None):
