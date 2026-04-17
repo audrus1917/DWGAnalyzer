@@ -303,7 +303,7 @@ class DXFExplorer:
                 # logger.debug("  Entity: %s", self._describe_entity(params))
         return rows
 
-    def extract_block(self, block_name: str) -> None:
+    def extract_block(self, block_name: str) -> int:
         logger.info("Извлекаем блок '%s' из файла: %s", block_name, self.drawing)
         doc = self._read_document()
         block = doc.blocks.get(block_name)
@@ -334,6 +334,7 @@ class DXFExplorer:
             logger.info("Таблица сохранена в XLSX: %s", output_path)
         else:
             logger.info("Табличная структура не определена, XLSX не создан.")
-
+        return 0
+    
 
 __all__ = ["DXFExplorer"]
