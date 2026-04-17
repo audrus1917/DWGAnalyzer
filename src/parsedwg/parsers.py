@@ -86,8 +86,9 @@ def _extract_dxf_text(path: Path) -> str:
     return "\n".join(lines)
 
 
-@deprecated(reason="Заменили на использование ``ezdxf.addons.odafc.readfile``.")
-def _convert_dwg_to_dxf(path: Path) -> Path:
+def convert_dwg(path: Path) -> Path:
+    """Конвертирует DWG в DXF и возвращает путь к временному DXF-файлу."""
+
     converter = shutil.which("ODAFileConverter") or shutil.which("odafc")
     if converter is None:
         raise RuntimeError(
@@ -95,40 +96,20 @@ def _convert_dwg_to_dxf(path: Path) -> Path:
             "Либо загрузите DXF-файл напрямую."
         )
 
-    # with TemporaryDirectory() as temp_dir:
-    #     out_dir = Path(temp_dir)
-    #     subprocess.run(
-    #         [
-    #             converter,
-    #             str(path.parent),
-    #             str(out_dir),
-    #             "ACAD2018",
-    #             "DXF",
-    #             "0",
-    #             "1",
-    #             path.name,
-    #         ],
-    #         check=True,
-    #         capture_output=True,
-    #         text=True,
-    #     )
-    #     converted = out_dir / f"{path.stem}.dxf"
-    #     if not converted.exists():
-    #         raise RuntimeError("Конвертация DWG в DXF завершилась без выходного файла.")
-
-    converted = read_odafc(str(path))
+    converted = read_odafc(path)
     target = path.with_suffix(".converted.dxf")
-    converted.saveas(str(target))
+    converted.saveas(target)
     return target
 
 
 def parse_drawing_file(path: str | Path) -> list[ParsedItem]:
+    """"""
     source_path = Path(path)
     suffix = source_path.suffix.lower()
     if suffix == ".dwg":
-        dxf_path = _convert_dwg_to_dxf(source_path)
+        dxf_path = convert_dwg(source_path)
         text = _extract_dxf_text(dxf_path)
-    elif suffix == ".dxf":
+    elif suffix in {".dxf", ".dxb"}:
         text = _extract_dxf_text(source_path)
     else:
         raise ValueError("Поддерживаются только файлы DWG и DXF.")

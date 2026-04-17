@@ -3,9 +3,9 @@ from zipfile import ZipFile
 
 from ezdxf.filemanagement import new
 
-from parsedwg.dwg_tree_ingest import DWGTreeProcessor
-from parsedwg.dwg_tree_ingest import _describe_entity
-from parsedwg.dwg_tree_ingest import collect_dxf_summary
+from parsedwg.process_tree import DWGTreeProcessor
+from parsedwg.process_tree import _describe_entity
+from parsedwg.process_tree import collect_dxf_summary
 
 
 def test_discover_dwg_sources_finds_regular_and_zipped_dwg(tmp_path: Path) -> None:

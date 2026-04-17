@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 def get_workers_number(requested_workers: int) -> int:
     """Возвращает оптимальное количество рабочих процессов для конвертации, учитывая возможности
     машины и запрошенное значение."""
-    
+
     logical_cpus = max(1, mp.cpu_count())
     max_workers = max(1, logical_cpus - 1)
     auto_workers = max(1, min(max_workers, int(logical_cpus * 0.7)))
@@ -71,22 +71,12 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="Извлечь блок в отдельные файл.",
     )
     extract_block_parser.add_argument("block_name", help="Имя блока для извлечения")
-    extract_name_tags_parser = subparsers.add_parser(
-        "extract-name-tags",
-        help="Извлечь смысловые теги из имен файлов (рекурсивно для каталога).",
-    )
-    extract_name_tags_parser.add_argument("path", help="Путь к файлу или каталогу")
-    extract_name_tags_parser.add_argument(
-        "-o",
-        "--output",
-        help="Путь к JSON-файлу с результатами.",
-    )
 
     process_tree_parser = subparsers.add_parser(
         "process",
         help=(
-            "Обойти каталог рекурсивно, найти DWG (включая ZIP), сконвертировать"
-            " в DXF и загрузить дерево блоков/layers в БД."
+            "Обойти каталог рекурсивно, найти DWG/DXF (включая ZIP)"
+            " и загрузить дерево блоков/layers в БД."
         ),
     )
     process_tree_parser.add_argument(
@@ -94,13 +84,80 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="Путь к каталогу.",
     )
     process_tree_parser.add_argument(
+        "--project-name",
+        "-p",
+        dest="project_name",
+        default=None,
+        help="Название проекта. По умолчанию: имя корневой папки.",
+    )
+    process_tree_parser.add_argument(
+        "--project-description",
+        dest="project_description",
+        default=None,
+        help="Описание проекта.",
+    )
+    process_tree_parser.add_argument(
+        "--created-by",
+        dest="created_by",
+        default=None,
+        help="Кто создал проект.",
+    )
+    process_tree_parser.add_argument(
         "--workers",
         type=int,
         default=0,
         help=(
-            "Количество процессов для этапа конвертации DWG в DXF "
+            "Количество процессов для этапа обработки файлов "
             "(<=0: авторасчет по CPU)."
         ),
+    )
+
+    project_add_parser = subparsers.add_parser(
+        "project-add",
+        help="Добавить проект.",
+    )
+    project_add_parser.add_argument("name", help="Название проекта.")
+    project_add_parser.add_argument(
+        "--description",
+        dest="description",
+        default=None,
+        help="Описание проекта.",
+    )
+    project_add_parser.add_argument(
+        "--created-by",
+        dest="created_by",
+        default=None,
+        help="Кто создал проект.",
+    )
+
+    project_update_parser = subparsers.add_parser(
+        "project-update",
+        help="Изменить существующий проект.",
+    )
+    project_update_parser.add_argument("project_id", help="UUID проекта.")
+    project_update_parser.add_argument("--name", dest="name", default=None, help="Новое название.")
+    project_update_parser.add_argument(
+        "--description",
+        dest="description",
+        default=None,
+        help="Новое описание.",
+    )
+    project_update_parser.add_argument(
+        "--created-by",
+        dest="created_by",
+        default=None,
+        help="Новое значение created_by.",
+    )
+
+    project_delete_parser = subparsers.add_parser(
+        "project-delete",
+        help="Удалить проект.",
+    )
+    project_delete_parser.add_argument("project_id", help="UUID проекта.")
+    project_delete_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Подтвердить удаление без интерактивного запроса.",
     )
 
     ingest_docs_parser = subparsers.add_parser(
@@ -192,3 +249,4 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="Путь к JSON-файлу для сохранения ответа и источников.",
     )
 
+    return parser

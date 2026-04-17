@@ -1,6 +1,6 @@
 from sqlalchemy.dialects.postgresql import TSVECTOR
 
-from parsedwg.orm import Entity
+from parsedwg.orm import Entity, Project
 
 
 def test_entity_has_parent_id_self_fk() -> None:
@@ -31,3 +31,22 @@ def test_entity_has_entity_text_tsvector_column() -> None:
 
     assert entity_text_column.nullable is True
     assert isinstance(entity_text_column.type, TSVECTOR)
+
+
+def test_entity_has_project_id_fk() -> None:
+    project_column = Entity.__table__.c.project_id
+
+    assert project_column.nullable is True
+    assert len(project_column.foreign_keys) == 1
+
+    fk = next(iter(project_column.foreign_keys))
+    assert fk.target_fullname == "project.id"
+
+
+def test_project_has_required_columns() -> None:
+    columns = Project.__table__.c
+
+    assert "name" in columns
+    assert "description" in columns
+    assert "created_by" in columns
+    assert "created_at" in columns

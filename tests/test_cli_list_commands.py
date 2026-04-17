@@ -102,60 +102,57 @@ def test_main_list_blocks_recurses_directory_and_creates_output_dir(tmp_path) ->
     assert any(row["block"] == "BLOCK_TWO" for row in second_rows)
 
 
-def test_main_extract_name_tags_recurses_and_writes_json(tmp_path) -> None:
-    source_dir = tmp_path / "tower_A"
-    nested_dir = source_dir / "nested"
-    nested_dir.mkdir(parents=True)
-
-    roof_file = source_dir / "План кровли.dwg"
-    floor_file = nested_dir / "ПЛАН_ЭО_6-9 эт..dwg"
-    roof_file.write_text("stub", encoding="utf-8")
-    floor_file.write_text("stub", encoding="utf-8")
-
-    output_path = tmp_path / "name-tags.json"
-    exit_code = main(["extract-name-tags", str(source_dir), "-o", str(output_path)])
-
-    assert exit_code == 0
-    assert output_path.exists()
-
-    rows = json.loads(output_path.read_text(encoding="utf-8"))
-    indexed = {Path(row["file"]).name: row for row in rows}
-    assert indexed["План кровли.dwg"]["entities"] == ["Кровля"]
-    assert indexed["ПЛАН_ЭО_6-9 эт..dwg"]["entities"] == [
-        "6-й этаж",
-        "7-й этаж",
-        "8-й этаж",
-        "9-й этаж",
-    ]
-
-
-def test_main_ingest_dwg_tree_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
+def test_main_process_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
     source_dir = tmp_path / "tower_A"
     source_dir.mkdir(parents=True)
 
     captured_args: dict[str, object] = {}
 
-    def fake_run(source_path: Path, conversion_workers: int = 2) -> dict[str, object]:
+    def fake_run(
+        source_path: Path,
+        conversion_workers: int = 2,
+        project_name: str | None = None,
+        project_description: str | None = None,
+        created_by: str | None = None,
+    ) -> dict[str, object]:
         captured_args["source_path"] = source_path
         captured_args["conversion_workers"] = conversion_workers
+        captured_args["project_name"] = project_name
+        captured_args["project_description"] = project_description
+        captured_args["created_by"] = created_by
         return {
-            "source_list": "/tmp/sources.json",
-            "converted_list": "/tmp/converted.json",
-            "dwg_count": 3,
-            "dxf_count": 3,
+            "project_id": "11111111-1111-1111-1111-111111111111",
+            "file_count": 3,
+            "processed_count": 3,
             "created_entities": 42,
         }
 
-    monkeypatch.setattr("parsedwg.cli.run_dwg_tree_ingest", fake_run)
+    monkeypatch.setattr("parsedwg.cli.run_process_tree", fake_run)
 
-    exit_code = main(["ingest-dwg-tree", str(source_dir), "--workers", "2"])
+    exit_code = main(
+        [
+            "process",
+            str(source_dir),
+            "--workers",
+            "2",
+            "--project-name",
+            "Башня А",
+            "--project-description",
+            "Тестовый проект",
+            "--created-by",
+            "andrus",
+        ]
+    )
 
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured_args["source_path"] == source_dir
     assert captured_args["conversion_workers"] == 2
-    assert "Найдено DWG: 3" in captured.out
-    assert "Сконвертировано DXF: 3" in captured.out
+    assert captured_args["project_name"] == "Башня А"
+    assert captured_args["project_description"] == "Тестовый проект"
+    assert captured_args["created_by"] == "andrus"
+    assert "Найдено файлов: 3" in captured.out
+    assert "Обработано файлов: 3" in captured.out
     assert "Создано сущностей в БД: 42" in captured.out
 
 
@@ -204,3 +201,95 @@ def test_main_ingest_docs_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
     assert captured_args["source_path"] == source_dir
     assert "Найдено документов: 4" in captured.out
     assert "Создано сущностей в БД: 4" in captured.out
+
+
+def test_main_project_add_runs_pipeline(monkeypatch, capsys) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    async def fake_create_project(name: str, description: str | None = None, created_by: str | None = None):
+        captured_kwargs["name"] = name
+        captured_kwargs["description"] = description
+        captured_kwargs["created_by"] = created_by
+        return {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "name": name,
+            "description": description or "",
+            "created_by": created_by or "",
+        }
+
+    monkeypatch.setattr("parsedwg.db.create_project", fake_create_project)
+
+    exit_code = main(["project-add", "Башня А", "--description", "Описание", "--created-by", "andrus"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_kwargs["name"] == "Башня А"
+    assert captured_kwargs["description"] == "Описание"
+    assert captured_kwargs["created_by"] == "andrus"
+    assert "Проект создан" in captured.out
+
+
+def test_main_project_update_runs_pipeline(monkeypatch, capsys) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    async def fake_update_project(
+        project_id: str,
+        name: str | None = None,
+        description: str | None = None,
+        created_by: str | None = None,
+    ):
+        captured_kwargs["project_id"] = project_id
+        captured_kwargs["name"] = name
+        captured_kwargs["description"] = description
+        captured_kwargs["created_by"] = created_by
+        return {
+            "id": project_id,
+            "name": name or "",
+            "description": description or "",
+            "created_by": created_by or "",
+        }
+
+    monkeypatch.setattr("parsedwg.db.update_project", fake_update_project)
+
+    pid = "11111111-1111-1111-1111-111111111111"
+    exit_code = main(["project-update", pid, "--name", "Башня Б", "--description", "Новое"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_kwargs["project_id"] == pid
+    assert captured_kwargs["name"] == "Башня Б"
+    assert captured_kwargs["description"] == "Новое"
+    assert "Проект обновлён" in captured.out
+
+
+def test_main_project_delete_requires_confirmation(monkeypatch, capsys) -> None:
+    async def fake_delete_project(project_id: str) -> bool:
+        return True
+
+    monkeypatch.setattr("parsedwg.db.delete_project", fake_delete_project)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "NO")
+
+    pid = "11111111-1111-1111-1111-111111111111"
+    exit_code = main(["project-delete", pid])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Удаление отменено." in captured.out
+
+
+def test_main_project_delete_with_yes(monkeypatch, capsys) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    async def fake_delete_project(project_id: str) -> bool:
+        captured_kwargs["project_id"] = project_id
+        return True
+
+    monkeypatch.setattr("parsedwg.db.delete_project", fake_delete_project)
+
+    pid = "11111111-1111-1111-1111-111111111111"
+    exit_code = main(["project-delete", pid, "--yes"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_kwargs["project_id"] == pid
+    assert "Проект удалён" in captured.out

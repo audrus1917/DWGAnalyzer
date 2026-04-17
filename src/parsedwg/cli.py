@@ -11,9 +11,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .explorer import DXFExplorer
-from .dwg_tree_ingest import run_dwg_tree_ingest
+from .process_tree import run_process_tree
 from .docs_ingest import run_documents_ingest
-from .name_tags import collect_name_tags
 from .utils import build_args_parser
 
 type ResultRow = dict[str, object]
@@ -158,14 +157,31 @@ def handle_ask_command(
     return 0
 
 
-def handle_process_command(source_path: Path, workers: int) -> int:
-    """Сканирует DWG/ZIP, конвертирует в DXF и сохраняет дерево в БД."""
+def handle_process_command(
+    source_path: Path,
+    workers: int,
+    project_name: str | None = None,
+    project_description: str | None = None,
+    created_by: str | None = None,
+) -> int:
+    """Сканирует DWG/DXF, сохраняет дерево сущностей в БД и привязывает к проекту."""
 
-    summary = run_dwg_tree_ingest(source_path, conversion_workers=workers)
-    print(f"Найдено DWG: {summary['dwg_count']}")
-    print(f"Сконвертировано DXF: {summary['dxf_count']}")
-    print(f"Создано сущностей в БД: {summary['created_entities']}")
-    return 0
+    try:
+        summary = run_process_tree(
+            source_path,
+            conversion_workers=workers,
+            project_name=project_name,
+            project_description=project_description,
+            created_by=created_by,
+        )
+        print(f"Создан проект: {summary['project_id']}")
+        print(f"Найдено файлов: {summary['file_count']}")
+        print(f"Обработано файлов: {summary['processed_count']}")
+        print(f"Создано сущностей в БД: {summary['created_entities']}")
+        return 0
+    except ValueError as e:
+        logger.error("Ошибка при обработке каталога / файла: %s", e)
+        return 1
 
 
 def handle_process_docs_command(source_path: Path) -> int:
@@ -175,6 +191,67 @@ def handle_process_docs_command(source_path: Path) -> int:
     print(f"Найдено документов: {summary['doc_count']}")
     print(f"Создано сущностей в БД: {summary['created_entities']}")
     print(f"Источник: {summary['source']}")
+    return 0
+
+
+def handle_project_add_command(
+    name: str,
+    description: str | None,
+    created_by: str | None,
+) -> int:
+    """Создаёт проект."""
+    from .db import create_project
+
+    project = asyncio.run(create_project(name=name, description=description, created_by=created_by))
+    print(f"Проект создан: {project['id']}")
+    print(f"Название: {project['name']}")
+    return 0
+
+
+def handle_project_update_command(
+    project_id: str,
+    name: str | None,
+    description: str | None,
+    created_by: str | None,
+) -> int:
+    """Обновляет проект."""
+    from .db import update_project
+
+    project = asyncio.run(
+        update_project(
+            project_id=project_id,
+            name=name,
+            description=description,
+            created_by=created_by,
+        )
+    )
+    if project is None:
+        print("Проект не найден.")
+        return 1
+
+    print(f"Проект обновлён: {project['id']}")
+    print(f"Название: {project['name']}")
+    return 0
+
+
+def handle_project_delete_command(project_id: str, yes: bool) -> int:
+    """Удаляет проект с подтверждением согласия."""
+    from .db import delete_project
+
+    if not yes:
+        answer = input(
+            f"Удалить проект {project_id}? Введите YES для подтверждения: "
+        ).strip()
+        if answer != "YES":
+            print("Удаление отменено.")
+            return 1
+
+    deleted = asyncio.run(delete_project(project_id=project_id))
+    if not deleted:
+        print("Проект не найден.")
+        return 1
+
+    print(f"Проект удалён: {project_id}")
     return 0
 
 
@@ -235,10 +312,37 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         case "process":
-            return_code = handle_process_command(Path(args.path), workers=max(1, args.workers))
+            return_code = handle_process_command(
+                Path(args.path),
+                workers=max(1, args.workers),
+                project_name=args.project_name,
+                project_description=args.project_description,
+                created_by=args.created_by,
+            )
 
-        case "process-docs":
+        case "ingest-docs" | "process-docs":
             return_code = handle_process_docs_command(Path(args.path))
+
+        case "project-add":
+            return_code = handle_project_add_command(
+                name=args.name,
+                description=args.description,
+                created_by=args.created_by,
+            )
+
+        case "project-update":
+            return_code = handle_project_update_command(
+                project_id=args.project_id,
+                name=args.name,
+                description=args.description,
+                created_by=args.created_by,
+            )
+
+        case "project-delete":
+            return_code = handle_project_delete_command(
+                project_id=args.project_id,
+                yes=args.yes,
+            )
 
         case "search":
             output_path = Path(args.output) if args.output else None
