@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from typing import Any
 
 import httpx
@@ -80,11 +81,44 @@ async def _generate(prompt: str, context_docs: list[str]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _extract_table_rows_text(data: Any) -> str | None:
+    if not isinstance(data, dict):
+        return None
+
+    table = data.get("table")
+    if not isinstance(table, dict):
+        return None
+
+    rows = table.get("rows")
+    if not isinstance(rows, list):
+        return None
+
+    rendered_rows: list[str] = []
+    for row in rows:
+        if not isinstance(row, list):
+            continue
+        rendered = " | ".join(str(cell) for cell in row)
+        if rendered:
+            rendered_rows.append(rendered)
+
+    if not rendered_rows:
+        return None
+
+    return "\n".join(rendered_rows)
+
+
 def _entity_text(entity: Entity) -> str:
     """Формирует текст для эмбеддинга из полей сущности."""
     parts = [entity.name]
     if entity.description:
         parts.append(entity.description)
+
+    # Для блоков-таблиц явно добавляем строки таблицы из data["table"]["rows"].
+    if getattr(entity, "is_table", False):
+        table_rows_text = _extract_table_rows_text(entity.data)
+        if table_rows_text:
+            parts.append(table_rows_text)
+
     if entity.start_from:
         parts.append(entity.start_from)
     if entity.data:
@@ -282,9 +316,37 @@ async def ask(
         {"answer": str, "sources": list[dict]}
     """
     sources = await hybrid_search(question, entity_type=entity_type, top_k=top_k)
-    context_docs = [
-        f"{s['name']}: {s['description']}" if s["description"] else s["name"]
-        for s in sources
-    ]
+
+    source_ids: list[uuid.UUID] = []
+    for source in sources:
+        raw_id = source.get("id")
+        if not isinstance(raw_id, str):
+            continue
+        try:
+            source_ids.append(uuid.UUID(raw_id))
+        except ValueError:
+            continue
+
+    table_rows_by_id: dict[str, str] = {}
+    if source_ids:
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(Entity.id, Entity.data, Entity.is_table).where(Entity.id.in_(source_ids))
+            )
+            for row in result.mappings().all():
+                if not row["is_table"]:
+                    continue
+                table_rows_text = _extract_table_rows_text(row["data"])
+                if table_rows_text:
+                    table_rows_by_id[str(row["id"])] = table_rows_text
+
+    context_docs: list[str] = []
+    for source in sources:
+        base = f"{source['name']}: {source['description']}" if source["description"] else source["name"]
+        table_rows_text = table_rows_by_id.get(str(source.get("id")))
+        if table_rows_text:
+            base = f"{base}\nТаблица:\n{table_rows_text}"
+        context_docs.append(base)
+
     answer = await _generate(question, context_docs)
     return {"answer": answer, "sources": sources}

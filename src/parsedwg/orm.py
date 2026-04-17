@@ -29,6 +29,22 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class Project(Base):
+    __tablename__ = "project"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(512), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    entities: Mapped[list[Entity]] = relationship("Entity", back_populates="project")
+
+
 class Entity(Base):
     __tablename__ = "entity"
 
@@ -38,6 +54,11 @@ class Entity(Base):
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("entity.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("project.id", ondelete="SET NULL"),
         nullable=True,
     )
     name: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -67,6 +88,7 @@ class Entity(Base):
         remote_side="Entity.id",
         back_populates="children",
     )
+    project: Mapped[Project | None] = relationship("Project", back_populates="entities")
     children: Mapped[list[Entity]] = relationship(
         "Entity",
         back_populates="parent",

@@ -92,3 +92,78 @@ async def create_all() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+async def create_project(
+    name: str,
+    description: str | None = None,
+    created_by: str | None = None,
+) -> dict[str, str]:
+    """Создаёт проект и возвращает его основные поля."""
+    from .orm import Project
+
+    async with async_session_factory() as session:
+        project = Project(
+            name=name,
+            description=description,
+            created_by=created_by,
+        )
+        session.add(project)
+        await session.flush()
+        await session.commit()
+
+        return {
+            "id": str(project.id),
+            "name": project.name,
+            "description": project.description or "",
+            "created_by": project.created_by or "",
+        }
+
+
+async def update_project(
+    project_id: str,
+    name: str | None = None,
+    description: str | None = None,
+    created_by: str | None = None,
+) -> dict[str, str] | None:
+    """Обновляет проект по id. Возвращает None, если проект не найден."""
+    import uuid as _uuid
+
+    from .orm import Project
+
+    async with async_session_factory() as session:
+        project = await session.get(Project, _uuid.UUID(project_id))
+        if project is None:
+            return None
+
+        if name is not None:
+            project.name = name
+        if description is not None:
+            project.description = description
+        if created_by is not None:
+            project.created_by = created_by
+
+        await session.commit()
+
+        return {
+            "id": str(project.id),
+            "name": project.name,
+            "description": project.description or "",
+            "created_by": project.created_by or "",
+        }
+
+
+async def delete_project(project_id: str) -> bool:
+    """Удаляет проект по id. Возвращает True, если удаление произошло."""
+    import uuid as _uuid
+
+    from .orm import Project
+
+    async with async_session_factory() as session:
+        project = await session.get(Project, _uuid.UUID(project_id))
+        if project is None:
+            return False
+
+        await session.delete(project)
+        await session.commit()
+        return True
