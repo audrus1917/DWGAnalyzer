@@ -1,10 +1,11 @@
+"""Команда для обхода каталога с DWG-файлами, конвертации их в DXF, сохранения структуры в БД."""
+
 from __future__ import annotations
 
-from typing import Generator
+from typing import Generator, Any, Protocol, cast
 
 import asyncio
 import hashlib
-import json
 import logging
 import multiprocessing as mp
 import re
@@ -12,7 +13,6 @@ import tempfile
 import zipfile
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Protocol, cast
 
 from ezdxf.filemanagement import readfile
 from sqlalchemy import func
@@ -22,6 +22,8 @@ from .orm import Entity, EntityToEntity, EntityType
 from .parsers import _convert_dwg_to_dxf
 from .redis_queue import load_converted, new_job_id, push_converted, push_sources
 from .table_analysis import TextClusterAnalyzer
+from .utils import get_workers_number
+
 
 logger = logging.getLogger(__name__)
 
@@ -98,21 +100,6 @@ class DWGTreeProcessor:
                 except zipfile.BadZipFile:
                     logger.warning("Пропускаем поврежденный ZIP: %s", file_path)
 
-def _write_temp_json_file(entries: list[JobEntry], prefix: str) -> Path:
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        prefix=prefix,
-        suffix=".json",
-        delete=False,
-    ) as temp_file:
-        json.dump(entries, temp_file, ensure_ascii=False, indent=2)
-        return Path(temp_file.name)
-
-
-def _load_entries_from_json(json_path: str) -> list[JobEntry]:
-    return json.loads(Path(json_path).read_text(encoding="utf-8"))
-
 
 def _split_to_batches(entries: list[JobEntry], workers: int) -> list[list[JobEntry]]:
     normalized_workers = max(1, workers)
@@ -120,31 +107,6 @@ def _split_to_batches(entries: list[JobEntry], workers: int) -> list[list[JobEnt
     for index, entry in enumerate(entries):
         batches[index % normalized_workers].append(entry)
     return [batch for batch in batches if batch]
-
-
-def _resolve_conversion_workers(requested_workers: int) -> int:
-    logical_cpus = max(1, mp.cpu_count())
-    max_workers = max(1, logical_cpus - 1)
-    auto_workers = max(1, min(max_workers, int(logical_cpus * 0.7)))
-
-    if requested_workers <= 0:
-        logger.info(
-            "Автовыбор workers: logical_cpus=%s, conversion_workers=%s",
-            logical_cpus,
-            auto_workers,
-        )
-        return auto_workers
-
-    if requested_workers > max_workers:
-        logger.warning(
-            "Запрошено workers=%s, ограничено до %s (logical_cpus=%s).",
-            requested_workers,
-            max_workers,
-            logical_cpus,
-        )
-        return max_workers
-
-    return requested_workers
 
 
 def _extract_dwg_from_zip(zip_path: Path, member: str, temp_dir: Path) -> Path:
@@ -384,7 +346,7 @@ def _collect_text_primitives(doc) -> list[dict[str, str]]:
     return primitives
 
 
-def collect_dxf_summary(dxf_path: Path):
+def collect_dxf_summary(dxf_path: Path) -> dict[str, Any]:
 
     doc = readfile(dxf_path)
     layouts: list[dict[str, object]] = []
@@ -411,9 +373,9 @@ def collect_dxf_summary(dxf_path: Path):
                 },
             }
         )
-        logger.debug("Block: %s", block.name)
-        for entity in block:
-            logger.debug("  Entity: %s", _describe_entity(entity))
+        # logger.debug("Block: %s", block.name)
+        # for entity in block:
+        #     logger.debug("  Entity: %s", _describe_entity(entity))
 
     primitives = _collect_text_primitives(doc)
 
@@ -725,6 +687,11 @@ async def _save_tree_to_db_from_queue(
                     created_entities += 1
 
             for block in summary["blocks"]:
+                block_name: str = str(block["name"])
+                if block_name.startswith("*D") or block_name.startswith("*U") or block_name.startswith("A$"):
+                    # Пропускаем служебные блоки, которые обычно не содержат полезной информации для анализа.
+                    continue
+
                 block_data: dict[str, object] = {
                     "entity_count": block["entity_count"],
                     "dxf_path": entry["dxf"],
@@ -734,7 +701,7 @@ async def _save_tree_to_db_from_queue(
 
                 block_entity = Entity(
                     parent_id=file_entity.id,
-                    name=str(block["name"]),
+                    name=block_name,
                     description=f"Block файла {entry['name']}",
                     entity_text=_build_entity_text(f"Block файла {entry['name']}"),
                     entity_type=EntityType.block,
@@ -810,7 +777,7 @@ def run_dwg_tree_ingest(
     push_sources(job_id, entries)
     logger.info("Список DWG сохранён в Redis, job_id=%s, count=%d", job_id, len(entries))
 
-    effective_workers = _resolve_conversion_workers(conversion_workers)
+    effective_workers = get_workers_number(conversion_workers)
     converted_dir = Path(tempfile.mkdtemp(prefix="parsedwg-dxf-cache-"))
     batches = _split_to_batches(entries, workers=effective_workers)
 

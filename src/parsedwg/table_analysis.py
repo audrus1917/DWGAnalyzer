@@ -242,9 +242,6 @@ class TextClusterAnalyzer:
             if not row:
                 continue
 
-            for x in row:
-                print(x)
-
             cells = ["" for _ in column_ranges]
             assignments = cls._assign_columns_for_row(row, column_ranges)
             for (_, _, text_value), column_index in zip(row, assignments, strict=False):
