@@ -300,7 +300,7 @@ class DXFExplorer:
             )
             for entity in block:
                 params = self._get_entity_params(entity)
-                logger.debug("  Entity: %s", self._describe_entity(params))
+                # logger.debug("  Entity: %s", self._describe_entity(params))
         return rows
 
     def extract_block(self, block_name: str) -> None:
@@ -313,7 +313,7 @@ class DXFExplorer:
 
         for entity in block:
             params = self._get_entity_params(entity)
-            logger.debug("  Entity: %s", self._describe_entity(params))
+            # logger.debug("  Entity: %s", self._describe_entity(params))
 
         table_stats = self._analyze_text_table(block)
         logger.info(
