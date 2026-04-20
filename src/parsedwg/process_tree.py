@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 
 type JobEntry = dict[str, str]
 type ProcessedEntry = dict[str, object]
+type NameTagsAIConfig = dict[str, str]
+
+
+class NameTagsExtractor(Protocol):
+    def extract(self, text: str) -> list[str]: ...
 
 
 class _QueueLike(Protocol):
@@ -137,6 +142,22 @@ def _queue_event_type(item: object) -> str | None:
         return None
     value = item.get(_QUEUE_EVENT_KEY)
     return str(value) if value is not None else None
+
+
+def _build_name_tags_extractor_from_config(
+    name_tags_config: NameTagsAIConfig | None,
+) -> NameTagsExtractor | None:
+    if name_tags_config is None:
+        return None
+
+    from .langchain_name_tags import LangChainAgentConfig, LangChainNameTagsExtractor
+
+    config = LangChainAgentConfig(
+        model=name_tags_config["model"],
+        base_url=name_tags_config["base_url"],
+        api_key=name_tags_config["api_key"],
+    )
+    return LangChainNameTagsExtractor.from_config(config)
 
 
 def _build_entity_text(text_value: str | None):
@@ -291,7 +312,26 @@ def _collect_text_primitives(doc) -> list[dict[str, str]]:
     return primitives
 
 
-def _collect_summary_from_doc(doc) -> dict[str, Any]:
+def _enrich_primitives_with_name_tags(
+    primitives: list[dict[str, str]],
+    name_tags_extractor: NameTagsExtractor,
+) -> list[dict[str, object]]:
+    enriched: list[dict[str, object]] = []
+    for primitive in primitives:
+        payload: dict[str, object] = dict(primitive)
+        text = primitive.get("text", "").strip()
+        if text:
+            tags = [tag.strip() for tag in name_tags_extractor.extract(text) if tag.strip()]
+            if tags:
+                payload["ai_name_tags"] = sorted(set(tags))
+        enriched.append(payload)
+    return enriched
+
+
+def _collect_summary_from_doc(
+    doc,
+    name_tags_extractor: NameTagsExtractor | None = None,
+) -> dict[str, Any]:
     layouts: list[dict[str, object]] = []
     for layout in doc.layouts:
         layers = _collect_layout_layers(doc, layout)
@@ -317,20 +357,30 @@ def _collect_summary_from_doc(doc) -> dict[str, Any]:
         )
 
     primitives = _collect_text_primitives(doc)
+    if name_tags_extractor is not None:
+        primitives_payload = _enrich_primitives_with_name_tags(primitives, name_tags_extractor)
+    else:
+        primitives_payload = cast(list[dict[str, object]], primitives)
 
     return {
         "layouts": layouts,
         "blocks": blocks,
-        "primitives": cast(list[dict[str, object]], primitives),
+        "primitives": primitives_payload,
     }
 
 
-def collect_dxf_summary(drawing_path: Path) -> dict[str, Any]:
+def collect_dxf_summary(
+    drawing_path: Path,
+    name_tags_extractor: NameTagsExtractor | None = None,
+) -> dict[str, Any]:
     doc = _read_drawing(drawing_path)
-    return _collect_summary_from_doc(doc)
+    return _collect_summary_from_doc(doc, name_tags_extractor=name_tags_extractor)
 
 
-def _process_entry(entry: JobEntry) -> ProcessedEntry:
+def _process_entry(
+    entry: JobEntry,
+    name_tags_extractor: NameTagsExtractor | None = None,
+) -> ProcessedEntry:
     source = Path(entry["source"])
 
     with tempfile.TemporaryDirectory(prefix="parsedwg-process-") as temp_dir_name:
@@ -348,7 +398,7 @@ def _process_entry(entry: JobEntry) -> ProcessedEntry:
             source_ref = f"{entry['source']}::{member_name}"
             file_md5 = DWGTreeProcessor.file_md5(working_path)
 
-        summary = collect_dxf_summary(working_path)
+        summary = collect_dxf_summary(working_path, name_tags_extractor=name_tags_extractor)
 
     processed_entry: ProcessedEntry = {
         **entry,
@@ -363,11 +413,13 @@ def _process_batch(
     batch: list[JobEntry],
     processed_queue: _QueueLike | None = None,
     job_id: str | None = None,
+    name_tags_config: NameTagsAIConfig | None = None,
 ) -> list[ProcessedEntry]:
     processed: list[ProcessedEntry] = []
     try:
+        name_tags_extractor = _build_name_tags_extractor_from_config(name_tags_config)
         for entry in batch:
-            processed_entry = _process_entry(entry)
+            processed_entry = _process_entry(entry, name_tags_extractor=name_tags_extractor)
             processed.append(processed_entry)
             if job_id is not None:
                 push_converted(job_id, cast(dict[str, str], processed_entry))
@@ -612,6 +664,15 @@ async def save_tree_to_db(
                 created_entities += 1
 
             for primitive in summary["primitives"]:
+                primitive_data = {
+                    "layout": primitive["layout"],
+                    "layer": primitive["layer"],
+                    "location": primitive["location"],
+                }
+                ai_name_tags = primitive.get("ai_name_tags")
+                if isinstance(ai_name_tags, list) and ai_name_tags:
+                    primitive_data["ai_name_tags"] = ai_name_tags
+
                 primitive_entity = Entity(
                     parent_id=file_entity.id,
                     project_id=project.id,
@@ -619,11 +680,7 @@ async def save_tree_to_db(
                     description=str(primitive["text"]),
                     entity_text=_build_entity_text(str(primitive["text"])),
                     entity_type=EntityType.primitive,
-                    data={
-                        "layout": primitive["layout"],
-                        "layer": primitive["layer"],
-                        "location": primitive["location"],
-                    },
+                    data=primitive_data,
                     start_from=source_ref,
                 )
                 session.add(primitive_entity)
@@ -668,6 +725,7 @@ def run_process_tree(
     project_name: str | None = None,
     project_description: str | None = None,
     created_by: str | None = None,
+    name_tags_config: NameTagsAIConfig | None = None,
 ) -> dict[str, object]:
     """Обходит каталог/файл, разбирает DWG/DXF в пуле процессов и сохраняет дерево в БД."""
 
@@ -717,7 +775,13 @@ def run_process_tree(
                 created_by,
             )
             futures = [
-                executor.submit(_process_batch, batch, processed_queue, job_id)
+                executor.submit(
+                    _process_batch,
+                    batch,
+                    processed_queue,
+                    job_id,
+                    name_tags_config,
+                )
                 for batch in batches
             ]
             for future in futures:

@@ -111,6 +111,61 @@ def build_args_parser() -> argparse.ArgumentParser:
             "(<=0: авторасчет по CPU)."
         ),
     )
+    process_tree_parser.add_argument(
+        "--ai-name-tags",
+        action="store_true",
+        help="Включить извлечение тегов из текстов через LangChain (опционально).",
+    )
+    process_tree_parser.add_argument(
+        "--ai-model",
+        default="llama3.1:8b",
+        help="Имя модели для AI-режима (по умолчанию: llama3.1:8b).",
+    )
+    process_tree_parser.add_argument(
+        "--ai-base-url",
+        default="http://localhost:11434/v1",
+        help="OpenAI-совместимый base URL для модели (по умолчанию: Ollama).",
+    )
+    process_tree_parser.add_argument(
+        "--ai-api-key",
+        default="ollama",
+        help="API ключ для AI провайдера (для Ollama можно оставить по умолчанию).",
+    )
+
+    extract_name_tags_parser = subparsers.add_parser(
+        "extract-name-tags",
+        help="Рекурсивно извлечь смысловые теги из имен файлов и папок.",
+    )
+    extract_name_tags_parser.add_argument(
+        "path",
+        help="Путь к каталогу или файлу.",
+    )
+    extract_name_tags_parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Путь к JSON-файлу результата (если не указан, вывод в stdout).",
+    )
+    extract_name_tags_parser.add_argument(
+        "--ai-name-tags",
+        action="store_true",
+        help="Дополнительно извлечь теги через LangChain (опционально).",
+    )
+    extract_name_tags_parser.add_argument(
+        "--ai-model",
+        default="llama3.1:8b",
+        help="Имя модели для AI-режима (по умолчанию: llama3.1:8b).",
+    )
+    extract_name_tags_parser.add_argument(
+        "--ai-base-url",
+        default="http://localhost:11434/v1",
+        help="OpenAI-совместимый base URL для модели (по умолчанию: Ollama).",
+    )
+    extract_name_tags_parser.add_argument(
+        "--ai-api-key",
+        default="ollama",
+        help="API ключ для AI провайдера (для Ollama можно оставить по умолчанию).",
+    )
 
     project_add_parser = subparsers.add_parser(
         "project-add",
