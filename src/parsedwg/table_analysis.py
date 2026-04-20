@@ -256,7 +256,8 @@ class TextClusterAnalyzer:
                 assigned_count += 1
 
             cell_checks = [cell.strip() for cell in cells]
-            if any(cell_checks):
+            non_empty_count = sum(bool(cell) for cell in cell_checks)
+            if non_empty_count == len(column_ranges):
                 rows.append(cells)
 
         return rows, assigned_count, centered_rows

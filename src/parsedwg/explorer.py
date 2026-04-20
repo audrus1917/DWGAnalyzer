@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from collections.abc import Iterable
@@ -12,7 +13,7 @@ from ezdxf.document import Drawing
 from ezdxf.filemanagement import readfile
 from ezdxf.addons.odafc import readfile as read_odafc
 from openpyxl import Workbook
-from openpyxl.styles import Alignment
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from .table_analysis import TableAnalysis, TextClusterAnalyzer
@@ -205,7 +206,7 @@ class DXFExplorer:
         cls,
         block,
         x_tolerance: float = 10.0,
-        y_tolerance: float = 30.0,
+        y_tolerance: float = 3.0,
     ) -> TableAnalysis:
         return TextClusterAnalyzer.analyze_table(
             block,
@@ -219,13 +220,21 @@ class DXFExplorer:
         rows: list[list[str]],
         centered_rows: list[int],
         title: str,
+        output_dir: Path | None = None,
     ) -> Path:
         fallback_name = f"{self.drawing.stem}-{block_name}"
         file_stem = title or fallback_name
         safe_file_name = re.sub(r"[^0-9A-Za-zА-Яа-я._-]+", "_", file_stem).strip("_")
         safe_file_name = safe_file_name or fallback_name
         safe_sheet_name = re.sub(r"[^0-9A-Za-zА-Яа-я._-]+", "_", block_name).strip("_") or "block"
-        output_path = self.drawing.with_name(f"{safe_file_name}.xlsx")
+        target_dir = output_dir or self.drawing.parent
+        target_dir.mkdir(parents=True, exist_ok=True)
+        output_path = target_dir / f"{safe_file_name}.xlsx"
+
+        suffix = 2
+        while output_path.exists():
+            output_path = target_dir / f"{safe_file_name}_{suffix}.xlsx"
+            suffix += 1
 
         workbook = Workbook()
         sheet = workbook.active
@@ -269,6 +278,47 @@ class DXFExplorer:
         workbook.save(output_path)
         return output_path
 
+    def export_tables_from_db(
+        self,
+        table_blocks: list[dict[str, object]],
+        output_dir: Path,
+    ) -> list[Path]:
+        """Сохраняет XLSX для блоков-таблиц, полученных из БД."""
+        output_paths: list[Path] = []
+        for block_payload in table_blocks:
+            block_name = str(block_payload.get("block_name", ""))
+            if not block_name:
+                continue
+
+            table_payload = block_payload.get("table")
+            if not isinstance(table_payload, dict):
+                continue
+
+            raw_rows = table_payload.get("rows")
+            if not isinstance(raw_rows, list):
+                continue
+
+            rows: list[list[str]] = []
+            for raw_row in raw_rows:
+                if isinstance(raw_row, list):
+                    rows.append([str(cell) for cell in raw_row])
+
+            if not rows:
+                continue
+
+            title = str(table_payload.get("title") or "")
+            output_paths.append(
+                self._export_table_to_xlsx(
+                    block_name=block_name,
+                    rows=rows,
+                    centered_rows=[],
+                    title=title,
+                    output_dir=output_dir,
+                )
+            )
+
+        return output_paths
+
     def list_layouts(self) -> list[ExplorerRow]:
         """Возвращает список layout'ов для текущего DXF/DWG файла."""
 
@@ -299,7 +349,7 @@ class DXFExplorer:
                 }
             )
             for entity in block:
-                params = self._get_entity_params(entity)
+                self._get_entity_params(entity)
                 # logger.debug("  Entity: %s", self._describe_entity(params))
         return rows
 
@@ -312,7 +362,7 @@ class DXFExplorer:
             raise ValueError(f"Блок '{block_name}' не найден в файле.")
 
         for entity in block:
-            params = self._get_entity_params(entity)
+            self._get_entity_params(entity)
             # logger.debug("  Entity: %s", self._describe_entity(params))
 
         table_stats = self._analyze_text_table(block)
@@ -335,6 +385,140 @@ class DXFExplorer:
         else:
             logger.info("Табличная структура не определена, XLSX не создан.")
         return 0
-    
+
+    @staticmethod
+    def _md5_file(path: Path) -> str:
+        h = hashlib.md5()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    @staticmethod
+    def _collect_block_inserts(doc) -> dict[str, dict[str, object]]:
+        """Возвращает словарь block_name → {insert_count, layers} по всем layout'ам."""
+        stats: dict[str, dict] = {}
+        for layout in doc.layouts:
+            for entity in layout:
+                if entity.dxftype() != "INSERT" or not entity.dxf.hasattr("name"):
+                    continue
+                block_name = str(entity.dxf.name)
+                layer = str(getattr(entity.dxf, "layer", ""))
+                if block_name not in stats:
+                    stats[block_name] = {"insert_count": 0, "layers": set()}
+                stats[block_name]["insert_count"] += 1
+                if layer:
+                    stats[block_name]["layers"].add(layer)
+        return stats
+
+    @staticmethod
+    def _apply_header_style(sheet, row: int) -> None:
+        fill = PatternFill(fill_type="solid", fgColor="D9D9D9")
+        font = Font(bold=True)
+        for cell in sheet[row]:
+            cell.fill = fill
+            cell.font = font
+
+    @staticmethod
+    def _auto_column_widths(sheet) -> None:
+        for col_idx, col_cells in enumerate(sheet.iter_cols(), start=1):
+            values = [str(c.value) for c in col_cells if c.value is not None]
+            width = max((len(line) for v in values for line in v.splitlines()), default=10)
+            sheet.column_dimensions[get_column_letter(col_idx)].width = min(width + 2, 60)
+
+    def export_file_stat(self, output_path: Path, project: str = "") -> Path:
+        """Собирает статистику по DXF/DWG файлу и сохраняет в xlsx с 4 вкладками."""
+        logger.info("Собираем статистику файла: %s", self.drawing)
+        doc = self._read_document()
+
+        wb = Workbook()
+        # --- Вкладка 1: Файл ---
+        ws_file = wb.active
+        ws_file.title = "Файл"
+        ws_file.append(["Параметр", "Значение"])
+        self._apply_header_style(ws_file, 1)
+        md5 = self._md5_file(self.drawing)
+        parent_dirs = [str(p) for p in reversed(self.drawing.parents)]
+        ws_file.append(["Имя файла", self.drawing.name])
+        ws_file.append(["MD5", md5])
+        ws_file.append(["Родительские каталоги", " / ".join(parent_dirs)])
+        ws_file.append(["Проект", project])
+        ws_file.freeze_panes = "A2"
+        for row in ws_file.iter_rows():
+            for cell in row:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+        self._auto_column_widths(ws_file)
+
+        # --- Вкладка 2: Блоки ---
+        ws_blocks = wb.create_sheet("Блоки")
+        headers_blocks = ["Наименование", "Таблица", "Добавлен (раз)", "Слои"]
+        ws_blocks.append(headers_blocks)
+        self._apply_header_style(ws_blocks, 1)
+        ws_blocks.freeze_panes = "A2"
+
+        insert_stats = self._collect_block_inserts(doc)
+
+        all_block_rows: list[tuple] = []
+        for block in doc.blocks:
+            block_name = str(block.name)
+            table_stats = TextClusterAnalyzer.analyze_table(block)
+            is_table = table_stats.is_table
+            bstat = insert_stats.get(block_name, {})
+            insert_count = bstat.get("insert_count", 0)
+            layers = ", ".join(sorted(bstat.get("layers", set())))
+            all_block_rows.append((block_name, "Да" if is_table else "Нет", insert_count, layers))
+            ws_blocks.append([block_name, "Да" if is_table else "Нет", insert_count, layers])
+
+        for row in ws_blocks.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+        self._auto_column_widths(ws_blocks)
+
+        # --- Вкладка 3: Блоки-таблицы ---
+        ws_tables = wb.create_sheet("Блоки-таблицы")
+        ws_tables.append(headers_blocks)
+        self._apply_header_style(ws_tables, 1)
+        ws_tables.freeze_panes = "A2"
+
+        for row_data in all_block_rows:
+            if row_data[1] == "Да":
+                ws_tables.append(list(row_data))
+
+        for row in ws_tables.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+        self._auto_column_widths(ws_tables)
+
+        # --- Вкладка 4: Текстовые примитивы ---
+        ws_prim = wb.create_sheet("Текстовые примитивы")
+        headers_prim = ["Блок", "Тип", "Текст", "Слой", "Локация"]
+        ws_prim.append(headers_prim)
+        self._apply_header_style(ws_prim, 1)
+        ws_prim.freeze_panes = "A2"
+
+        for block in doc.blocks:
+            block_name = str(block.name)
+            for entity in block:
+                entity_type = entity.dxftype()
+                if entity_type not in {"TEXT", "MTEXT"}:
+                    continue
+                text_value = self.get_text_content(entity)
+                if not text_value:
+                    continue
+                layer = str(getattr(entity.dxf, "layer", ""))
+                location = ""
+                if entity.dxf.hasattr("insert"):
+                    location = self.format_point(getattr(entity.dxf, "insert"))
+                ws_prim.append([block_name, entity_type, text_value, layer, location])
+
+        for row in ws_prim.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+        self._auto_column_widths(ws_prim)
+
+        wb.save(output_path)
+        logger.info("Статистика сохранена: %s", output_path)
+        return output_path
+
 
 __all__ = ["DXFExplorer"]

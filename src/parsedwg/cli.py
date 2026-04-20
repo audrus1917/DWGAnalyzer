@@ -163,6 +163,7 @@ def handle_ask_command(
 def handle_process_command(
     source_path: Path,
     workers: int,
+    sequential: bool = False,
     project_name: str | None = None,
     project_description: str | None = None,
     created_by: str | None = None,
@@ -183,6 +184,7 @@ def handle_process_command(
         summary = run_process_tree(
             source_path,
             conversion_workers=workers,
+            use_process_pool=not sequential,
             project_name=project_name,
             project_description=project_description,
             created_by=created_by,
@@ -191,10 +193,11 @@ def handle_process_command(
         print(f"Создан проект: {summary['project_id']}")
         print(f"Найдено файлов: {summary['file_count']}")
         print(f"Обработано файлов: {summary['processed_count']}")
+        print(f"Режим обработки: {summary['mode']}")
         print(f"Создано сущностей в БД: {summary['created_entities']}")
         return constants.OK
     except ValueError as e:
-        logger.error("Ошибка при обработке каталога / файла: %s", e)
+        logger.exception("Ошибка при обработке каталога / файла: %s", e)
         return constants.ERROR
     except RuntimeError as e:
         logger.error("Ошибка AI-режима: %s", e)
@@ -273,8 +276,8 @@ def handle_extract_name_tags_command(
     except RuntimeError as e:
         logger.error("Ошибка AI-режима: %s", e)
         return constants.ERROR
-    except Exception as e:
-        logger.error("Сбой AI-экстракции: %s", e)
+    except (FileNotFoundError, OSError, ValueError) as e:
+        logger.error("Сбой извлечения тегов: %s", e)
         return constants.UNBOUND_ERROR
 
 
@@ -399,6 +402,7 @@ def main(argv: list[str] | None = None) -> int:
             return_code = handle_process_command(
                 Path(args.path),
                 workers=max(1, args.workers),
+                sequential=args.sequential,
                 project_name=args.project_name,
                 project_description=args.project_description,
                 created_by=args.created_by,
@@ -471,6 +475,234 @@ def main(argv: list[str] | None = None) -> int:
         case "extract-block":
             explorer = DXFExplorer(args.drawing)
             return_code = explorer.extract_block(args.block_name)
+
+        case "file-stat":
+            drawing_path = Path(args.drawing)
+            output_path = Path(args.output) if args.output else drawing_path.with_suffix(".xlsx")
+            project = args.project or ""
+            explorer = DXFExplorer(drawing_path)
+            explorer.export_file_stat(output_path, project=project)
+
+
+            if args.db_tables_by_id:
+                from .db import get_file_id_by_source, get_table_blocks_by_file_id
+                file_id = asyncio.run(get_file_id_by_source(str(drawing_path)))
+                if file_id:
+                    table_blocks = asyncio.run(get_table_blocks_by_file_id(file_id))
+                    exported_tables = explorer.export_tables_from_db(
+                        table_blocks=table_blocks,
+                        output_dir=output_path.parent,
+                    )
+                    print(f"Таблиц из БД по file_id выгружено: {len(exported_tables)}")
+                else:
+                    print("file_id не найден для данного файла (source_ref)")
+
+            elif args.db_tables:
+                from .db import get_table_blocks_for_source
+                table_blocks = asyncio.run(get_table_blocks_for_source(str(drawing_path)))
+                exported_tables = explorer.export_tables_from_db(
+                    table_blocks=table_blocks,
+                    output_dir=output_path.parent,
+                )
+                print(f"Таблиц из БД по source_ref выгружено: {len(exported_tables)}")
+
+            print(f"Статистика сохранена: {output_path}")
+            return_code = constants.OK
+
+        case "file-stat-from-db":
+            import uuid as _uuid
+            from .db import async_session_factory
+            from .orm import Entity, EntityType
+            import sqlalchemy as sa
+            import openpyxl
+            from openpyxl.styles import Alignment, Font, PatternFill
+            from openpyxl.utils import get_column_letter
+
+            file_ref = args.file_ref
+            by_path = args.by_path
+            output_path = Path(args.output) if args.output else None
+
+            async def collect_db_stat():
+                async with async_session_factory() as session:
+                    if by_path:
+                        file_entity = await session.scalar(
+                            sa.select(Entity).where(
+                                Entity.entity_type == EntityType.file,
+                                Entity.start_from == file_ref,
+                            )
+                        )
+                    else:
+                        try:
+                            file_uuid = _uuid.UUID(file_ref)
+                        except ValueError:
+                            return None, "Некорректный UUID file_id"
+                        file_entity = await session.get(Entity, file_uuid)
+                    if not file_entity:
+                        return None, "file-сущность не найдена"
+
+                    # Родительские каталоги
+                    parent_names = []
+                    parent = file_entity.parent
+                    while parent:
+                        parent_names.append(parent.name)
+                        parent = parent.parent
+                    parent_dirs = list(reversed(parent_names))
+
+                    # Проект
+                    project = file_entity.project
+                    project_name = project.name if project else ""
+
+                    # Блоки
+                    blocks = await session.execute(
+                        sa.select(Entity)
+                        .where(
+                            Entity.parent_id == file_entity.id,
+                            Entity.entity_type == EntityType.block,
+                        )
+                        .order_by(Entity.name.asc())
+                    )
+                    blocks = [b for (b,) in blocks.all()]
+
+                    # Блоки-таблицы
+                    table_blocks = [b for b in blocks if b.is_table]
+
+                    # Примитивы
+                    primitives = await session.execute(
+                        sa.select(Entity)
+                        .where(
+                            Entity.parent_id.in_([b.id for b in blocks]),
+                            Entity.entity_type == EntityType.primitive,
+                        )
+                    )
+                    primitives = [p for (p,) in primitives.all()]
+
+                    return {
+                        "file": file_entity,
+                        "parent_dirs": parent_dirs,
+                        "project": project_name,
+                        "blocks": blocks,
+                        "table_blocks": table_blocks,
+                        "primitives": primitives,
+                    }, None
+
+            stat, err = asyncio.run(collect_db_stat())
+            if err:
+                print(f"Ошибка: {err}")
+                return constants.ERROR
+            assert stat is not None
+
+            file_entity = stat["file"]
+            parent_dirs = stat["parent_dirs"]
+            project = stat["project"]
+            blocks = stat["blocks"]
+            table_blocks = stat["table_blocks"]
+            primitives = stat["primitives"]
+
+            # --- XLSX ---
+            wb = openpyxl.Workbook()
+            # 1. Файл
+            ws_file = wb.active
+            assert ws_file is not None
+            ws_file.title = "Файл"
+            ws_file.append(["Параметр", "Значение"])
+            fill = PatternFill(fill_type="solid", fgColor="D9D9D9")
+            font = Font(bold=True)
+            for cell in ws_file[1]:
+                cell.fill = fill
+                cell.font = font
+            ws_file.append(["Имя файла", file_entity.name])
+            ws_file.append(["MD5", file_entity.file_md5 or ""])
+            ws_file.append(["Родительские каталоги", " / ".join(parent_dirs)])
+            ws_file.append(["Проект", project])
+            ws_file.freeze_panes = "A2"
+            for row in ws_file.iter_rows():
+                for cell in row:
+                    cell.alignment = Alignment(wrap_text=True, vertical="top")
+            for col_idx, col_cells in enumerate(ws_file.iter_cols(), start=1):
+                values = [str(c.value) for c in col_cells if c.value is not None]
+                width = max((len(line) for v in values for line in v.splitlines()), default=10)
+                ws_file.column_dimensions[get_column_letter(col_idx)].width = min(width + 2, 60)
+
+            # 2. Блоки
+            ws_blocks = wb.create_sheet("Блоки")
+            headers_blocks = ["Наименование", "Таблица", "Добавлен (раз)", "Слои"]
+            ws_blocks.append(headers_blocks)
+            for cell in ws_blocks[1]:
+                cell.fill = fill
+                cell.font = font
+            ws_blocks.freeze_panes = "A2"
+            for block in blocks:
+                ws_blocks.append([
+                    block.name,
+                    "Да" if block.is_table else "Нет",
+                    "-",  # insert_count не считаем из БД
+                    "-",  # слои не считаем из БД
+                ])
+            for row in ws_blocks.iter_rows(min_row=2):
+                for cell in row:
+                    cell.alignment = Alignment(wrap_text=True, vertical="top")
+            for col_idx, col_cells in enumerate(ws_blocks.iter_cols(), start=1):
+                values = [str(c.value) for c in col_cells if c.value is not None]
+                width = max((len(line) for v in values for line in v.splitlines()), default=10)
+                ws_blocks.column_dimensions[get_column_letter(col_idx)].width = min(width + 2, 60)
+
+            # 3. Блоки-таблицы
+            ws_tables = wb.create_sheet("Блоки-таблицы")
+            ws_tables.append(headers_blocks)
+            for cell in ws_tables[1]:
+                cell.fill = fill
+                cell.font = font
+            ws_tables.freeze_panes = "A2"
+            for block in table_blocks:
+                ws_tables.append([
+                    block.name,
+                    "Да",
+                    "-",
+                    "-",
+                ])
+            for row in ws_tables.iter_rows(min_row=2):
+                for cell in row:
+                    cell.alignment = Alignment(wrap_text=True, vertical="top")
+            for col_idx, col_cells in enumerate(ws_tables.iter_cols(), start=1):
+                values = [str(c.value) for c in col_cells if c.value is not None]
+                width = max((len(line) for v in values for line in v.splitlines()), default=10)
+                ws_tables.column_dimensions[get_column_letter(col_idx)].width = min(width + 2, 60)
+
+            # 4. Текстовые примитивы
+            ws_prim = wb.create_sheet("Текстовые примитивы")
+            headers_prim = ["Блок", "Тип", "Текст", "Слой", "Локация"]
+            ws_prim.append(headers_prim)
+            for cell in ws_prim[1]:
+                cell.fill = fill
+                cell.font = font
+            ws_prim.freeze_panes = "A2"
+            for prim in primitives:
+                ws_prim.append([
+                    prim.data.get("block", "") if prim.data else "",
+                    prim.data.get("type", "") if prim.data else "",
+                    prim.data.get("text", "") if prim.data else "",
+                    prim.data.get("layer", "") if prim.data else "",
+                    prim.data.get("location", "") if prim.data else "",
+                ])
+            for row in ws_prim.iter_rows(min_row=2):
+                for cell in row:
+                    cell.alignment = Alignment(wrap_text=True, vertical="top")
+            for col_idx, col_cells in enumerate(ws_prim.iter_cols(), start=1):
+                values = [str(c.value) for c in col_cells if c.value is not None]
+                width = max((len(line) for v in values for line in v.splitlines()), default=10)
+                ws_prim.column_dimensions[get_column_letter(col_idx)].width = min(width + 2, 60)
+
+            # Сохранить файл
+            if not output_path:
+                if by_path:
+                    stem = Path(file_ref).stem
+                    output_path = Path(f"{stem}_dbstat.xlsx")
+                else:
+                    output_path = Path(f"{file_ref}_dbstat.xlsx")
+            wb.save(output_path)
+            print(f"Статистика по файлу из БД сохранена: {output_path}")
+            return_code = constants.OK
+
 
     return return_code
 
