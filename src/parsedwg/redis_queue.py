@@ -44,6 +44,7 @@ def push_converted(job_id: str, entry: JobEntry) -> None:
     r = _get_redis()
     key = _KEY_CONVERTED.format(job_id=job_id)
     pipe = r.pipeline()
+    print(entry)
     pipe.rpush(key, json.dumps(entry, ensure_ascii=False))
     pipe.expire(key, _TTL_SECONDS)
     pipe.execute()

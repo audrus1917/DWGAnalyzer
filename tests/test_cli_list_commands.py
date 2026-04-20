@@ -112,6 +112,7 @@ def test_main_process_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
         source_path: Path,
         conversion_workers: int = 2,
         name_tags_config: dict[str, str] | None = None,
+        use_process_pool: bool = True,
         **kwargs,
     ) -> dict[str, object]:
         project_name = kwargs.get("project_name")
@@ -119,6 +120,7 @@ def test_main_process_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
         created_by = kwargs.get("created_by")
         captured_args["source_path"] = source_path
         captured_args["conversion_workers"] = conversion_workers
+        captured_args["use_process_pool"] = use_process_pool
         captured_args["project_name"] = project_name
         captured_args["project_description"] = project_description
         captured_args["created_by"] = created_by
@@ -127,6 +129,7 @@ def test_main_process_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
             "project_id": "11111111-1111-1111-1111-111111111111",
             "file_count": 3,
             "processed_count": 3,
+            "mode": "process_pool",
             "created_entities": 42,
         }
 
@@ -151,12 +154,14 @@ def test_main_process_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
     assert exit_code == 0
     assert captured_args["source_path"] == source_dir
     assert captured_args["conversion_workers"] == 2
+    assert captured_args["use_process_pool"] is True
     assert captured_args["project_name"] == "Башня А"
     assert captured_args["project_description"] == "Тестовый проект"
     assert captured_args["created_by"] == "andrus"
     assert captured_args["name_tags_config"] is None
     assert "Найдено файлов: 3" in captured.out
     assert "Обработано файлов: 3" in captured.out
+    assert "Режим обработки: process_pool" in captured.out
     assert "Создано сущностей в БД: 42" in captured.out
 
 
@@ -181,16 +186,19 @@ def test_main_process_passes_ai_name_tags_config(tmp_path, monkeypatch) -> None:
         source_path: Path,
         conversion_workers: int = 2,
         name_tags_config: dict[str, str] | None = None,
+        use_process_pool: bool = True,
         **kwargs,
     ) -> dict[str, object]:
         _ = kwargs
         captured_args["source_path"] = source_path
         captured_args["conversion_workers"] = conversion_workers
+        captured_args["use_process_pool"] = use_process_pool
         captured_args["name_tags_config"] = name_tags_config
         return {
             "project_id": "11111111-1111-1111-1111-111111111111",
             "file_count": 1,
             "processed_count": 1,
+            "mode": "process_pool",
             "created_entities": 10,
         }
 
@@ -218,11 +226,49 @@ def test_main_process_passes_ai_name_tags_config(tmp_path, monkeypatch) -> None:
     assert captured_args["api_key"] == "secret"
     assert captured_args["source_path"] == source_dir
     assert captured_args["conversion_workers"] == 1
+    assert captured_args["use_process_pool"] is True
     assert captured_args["name_tags_config"] == {
         "model": "llama3.1:70b",
         "base_url": "http://localhost:11434/v1",
         "api_key": "secret",
     }
+
+
+def test_main_process_sequential_disables_process_pool(tmp_path, monkeypatch) -> None:
+    source_dir = tmp_path / "tower_A"
+    source_dir.mkdir(parents=True)
+
+    captured_args: dict[str, object] = {}
+
+    def fake_run(
+        source_path: Path,
+        conversion_workers: int = 2,
+        name_tags_config: dict[str, str] | None = None,
+        use_process_pool: bool = True,
+        **kwargs,
+    ) -> dict[str, object]:
+        _ = kwargs
+        captured_args["source_path"] = source_path
+        captured_args["conversion_workers"] = conversion_workers
+        captured_args["name_tags_config"] = name_tags_config
+        captured_args["use_process_pool"] = use_process_pool
+        return {
+            "project_id": "11111111-1111-1111-1111-111111111111",
+            "file_count": 1,
+            "processed_count": 1,
+            "mode": "sequential",
+            "created_entities": 1,
+        }
+
+    monkeypatch.setattr("parsedwg.cli.run_process_tree", fake_run)
+
+    exit_code = main(["process", str(source_dir), "--sequential"])
+
+    assert exit_code == 0
+    assert captured_args["source_path"] == source_dir
+    assert captured_args["conversion_workers"] == 1
+    assert captured_args["name_tags_config"] is None
+    assert captured_args["use_process_pool"] is False
 
 
 def test_main_extract_name_tags_writes_json(tmp_path) -> None:

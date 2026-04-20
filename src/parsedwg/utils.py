@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import asyncio
 import multiprocessing as mp
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,52 @@ def build_args_parser() -> argparse.ArgumentParser:
     )
     extract_block_parser.add_argument("block_name", help="Имя блока для извлечения")
 
+    file_stat_parser = subparsers.add_parser(
+        "file-stat",
+        parents=[extract_common],
+        help="Собрать статистику по DXF/DWG файлу и сохранить в XLSX.",
+    )
+    file_stat_parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Путь к XLSX-файлу результата (по умолчанию: рядом с исходным файлом).",
+    )
+    file_stat_parser.add_argument(
+        "--project",
+        default=None,
+        help="Название проекта (опционально).",
+    )
+    file_stat_parser.add_argument(
+        "--db-tables",
+        action="store_true",
+        help="Дополнительно выгрузить XLSX для блоков-таблиц из БД по source_ref файла.",
+    )
+    file_stat_parser.add_argument(
+        "--db-tables-by-id",
+        action="store_true",
+        help="Выгрузить XLSX для блоков-таблиц из БД по file_id (UUID сущности файла).",
+    )
+    file_stat_db_parser = subparsers.add_parser(
+        "file-stat-from-db",
+        help="Собрать статистику по файлу из БД (по file_id или пути) и сохранить в XLSX.",
+    )
+    file_stat_db_parser.add_argument(
+        "file_ref",
+        help="UUID file-сущности или путь к файлу (если --by-path)",
+    )
+    file_stat_db_parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Путь к XLSX-файлу результата (по умолчанию: file_id.xlsx или <stem>.xlsx)",
+    )
+    file_stat_db_parser.add_argument(
+        "--by-path",
+        action="store_true",
+        help="Искать file-сущность по пути, а не по UUID.",
+    )
+
     process_tree_parser = subparsers.add_parser(
         "process",
         help=(
@@ -110,6 +157,11 @@ def build_args_parser() -> argparse.ArgumentParser:
             "Количество процессов для этапа обработки файлов "
             "(<=0: авторасчет по CPU)."
         ),
+    )
+    process_tree_parser.add_argument(
+        "--sequential",
+        action="store_true",
+        help="Обрабатывать последовательно в одном процессе (без ProcessPoolExecutor).",
     )
     process_tree_parser.add_argument(
         "--ai-name-tags",

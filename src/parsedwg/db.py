@@ -1,4 +1,43 @@
-from __future__ import annotations
+async def get_file_id_by_source(source_ref: str) -> str | None:
+    """Возвращает UUID file-сущности по source_ref (пути к файлу)."""
+    from .orm import Entity, EntityType
+    stmt = (
+        select(Entity.id)
+        .where(Entity.entity_type == EntityType.file)
+        .where(Entity.start_from == source_ref)
+        .limit(1)
+    )
+    async with async_session_factory() as session:
+        result = await session.execute(stmt)
+        row = result.first()
+    return str(row[0]) if row else None
+
+async def get_table_blocks_by_file_id(file_id: str) -> list[dict[str, object]]:
+    """Возвращает блоки-таблицы из БД, у которых parent_id = file_id."""
+    from .orm import Entity, EntityType
+    import uuid as _uuid
+    stmt = (
+        select(Entity.name, Entity.data)
+        .where(Entity.entity_type == EntityType.block)
+        .where(Entity.is_table.is_(True))
+        .where(Entity.parent_id == _uuid.UUID(file_id))
+        .order_by(Entity.name.asc())
+    )
+    async with async_session_factory() as session:
+        result = await session.execute(stmt)
+        rows = result.all()
+    payload: list[dict[str, object]] = []
+    for block_name, data in rows:
+        data_dict = data if isinstance(data, dict) else {}
+        table = data_dict.get("table") if isinstance(data_dict.get("table"), dict) else {}
+        payload.append(
+            {
+                "block_name": str(block_name),
+                "table": table,
+            }
+        )
+    return payload
+
 
 from collections.abc import AsyncGenerator
 from typing import Any, cast
@@ -167,3 +206,32 @@ async def delete_project(project_id: str) -> bool:
         await session.delete(project)
         await session.commit()
         return True
+
+
+async def get_table_blocks_for_source(source_ref: str) -> list[dict[str, object]]:
+    """Возвращает блоки-таблицы из БД для заданного source_ref файла."""
+    from .orm import Entity, EntityType
+
+    stmt = (
+        select(Entity.name, Entity.data)
+        .where(Entity.entity_type == EntityType.block)
+        .where(Entity.is_table.is_(True))
+        .where(Entity.start_from == source_ref)
+        .order_by(Entity.name.asc())
+    )
+
+    async with async_session_factory() as session:
+        result = await session.execute(stmt)
+        rows = result.all()
+
+    payload: list[dict[str, object]] = []
+    for block_name, data in rows:
+        data_dict = data if isinstance(data, dict) else {}
+        table = data_dict.get("table") if isinstance(data_dict.get("table"), dict) else {}
+        payload.append(
+            {
+                "block_name": str(block_name),
+                "table": table,
+            }
+        )
+    return payload
