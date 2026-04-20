@@ -111,15 +111,18 @@ def test_main_process_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
     def fake_run(
         source_path: Path,
         conversion_workers: int = 2,
-        project_name: str | None = None,
-        project_description: str | None = None,
-        created_by: str | None = None,
+        name_tags_config: dict[str, str] | None = None,
+        **kwargs,
     ) -> dict[str, object]:
+        project_name = kwargs.get("project_name")
+        project_description = kwargs.get("project_description")
+        created_by = kwargs.get("created_by")
         captured_args["source_path"] = source_path
         captured_args["conversion_workers"] = conversion_workers
         captured_args["project_name"] = project_name
         captured_args["project_description"] = project_description
         captured_args["created_by"] = created_by
+        captured_args["name_tags_config"] = name_tags_config
         return {
             "project_id": "11111111-1111-1111-1111-111111111111",
             "file_count": 3,
@@ -151,9 +154,119 @@ def test_main_process_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
     assert captured_args["project_name"] == "Башня А"
     assert captured_args["project_description"] == "Тестовый проект"
     assert captured_args["created_by"] == "andrus"
+    assert captured_args["name_tags_config"] is None
     assert "Найдено файлов: 3" in captured.out
     assert "Обработано файлов: 3" in captured.out
     assert "Создано сущностей в БД: 42" in captured.out
+
+
+def test_main_process_passes_ai_name_tags_config(tmp_path, monkeypatch) -> None:
+    source_dir = tmp_path / "tower_A"
+    source_dir.mkdir(parents=True)
+
+    captured_args: dict[str, object] = {}
+
+    def fake_config_builder(enabled: bool, model: str, base_url: str, api_key: str):
+        captured_args["enabled"] = enabled
+        captured_args["model"] = model
+        captured_args["base_url"] = base_url
+        captured_args["api_key"] = api_key
+        return {
+            "model": model,
+            "base_url": base_url,
+            "api_key": api_key,
+        }
+
+    def fake_run(
+        source_path: Path,
+        conversion_workers: int = 2,
+        name_tags_config: dict[str, str] | None = None,
+        **kwargs,
+    ) -> dict[str, object]:
+        _ = kwargs
+        captured_args["source_path"] = source_path
+        captured_args["conversion_workers"] = conversion_workers
+        captured_args["name_tags_config"] = name_tags_config
+        return {
+            "project_id": "11111111-1111-1111-1111-111111111111",
+            "file_count": 1,
+            "processed_count": 1,
+            "created_entities": 10,
+        }
+
+    monkeypatch.setattr("parsedwg.cli._build_name_tags_config", fake_config_builder)
+    monkeypatch.setattr("parsedwg.cli.run_process_tree", fake_run)
+
+    exit_code = main(
+        [
+            "process",
+            str(source_dir),
+            "--ai-name-tags",
+            "--ai-model",
+            "llama3.1:70b",
+            "--ai-base-url",
+            "http://localhost:11434/v1",
+            "--ai-api-key",
+            "secret",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured_args["enabled"] is True
+    assert captured_args["model"] == "llama3.1:70b"
+    assert captured_args["base_url"] == "http://localhost:11434/v1"
+    assert captured_args["api_key"] == "secret"
+    assert captured_args["source_path"] == source_dir
+    assert captured_args["conversion_workers"] == 1
+    assert captured_args["name_tags_config"] == {
+        "model": "llama3.1:70b",
+        "base_url": "http://localhost:11434/v1",
+        "api_key": "secret",
+    }
+
+
+def test_main_extract_name_tags_writes_json(tmp_path) -> None:
+    source_dir = tmp_path / "names"
+    source_dir.mkdir(parents=True)
+    file_path = source_dir / "Этаж_3_кровля.dxf"
+    file_path.write_text("stub", encoding="utf-8")
+
+    output_path = tmp_path / "tags.json"
+    exit_code = main(["extract-name-tags", str(source_dir), "-o", str(output_path)])
+
+    assert exit_code == 0
+    rows = json.loads(output_path.read_text(encoding="utf-8"))
+    assert len(rows) == 1
+    assert rows[0]["name"] == "Этаж_3_кровля.dxf"
+    assert "этаж:3" in rows[0]["tags"]
+    assert "кровля" in rows[0]["tags"]
+
+
+def test_main_extract_name_tags_handles_ai_runtime_error(tmp_path, monkeypatch) -> None:
+    source_dir = tmp_path / "names"
+    source_dir.mkdir(parents=True)
+    (source_dir / "Этаж_3_кровля.dxf").write_text("stub", encoding="utf-8")
+
+    class FailingExtractor:
+        def extract(self, _text: str) -> list[str]:
+            raise RuntimeError("model not found")
+
+    monkeypatch.setattr(
+        "parsedwg.cli._build_name_tags_config",
+        lambda enabled, model, base_url, api_key: {
+            "model": model,
+            "base_url": base_url,
+            "api_key": api_key,
+        },
+    )
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.LangChainNameTagsExtractor.from_config",
+        lambda _cfg: FailingExtractor(),
+    )
+
+    exit_code = main(["extract-name-tags", str(source_dir), "--ai-name-tags"])
+
+    assert exit_code == 1
 
 
 def test_main_search_passes_parent_id_to_search_entities(monkeypatch) -> None:
@@ -264,6 +377,7 @@ def test_main_project_update_runs_pipeline(monkeypatch, capsys) -> None:
 
 def test_main_project_delete_requires_confirmation(monkeypatch, capsys) -> None:
     async def fake_delete_project(project_id: str) -> bool:
+        _ = project_id
         return True
 
     monkeypatch.setattr("parsedwg.db.delete_project", fake_delete_project)

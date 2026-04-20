@@ -163,16 +163,27 @@ def handle_process_command(
     project_name: str | None = None,
     project_description: str | None = None,
     created_by: str | None = None,
+    ai_name_tags: bool = False,
+    ai_model: str = "llama3.1:8b",
+    ai_base_url: str = "http://localhost:11434/v1",
+    ai_api_key: str = "ollama",
 ) -> int:
     """Сканирует DWG/DXF, сохраняет дерево сущностей в БД и привязывает к проекту."""
 
     try:
+        name_tags_config = _build_name_tags_config(
+            enabled=ai_name_tags,
+            model=ai_model,
+            base_url=ai_base_url,
+            api_key=ai_api_key,
+        )
         summary = run_process_tree(
             source_path,
             conversion_workers=workers,
             project_name=project_name,
             project_description=project_description,
             created_by=created_by,
+            name_tags_config=name_tags_config,
         )
         print(f"Создан проект: {summary['project_id']}")
         print(f"Найдено файлов: {summary['file_count']}")
@@ -182,6 +193,28 @@ def handle_process_command(
     except ValueError as e:
         logger.error("Ошибка при обработке каталога / файла: %s", e)
         return 1
+    except RuntimeError as e:
+        logger.error("Ошибка AI-режима: %s", e)
+        return 1
+
+
+def _build_name_tags_config(
+    enabled: bool,
+    model: str,
+    base_url: str,
+    api_key: str,
+):
+    if not enabled:
+        return None
+
+    from .langchain_name_tags import ensure_langchain_available
+
+    ensure_langchain_available()
+    return {
+        "model": model,
+        "base_url": base_url,
+        "api_key": api_key,
+    }
 
 
 def handle_process_docs_command(source_path: Path) -> int:
@@ -192,6 +225,54 @@ def handle_process_docs_command(source_path: Path) -> int:
     print(f"Создано сущностей в БД: {summary['created_entities']}")
     print(f"Источник: {summary['source']}")
     return 0
+
+
+def handle_extract_name_tags_command(
+    source_path: Path,
+    output_path: Path | None,
+    ai_name_tags: bool = False,
+    ai_model: str = "llama3.1:8b",
+    ai_base_url: str = "http://localhost:11434/v1",
+    ai_api_key: str = "ollama",
+) -> int:
+    """Извлекает смысловые теги из имен файлов/каталогов."""
+    from .name_tags import collect_name_tags
+
+    try:
+        ai_extractor = None
+        if ai_name_tags:
+            from .langchain_name_tags import LangChainAgentConfig, LangChainNameTagsExtractor
+
+            ensure_config = _build_name_tags_config(
+                enabled=True,
+                model=ai_model,
+                base_url=ai_base_url,
+                api_key=ai_api_key,
+            )
+            assert ensure_config is not None
+            ai_extractor = LangChainNameTagsExtractor.from_config(
+                LangChainAgentConfig(
+                    model=ensure_config["model"],
+                    base_url=ensure_config["base_url"],
+                    api_key=ensure_config["api_key"],
+                )
+            )
+
+        rows = collect_name_tags(source_path, ai_extractor=ai_extractor)
+
+        if output_path is not None:
+            _save_rows_to_json(output_path, rows)
+            logger.info("JSON сохранён: %s", output_path)
+            return 0
+
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+    except RuntimeError as e:
+        logger.error("Ошибка AI-режима: %s", e)
+        return 1
+    except Exception as e:
+        logger.error("Сбой AI-экстракции: %s", e)
+        return 1
 
 
 def handle_project_add_command(
@@ -318,6 +399,20 @@ def main(argv: list[str] | None = None) -> int:
                 project_name=args.project_name,
                 project_description=args.project_description,
                 created_by=args.created_by,
+                ai_name_tags=args.ai_name_tags,
+                ai_model=args.ai_model,
+                ai_base_url=args.ai_base_url,
+                ai_api_key=args.ai_api_key,
+            )
+
+        case "extract-name-tags":
+            return_code = handle_extract_name_tags_command(
+                source_path=Path(args.path),
+                output_path=Path(args.output) if args.output else None,
+                ai_name_tags=args.ai_name_tags,
+                ai_model=args.ai_model,
+                ai_base_url=args.ai_base_url,
+                ai_api_key=args.ai_api_key,
             )
 
         case "ingest-docs" | "process-docs":

@@ -84,6 +84,27 @@ def test_collect_dxf_summary_includes_text_primitives(tmp_path: Path) -> None:
     )
 
 
+def test_collect_dxf_summary_enriches_primitives_with_ai_name_tags(tmp_path: Path) -> None:
+    source = tmp_path / "sample-ai-tags.dxf"
+
+    doc = new()
+    doc.modelspace().add_text("Кровля", dxfattribs={"insert": (1, 2, 0), "layer": "TEXT"})
+    doc.saveas(source)
+
+    class StubTagsExtractor:
+        def extract(self, text: str) -> list[str]:
+            if text == "Кровля":
+                return ["кровля", "кровля", "раздел"]
+            return []
+
+    summary = collect_dxf_summary(source, name_tags_extractor=StubTagsExtractor())
+    primitives = summary["primitives"]
+
+    assert len(primitives) == 1
+    assert primitives[0]["text"] == "Кровля"
+    assert primitives[0]["ai_name_tags"] == ["кровля", "раздел"]
+
+
 def test_collect_dxf_summary_marks_table_blocks_and_keeps_table_data(tmp_path: Path) -> None:
     source = tmp_path / "table-block.dxf"
 

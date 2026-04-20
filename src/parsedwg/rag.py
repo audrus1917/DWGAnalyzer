@@ -11,7 +11,7 @@ import uuid
 from typing import Any
 
 import httpx
-from sqlalchemy import select, text
+from sqlalchemy import select, text, cast, String
 
 from .db import async_session_factory
 from .orm import Entity
@@ -82,6 +82,7 @@ async def _generate(prompt: str, context_docs: list[str]) -> str:
 
 
 def _extract_table_rows_text(data: Any) -> str | None:
+    print(f"Table data: {data}")
     if not isinstance(data, dict):
         return None
 
@@ -104,6 +105,7 @@ def _extract_table_rows_text(data: Any) -> str | None:
     if not rendered_rows:
         return None
 
+    print(f"Rendered table rows: {rendered_rows}")
     return "\n".join(rendered_rows)
 
 
@@ -203,7 +205,7 @@ async def similarity_search(
                 Entity.description,
                 Entity.entity_type,
                 Entity.start_from,
-                (Entity.embedding.op("<->")(text(f"'{vec_str}'::vector"))).label("distance"),
+                cast(Entity.embedding.op("<->")(text(f"'{vec_str}'::vector")), String).label("distance"),
             )
             .where(Entity.embedding.is_not(None))
             .order_by(text("distance"))
