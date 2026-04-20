@@ -10,10 +10,13 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from . import constants
 from .explorer import DXFExplorer
 from .process_tree import run_process_tree
 from .docs_ingest import run_documents_ingest
 from .utils import build_args_parser
+
+
 
 type ResultRow = dict[str, object]
 
@@ -110,15 +113,15 @@ def handle_search_command(
 
     if not rows:
         print("Нет результатов.")
-        return 0
+        return constants.OK
 
     if output_path is not None:
         _save_rows_to_json(output_path, rows)
         logger.info("JSON сохранён: %s", output_path)
-        return 0
+        return constants.OK
 
     _print_rows_table(rows)
-    return 0
+    return constants.OK
 
 
 def handle_index_command(
@@ -131,7 +134,7 @@ def handle_index_command(
 
     count = asyncio.run(index_entities(entity_type, batch_size, reindex))
     print(f"Проиндексировано: {count}")
-    return 0
+    return constants.OK
 
 
 def handle_ask_command(
@@ -148,13 +151,13 @@ def handle_ask_command(
     if output_path is not None:
         _save_rows_to_json(output_path, [result])
         logger.info("JSON сохранён: %s", output_path)
-        return 0
+        return constants.OK
 
     print(result["answer"])
     print()
     print("Источники:")
     _print_rows_table(result["sources"])  # type: ignore[arg-type]
-    return 0
+    return constants.OK
 
 
 def handle_process_command(
@@ -189,13 +192,13 @@ def handle_process_command(
         print(f"Найдено файлов: {summary['file_count']}")
         print(f"Обработано файлов: {summary['processed_count']}")
         print(f"Создано сущностей в БД: {summary['created_entities']}")
-        return 0
+        return constants.OK
     except ValueError as e:
         logger.error("Ошибка при обработке каталога / файла: %s", e)
-        return 1
+        return constants.ERROR
     except RuntimeError as e:
         logger.error("Ошибка AI-режима: %s", e)
-        return 1
+        return constants.ERROR
 
 
 def _build_name_tags_config(
@@ -224,7 +227,7 @@ def handle_process_docs_command(source_path: Path) -> int:
     print(f"Найдено документов: {summary['doc_count']}")
     print(f"Создано сущностей в БД: {summary['created_entities']}")
     print(f"Источник: {summary['source']}")
-    return 0
+    return constants.OK
 
 
 def handle_extract_name_tags_command(
@@ -263,16 +266,16 @@ def handle_extract_name_tags_command(
         if output_path is not None:
             _save_rows_to_json(output_path, rows)
             logger.info("JSON сохранён: %s", output_path)
-            return 0
+            return constants.OK
 
         print(json.dumps(rows, ensure_ascii=False, indent=2))
-        return 0
+        return constants.OK
     except RuntimeError as e:
         logger.error("Ошибка AI-режима: %s", e)
-        return 1
+        return constants.ERROR
     except Exception as e:
         logger.error("Сбой AI-экстракции: %s", e)
-        return 1
+        return constants.UNBOUND_ERROR
 
 
 def handle_project_add_command(
@@ -286,7 +289,7 @@ def handle_project_add_command(
     project = asyncio.run(create_project(name=name, description=description, created_by=created_by))
     print(f"Проект создан: {project['id']}")
     print(f"Название: {project['name']}")
-    return 0
+    return constants.OK
 
 
 def handle_project_update_command(
@@ -308,11 +311,11 @@ def handle_project_update_command(
     )
     if project is None:
         print("Проект не найден.")
-        return 1
+        return constants.NOT_FOUND
 
     print(f"Проект обновлён: {project['id']}")
     print(f"Название: {project['name']}")
-    return 0
+    return constants.OK
 
 
 def handle_project_delete_command(project_id: str, yes: bool) -> int:
@@ -325,15 +328,15 @@ def handle_project_delete_command(project_id: str, yes: bool) -> int:
         ).strip()
         if answer != "YES":
             print("Удаление отменено.")
-            return 1
+            return constants.ERROR
 
     deleted = asyncio.run(delete_project(project_id=project_id))
     if not deleted:
         print("Проект не найден.")
-        return 1
+        return constants.NOT_FOUND
 
     print(f"Проект удалён: {project_id}")
-    return 0
+    return constants.OK
 
 
 def handle_list_command(
@@ -363,7 +366,7 @@ def handle_list_command(
     if output_path is None:
         _print_rows_table(all_rows)
 
-    return 0
+    return constants.OK
 
 
 def main(argv: list[str] | None = None) -> int:
