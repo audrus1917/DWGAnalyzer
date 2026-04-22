@@ -14,7 +14,7 @@ from . import constants
 from .explorer import DXFExplorer
 from .process_tree import run_process_tree
 from .docs_ingest import run_documents_ingest
-from .utils import build_args_parser
+from .utils import build_args_parser, pt
 
 
 
@@ -28,17 +28,19 @@ logging.basicConfig(
 logging.getLogger("ezdxf").disabled = True
 logger = logging.getLogger(__name__)
 
-
 SUPPORTED_DRAWING_SUFFIXES = {".dxf", ".dwg"}
 
 
 def _iter_drawing_files(path: Path) -> list[Path]:
-    """Возвращает один файл или все подходящие файлы каталога рекурсивно."""
+    """Возвращает один файл или все подходящие дочерние файлы каталога рекурсивно."""
 
     if not path.exists():
         raise FileNotFoundError(f"Путь {path} не найден.")
 
     if path.is_file():
+        drawing_files = [path, ] if path.suffix.lower() in SUPPORTED_DRAWING_SUFFIXES else []
+        if not drawing_files:
+            raise ValueError(f"Файл {path} не является поддерживаемым DWG/DXF.")
         return [path]
 
     drawing_files = sorted(
@@ -61,7 +63,7 @@ def _save_rows_to_json(output_path: Path, rows: list[ResultRow]) -> None:
     )
 
 
-def _format_rows_as_table(rows: list[ResultRow]) -> str:
+def as_table(rows: list[ResultRow]) -> str:
     """Форматирует строки результата в простую ASCII-таблицу."""
 
     if not rows:
@@ -83,10 +85,10 @@ def _format_rows_as_table(rows: list[ResultRow]) -> str:
     return "\n".join([header, separator, *body])
 
 
-def _print_rows_table(rows: list[ResultRow]) -> None:
+def print_as_table(rows: list[ResultRow]) -> None:
     """Выводит строки результата на экран в виде таблицы."""
 
-    print(_format_rows_as_table(rows))
+    pt(as_table(rows))
 
 
 def _resolve_output_path(source_root: Path, drawing_path: Path, output_path: Path) -> Path:
@@ -112,7 +114,7 @@ def handle_search_command(
     rows: list[ResultRow] = asyncio.run(search_entities(query, entity_type, limit, parent_id))
 
     if not rows:
-        print("Нет результатов.")
+        pt("Нет результатов.")
         return constants.OK
 
     if output_path is not None:
@@ -120,7 +122,7 @@ def handle_search_command(
         logger.info("JSON сохранён: %s", output_path)
         return constants.OK
 
-    _print_rows_table(rows)
+    print_as_table(rows)
     return constants.OK
 
 
@@ -133,7 +135,7 @@ def handle_index_command(
     from .rag import index_entities
 
     count = asyncio.run(index_entities(entity_type, batch_size, reindex))
-    print(f"Проиндексировано: {count}")
+    pt(f"Проиндексировано: {count}")
     return constants.OK
 
 
@@ -153,10 +155,10 @@ def handle_ask_command(
         logger.info("JSON сохранён: %s", output_path)
         return constants.OK
 
-    print(result["answer"])
-    print()
-    print("Источники:")
-    _print_rows_table(result["sources"])  # type: ignore[arg-type]
+    pt(result["answer"])
+    pt()
+    pt("Источники:")
+    print_as_table(result["sources"])  # type: ignore[arg-type]
     return constants.OK
 
 
@@ -168,14 +170,14 @@ def handle_process_command(
     project_description: str | None = None,
     created_by: str | None = None,
     ai_name_tags: bool = False,
-    ai_model: str = "llama3.1:8b",
+    ai_model: str = "llama3.2",
     ai_base_url: str = "http://localhost:11434/v1",
     ai_api_key: str = "ollama",
 ) -> int:
     """Сканирует DWG/DXF, сохраняет дерево сущностей в БД и привязывает к проекту."""
 
     try:
-        name_tags_config = _build_name_tags_config(
+        name_tags_config = get_name_tags_config(
             enabled=ai_name_tags,
             model=ai_model,
             base_url=ai_base_url,
@@ -190,11 +192,11 @@ def handle_process_command(
             created_by=created_by,
             name_tags_config=name_tags_config,
         )
-        print(f"Создан проект: {summary['project_id']}")
-        print(f"Найдено файлов: {summary['file_count']}")
-        print(f"Обработано файлов: {summary['processed_count']}")
-        print(f"Режим обработки: {summary['mode']}")
-        print(f"Создано сущностей в БД: {summary['created_entities']}")
+        pt(f"Создан проект: {summary['project_id']}")
+        pt(f"Найдено файлов: {summary['file_count']}")
+        pt(f"Обработано файлов: {summary['processed_count']}")
+        pt(f"Режим обработки: {summary['mode']}")
+        pt(f"Создано сущностей в БД: {summary['created_entities']}")
         return constants.OK
     except ValueError as e:
         logger.exception("Ошибка при обработке каталога / файла: %s", e)
@@ -204,12 +206,15 @@ def handle_process_command(
         return constants.ERROR
 
 
-def _build_name_tags_config(
+def get_name_tags_config(
     enabled: bool,
     model: str,
     base_url: str,
     api_key: str,
 ):
+    """Возвращает конфигурацию для AI-извлечения тегов из имён, или `None`, если 
+    режим отключён."""
+
     if not enabled:
         return None
 
@@ -227,9 +232,9 @@ def handle_process_docs_command(source_path: Path) -> int:
     """Рекурсивно индексирует PDF/DOCX/XLSX/CSV документы в таблицу entity."""
 
     summary = run_documents_ingest(source_path)
-    print(f"Найдено документов: {summary['doc_count']}")
-    print(f"Создано сущностей в БД: {summary['created_entities']}")
-    print(f"Источник: {summary['source']}")
+    pt(f"Найдено документов: {summary['doc_count']}")
+    pt(f"Создано сущностей в БД: {summary['created_entities']}")
+    pt(f"Источник: {summary['source']}")
     return constants.OK
 
 
@@ -249,7 +254,7 @@ def handle_extract_name_tags_command(
         if ai_name_tags:
             from .langchain_name_tags import LangChainAgentConfig, LangChainNameTagsExtractor
 
-            ensure_config = _build_name_tags_config(
+            ensure_config = get_name_tags_config(
                 enabled=True,
                 model=ai_model,
                 base_url=ai_base_url,
@@ -271,7 +276,7 @@ def handle_extract_name_tags_command(
             logger.info("JSON сохранён: %s", output_path)
             return constants.OK
 
-        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        pt(json.dumps(rows, ensure_ascii=False, indent=2))
         return constants.OK
     except RuntimeError as e:
         logger.error("Ошибка AI-режима: %s", e)
@@ -290,8 +295,8 @@ def handle_project_add_command(
     from .db import create_project
 
     project = asyncio.run(create_project(name=name, description=description, created_by=created_by))
-    print(f"Проект создан: {project['id']}")
-    print(f"Название: {project['name']}")
+    pt(f"Проект создан: {project['id']}")
+    pt(f"Название: {project['name']}")
     return constants.OK
 
 
@@ -313,11 +318,11 @@ def handle_project_update_command(
         )
     )
     if project is None:
-        print("Проект не найден.")
+        pt("Проект не найден.")
         return constants.NOT_FOUND
 
-    print(f"Проект обновлён: {project['id']}")
-    print(f"Название: {project['name']}")
+    pt(f"Проект обновлён: {project['id']}")
+    pt(f"Название: {project['name']}")
     return constants.OK
 
 
@@ -330,15 +335,15 @@ def handle_project_delete_command(project_id: str, yes: bool) -> int:
             f"Удалить проект {project_id}? Введите YES для подтверждения: "
         ).strip()
         if answer != "YES":
-            print("Удаление отменено.")
+            pt("Удаление отменено.")
             return constants.ERROR
 
     deleted = asyncio.run(delete_project(project_id=project_id))
     if not deleted:
-        print("Проект не найден.")
+        pt("Проект не найден.")
         return constants.NOT_FOUND
 
-    print(f"Проект удалён: {project_id}")
+    pt(f"Проект удалён: {project_id}")
     return constants.OK
 
 
@@ -367,7 +372,7 @@ def handle_list_command(
         logger.info("JSON сохранён: %s", target_path)
 
     if output_path is None:
-        _print_rows_table(all_rows)
+        print_as_table(all_rows)
 
     return constants.OK
 
@@ -449,7 +454,7 @@ def handle_file_stat_from_db_command(
 
     stat, err = asyncio.run(collect_db_stat())
     if err:
-        print(f"Ошибка: {err}")
+        pt(f"Ошибка: {err}")
         return constants.ERROR
     assert stat is not None
 
@@ -557,7 +562,7 @@ def handle_file_stat_from_db_command(
         else:
             output_path = Path(f"{file_ref}_dbstat.xlsx")
     wb.save(output_path)
-    print(f"Статистика по файлу из БД сохранена: {output_path}")
+    pt(f"Статистика по файлу из БД сохранена: {output_path}")
     return constants.OK
 
 
@@ -682,9 +687,9 @@ def main(argv: list[str] | None = None) -> int:
                         table_blocks=table_blocks,
                         output_dir=output_path.parent,
                     )
-                    print(f"Таблиц из БД по file_id выгружено: {len(exported_tables)}")
+                    pt(f"Таблиц из БД по file_id выгружено: {len(exported_tables)}")
                 else:
-                    print("file_id не найден для данного файла (source_ref)")
+                    pt("file_id не найден для данного файла (source_ref)")
 
             elif args.db_tables:
                 from .db import get_table_blocks_for_source
@@ -693,9 +698,9 @@ def main(argv: list[str] | None = None) -> int:
                     table_blocks=table_blocks,
                     output_dir=output_path.parent,
                 )
-                print(f"Таблиц из БД по source_ref выгружено: {len(exported_tables)}")
+                pt(f"Таблиц из БД по source_ref выгружено: {len(exported_tables)}")
 
-            print(f"Статистика сохранена: {output_path}")
+            pt(f"Статистика сохранена: {output_path}")
             return_code = constants.OK
 
         case "file-stat-from-db":
