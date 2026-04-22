@@ -1,8 +1,9 @@
 """Набор утилит."""
 
+from typing import Any
+
 import argparse
 import logging
-import asyncio
 import multiprocessing as mp
 
 logger = logging.getLogger(__name__)
@@ -170,8 +171,8 @@ def build_args_parser() -> argparse.ArgumentParser:
     )
     process_tree_parser.add_argument(
         "--ai-model",
-        default="llama3.1:8b",
-        help="Имя модели для AI-режима (по умолчанию: llama3.1:8b).",
+        default="llama3.2",
+        help="Имя модели для AI-режима (по умолчанию: llama3.2).",
     )
     process_tree_parser.add_argument(
         "--ai-base-url",
@@ -357,3 +358,27 @@ def build_args_parser() -> argparse.ArgumentParser:
     )
 
     return parser
+
+
+class CustomFormatter(logging.Formatter):
+    """Форматер логов, который меняет структуру сообщения в зависимости от уровня логирования."""
+
+    FORMATS = {
+        logging.DEBUG: "[DEBUG] %(name)s: %(message)s",
+        logging.INFO: "%(message)s",
+        logging.WARNING: "WARNING: %(message)s (%(filename)s:%(lineno)d)",
+        logging.ERROR: "ERROR!!! %(asctime)s - %(message)s",
+        logging.CRITICAL: "CRITICAL FAILURE: %(message)s"
+    }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno, "%(levelname)s: %(message)s")
+        formatter = logging.Formatter(log_fmt)
+        return formatter.format(record)
+    
+
+def pt(value: Any) -> None:
+    """Выводит на стандартный вывод значение. Алиас для :func:`print`, чтобы 
+    не путаться к ненужнйо отладкой."""
+
+    print(value)

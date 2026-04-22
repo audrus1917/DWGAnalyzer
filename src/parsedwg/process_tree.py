@@ -12,13 +12,14 @@ import queue
 import re
 import tempfile
 import zipfile
+
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from ezdxf.document import Drawing
 from ezdxf.addons.odafc import readfile as read_odafc
 from ezdxf.filemanagement import readfile
-from sqlalchemy import func
+from sqlalchemy import func, select
 
 from .db import async_session_factory
 from .orm import Entity, EntityToEntity, EntityType, Project
@@ -132,7 +133,7 @@ def _extract_member_from_zip(zip_path: Path, member: str, temp_dir: Path) -> Pat
     return target_path
 
 
-def _read_drawing(path: Path):
+def read_drawing(path: Path):
     suffix = path.suffix.lower()
     if suffix == ".dwg":
         return read_odafc(path, "ACAD2018")
@@ -176,7 +177,7 @@ def _build_entity_text(text_value: str | None):
     return func.to_tsvector("russian", text_value)
 
 
-def _collect_entity_layers(doc, entity, seen_blocks: set[str] | None = None) -> set[str]:
+def collect_entity_layers(doc, entity, seen_blocks: set[str] | None = None) -> set[str]:
     layers: set[str] = set()
     layer_name = getattr(entity.dxf, "layer", "")
     if layer_name:
@@ -197,14 +198,14 @@ def _collect_entity_layers(doc, entity, seen_blocks: set[str] | None = None) -> 
 
     nested_seen = {*seen_blocks, block_name}
     for nested_entity in block:
-        layers.update(_collect_entity_layers(doc, nested_entity, nested_seen))
+        layers.update(collect_entity_layers(doc, nested_entity, nested_seen))
     return layers
 
 
-def _collect_layout_layers(doc, layout) -> list[str]:
+def collect_layout_layers(doc, layout) -> list[str]:
     layers: set[str] = set()
     for entity in layout:
-        layers.update(_collect_entity_layers(doc, entity))
+        layers.update(collect_entity_layers(doc, entity))
     return sorted(layers)
 
 
@@ -398,19 +399,19 @@ def _enrich_primitives_with_name_tags(
     return enriched
 
 
-def _collect_summary_from_doc(
-    doc: Drawing,
+def collect_drawing_summary(
+    drawing: Drawing,
     name_tags_extractor: NameTagsExtractor | None = None,
 ) -> dict[str, Any]:
     """Собирает информацию о Layouts, Blocks и примитивах из документа."""
     
     layouts: list[dict[str, object]] = []
-    for layout in doc.layouts:
-        layers = _collect_layout_layers(doc, layout)
+    for layout in drawing.layouts:
+        layers = collect_layout_layers(drawing, layout)
         layouts.append({"name": layout.name, "layers": layers})
 
     blocks: list[dict[str, object]] = []
-    for block in doc.blocks:
+    for block in drawing.blocks:
         table_stats = TextClusterAnalyzer.analyze_table(block)
         blocks.append(
             {
@@ -428,8 +429,8 @@ def _collect_summary_from_doc(
             }
         )
 
-    primitives = _collect_text_primitives(doc)
-    primitives.extend(_collect_layout_insert_primitives(doc))
+    primitives = _collect_text_primitives(drawing)
+    primitives.extend(_collect_layout_insert_primitives(drawing))
     if name_tags_extractor is not None:
         primitives_payload = _enrich_primitives_with_name_tags(primitives, name_tags_extractor)
     else:
@@ -446,11 +447,14 @@ def collect_dxf_summary(
     drawing_path: Path,
     name_tags_extractor: NameTagsExtractor | None = None,
 ) -> dict[str, Any]:
-    doc = _read_drawing(drawing_path)
-    return _collect_summary_from_doc(doc, name_tags_extractor=name_tags_extractor)
+    """Собирает информацию о Layouts, Blocks и примитивах из DWG/DXF-файла."""
+
+    # Чтение файла DWG / DXF
+    doc = read_drawing(drawing_path)
+    return collect_drawing_summary(doc, name_tags_extractor=name_tags_extractor)
 
 
-def _process_entry(
+def process_entry(
     entry: JobEntry,
     name_tags_extractor: NameTagsExtractor | None = None,
 ) -> ProcessedEntry:
@@ -482,7 +486,7 @@ def _process_entry(
     return processed_entry
 
 
-def _process_batch(
+def process_batch(
     batch: list[JobEntry],
     processed_queue: _QueueLike | None = None,
     job_id: str | None = None,
@@ -492,7 +496,7 @@ def _process_batch(
     try:
         name_tags_extractor = _build_name_tags_extractor_from_config(name_tags_config)
         for entry in batch:
-            processed_entry = _process_entry(entry, name_tags_extractor=name_tags_extractor)
+            processed_entry = process_entry(entry, name_tags_extractor=name_tags_extractor)
             processed.append(processed_entry)
             if job_id is not None:
                 push_converted(job_id, cast(dict[str, str], processed_entry))
@@ -522,6 +526,8 @@ async def _create_folders_tree(
         data={"path": str(root_path)},
         start_from=str(root_path),
         project_id=project_id,
+        created_at=func.now(),
+
     )
     session.add(root_entity)
     await session.flush()
@@ -567,17 +573,28 @@ async def save_tree_to_db(
     project_description: str | None = None,
     created_by: str | None = None,
 ) -> tuple[str, int]:
+    """Сохраняет дерево сущностей в БД, читая обработанные задания из очереди. 
+    Возвращает ID проекта и количество созданных сущностей."""
+
     async with async_session_factory() as session:
-        project = Project(
-            name=project_name,
-            description=project_description,
-            created_by=created_by,
+        # Выбираем существующий проект или создаем новый
+        result = await session.execute(
+            select(Project.id).where(Project.name == project_name)
         )
-        session.add(project)
-        await session.flush()
+        project_id = result.scalar_one_or_none()
+
+        if project_id is None:
+            project = Project(
+                name=project_name,
+                description=project_description,
+                created_by=created_by,
+            )
+            session.add(project)
+            await session.flush()
+            project_id = project.id
 
         root = Path(root_path)
-        folders, created_entities = await _create_folders_tree(session, root, project.id)
+        folders, created_entities = await _create_folders_tree(session, root, project_id)
 
         zip_entities: dict[str, Entity] = {}
         completed_producers = 0
@@ -610,7 +627,7 @@ async def save_tree_to_db(
                 if zip_entity is None:
                     zip_entity = Entity(
                         parent_id=zip_parent_entity.id,
-                        project_id=project.id,
+                        project_id=project_id,
                         name=Path(zip_source).name,
                         description=f"ZIP-архив: {zip_source}",
                         entity_text=_build_entity_text(f"ZIP-архив: {zip_source}"),
@@ -638,7 +655,7 @@ async def save_tree_to_db(
 
             file_entity = Entity(
                 parent_id=parent_entity.id,
-                project_id=project.id,
+                project_id=project_id,
                 name=str(entry["name"]),
                 description=f"Исходный файл: {source_ref}",
                 entity_text=_build_entity_text(f"Исходный файл: {source_ref}"),
@@ -664,7 +681,7 @@ async def save_tree_to_db(
                 layout_name = str(layout["name"])
                 layout_entity = Entity(
                     parent_id=file_entity.id,
-                    project_id=project.id,
+                    project_id=project_id,
                     name=layout_name,
                     description=f"Layout файла {entry['name']}",
                     entity_text=_build_entity_text(f"Layout файла {entry['name']}"),
@@ -687,7 +704,7 @@ async def save_tree_to_db(
                     layer_name_str = str(layer_name)
                     layer_entity = Entity(
                         parent_id=layout_entity.id,
-                        project_id=project.id,
+                        project_id=project_id,
                         name=layer_name_str,
                         description=f"Layer layout {layout_name}",
                         entity_text=_build_entity_text(f"Layer layout {layout_name}"),
@@ -722,7 +739,7 @@ async def save_tree_to_db(
 
                 block_entity = Entity(
                     parent_id=file_entity.id,
-                    project_id=project.id,
+                    project_id=project_id,
                     name=block_name,
                     description=f"Block файла {entry['name']}",
                     entity_text=_build_entity_text(f"Block файла {entry['name']}"),
@@ -773,7 +790,7 @@ async def save_tree_to_db(
 
                 primitive_entity = Entity(
                     parent_id=parent_block_entity.id,
-                    project_id=project.id,
+                    project_id=project_id,
                     name=str(primitive["type"]),
                     description=str(primitive["text"]),
                     entity_text=_build_entity_text(str(primitive["text"])),
@@ -810,7 +827,7 @@ async def save_tree_to_db(
 
             await session.commit()
 
-    return str(project.id), created_entities
+    return str(project_id), created_entities
 
 
 def process_queue(
@@ -821,6 +838,9 @@ def process_queue(
     project_description: str | None,
     created_by: str | None,
 ) -> tuple[str, int]:
+    """Проходит по очереди обработанных заданий, сохраняет дерево в БД и возвращает 
+    ID проекта и количество созданных сущностей."""
+
     return asyncio.run(
         save_tree_to_db(
             root_path=root_path,
@@ -892,7 +912,7 @@ def run_process_tree(
                 )
                 futures = [
                     executor.submit(
-                        _process_batch,
+                        process_batch,
                         batch,
                         processed_queue,
                         job_id,
@@ -909,7 +929,7 @@ def run_process_tree(
         processed_queue: _QueueLike = queue.Queue()
         for batch in batches:
             processed_entries.extend(
-                _process_batch(
+                process_batch(
                     batch,
                     processed_queue,
                     job_id,
