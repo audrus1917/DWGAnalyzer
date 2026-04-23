@@ -253,7 +253,6 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
             ),
             entity_type=EntityType.folder,
             data={"path": str(source_path)},
-            start_from=str(source_path),
         )
         session.add(root)
         await session.flush()
@@ -277,7 +276,6 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
                     "size_bytes": doc_path.stat().st_size,
                 },
                 file_md5=_compute_md5_hex(doc_path),
-                start_from=str(doc_path),
                 parent_id=root.id,
             )
             session.add(entity)
@@ -298,7 +296,6 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
                             "source_kind": "glossary_term",
                             "source_file": rel_path,
                         },
-                        start_from=f"{doc_path}#page={term.page}",
                         parent_id=entity.id,
                     )
                 )

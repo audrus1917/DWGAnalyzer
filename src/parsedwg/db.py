@@ -1,10 +1,29 @@
+"""Опеарции с БД."""
+
+from typing import Any, cast
+
+import uuid as _uuid
+
+from collections.abc import AsyncGenerator
+
+from sqlalchemy import case, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from .settings import settings
+from .orm import Entity, EntityType, Project
+
+engine = create_async_engine(settings.database_url, echo=settings.database_echo)
+
+async_session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
+    engine, expire_on_commit=False
+)
+
+
 async def get_file_id_by_source(source_ref: str) -> str | None:
     """Возвращает UUID file-сущности по source_ref (пути к файлу)."""
-    from .orm import Entity, EntityType
     stmt = (
         select(Entity.id)
         .where(Entity.entity_type == EntityType.file)
-        .where(Entity.start_from == source_ref)
         .limit(1)
     )
     async with async_session_factory() as session:
@@ -14,8 +33,6 @@ async def get_file_id_by_source(source_ref: str) -> str | None:
 
 async def get_table_blocks_by_file_id(file_id: str) -> list[dict[str, object]]:
     """Возвращает блоки-таблицы из БД, у которых parent_id = file_id."""
-    from .orm import Entity, EntityType
-    import uuid as _uuid
     stmt = (
         select(Entity.name, Entity.data)
         .where(Entity.entity_type == EntityType.block)
@@ -39,19 +56,6 @@ async def get_table_blocks_by_file_id(file_id: str) -> list[dict[str, object]]:
     return payload
 
 
-from collections.abc import AsyncGenerator
-from typing import Any, cast
-
-from sqlalchemy import case, func, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-from .settings import settings
-
-engine = create_async_engine(settings.database_url, echo=settings.database_echo)
-
-async_session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
-    engine, expire_on_commit=False
-)
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
@@ -71,7 +75,6 @@ async def search_entities(
     Использует PostgreSQL websearch_to_tsquery (поддерживает кавычки, минус, OR)
     и to_tsvector с конфигурацией 'russian'.
     """
-    from .orm import Entity  # local import to avoid circular deps
 
     tsquery = func.websearch_to_tsquery("russian", query)
     fallback_tsvector = func.to_tsvector(
@@ -90,7 +93,6 @@ async def search_entities(
             Entity.name,
             Entity.description,
             Entity.entity_type,
-            Entity.start_from,
         )
         .where(
             or_(
@@ -119,7 +121,6 @@ async def search_entities(
             "entity_type": row["entity_type"].value
             if hasattr(row["entity_type"], "value")
             else str(row["entity_type"]),
-            "start_from": row["start_from"] or "",
         }
         for row in rows
     ]
@@ -139,7 +140,6 @@ async def create_project(
     created_by: str | None = None,
 ) -> dict[str, str]:
     """Создаёт проект и возвращает его основные поля."""
-    from .orm import Project
 
     async with async_session_factory() as session:
         project = Project(
@@ -216,7 +216,6 @@ async def get_table_blocks_for_source(source_ref: str) -> list[dict[str, object]
         select(Entity.name, Entity.data)
         .where(Entity.entity_type == EntityType.block)
         .where(Entity.is_table.is_(True))
-        .where(Entity.start_from == source_ref)
         .order_by(Entity.name.asc())
     )
 

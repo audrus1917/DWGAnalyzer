@@ -16,10 +16,7 @@ from .process_tree import run_process_tree
 from .docs_ingest import run_documents_ingest
 from .utils import build_args_parser, pt
 
-
-
 type ResultRow = dict[str, object]
-
 
 logging.basicConfig(
     level=logging.DEBUG,
