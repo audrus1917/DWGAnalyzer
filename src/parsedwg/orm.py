@@ -8,7 +8,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-
+from geoalchemy2 import Geometry
 
 class Base(DeclarativeBase):
     pass
@@ -59,19 +59,22 @@ class Entity(Base):
         ForeignKey("project.id", ondelete="SET NULL"),
         nullable=True,
     )
-    entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    name: Mapped[str] = mapped_column(String(512), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     is_table: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=_utcnow
+        DateTime(timezone=True), nullable=False, default=_utcnow,
+        index=True
     )
 
     embedding: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)
     entity_text: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
 
     file_md5: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    geom: Mapped[str | None] = mapped_column(Geometry("GEOMETRY", srid=4326),
+                                             nullable=True, index=True)
 
     parent: Mapped[Entity | None] = relationship(
         "Entity",

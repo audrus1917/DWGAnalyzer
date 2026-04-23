@@ -152,6 +152,7 @@ def build_args_parser() -> argparse.ArgumentParser:
     )
     process_tree_parser.add_argument(
         "--workers",
+        "-w",
         type=int,
         default=0,
         help=(
@@ -161,6 +162,7 @@ def build_args_parser() -> argparse.ArgumentParser:
     )
     process_tree_parser.add_argument(
         "--sequential",
+        "-s",
         action="store_true",
         help="Обрабатывать последовательно в одном процессе (без ProcessPoolExecutor).",
     )
@@ -382,3 +384,5 @@ def pt(value: Any) -> None:
     не путаться к ненужнйо отладкой."""
 
     print(value)
+
+

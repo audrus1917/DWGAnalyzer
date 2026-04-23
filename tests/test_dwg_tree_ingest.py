@@ -4,7 +4,7 @@ from zipfile import ZipFile
 from ezdxf.filemanagement import new
 
 from parsedwg.process_tree import DWGTreeProcessor
-from parsedwg.process_tree import _describe_entity
+from parsedwg.process_tree import get_entity_data
 from parsedwg.process_tree import collect_dxf_summary
 from parsedwg.process_tree import run_process_tree
 
@@ -41,7 +41,7 @@ def test_describe_entity_includes_lwpolyline_points() -> None:
     doc = new()
     polyline = doc.modelspace().add_lwpolyline([(10.0, 20.0), (30.0, 40.0)])
 
-    description = _describe_entity(polyline)
+    description = get_entity_data(polyline)
 
     assert "type=LWPOLYLINE" in description
     assert "points=[(10.00, 20.00, 0.00), (30.00, 40.00, 0.00)]" in description
