@@ -34,13 +34,14 @@ class Settings:
 load_dotenv()
 
 settings = Settings(
-    database_url=os.getenv("DATABASE_URL", "postgresql+asyncpg://andrus@localhost:5432/parsedwg_db"),
+    database_url=os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres@localhost:5432/parsedwg_db"),
     database_echo=_as_bool(os.getenv("DATABASE_ECHO"), default=False),
     ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/"),
     ollama_embed_model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
     ollama_llm_model=os.getenv("OLLAMA_LLM_MODEL", "llama3.2"),
     ollama_timeout_seconds=_as_float(os.getenv("OLLAMA_TIMEOUT_SECONDS"), default=120.0),
 )
+print(settings)
 
 
 __all__ = ["Settings", "settings"]

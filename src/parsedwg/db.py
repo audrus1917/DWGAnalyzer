@@ -31,6 +31,7 @@ async def get_file_id_by_source(source_ref: str) -> str | None:
         row = result.first()
     return str(row[0]) if row else None
 
+
 async def get_table_blocks_by_file_id(file_id: str) -> list[dict[str, object]]:
     """Возвращает блоки-таблицы из БД, у которых parent_id = file_id."""
     stmt = (
@@ -54,8 +55,6 @@ async def get_table_blocks_by_file_id(file_id: str) -> list[dict[str, object]]:
             }
         )
     return payload
-
-
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:

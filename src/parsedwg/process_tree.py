@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Generator, Protocol, cast
+from typing import Any, Generator, Protocol, Callable, cast
 
 import asyncio
 import hashlib
@@ -26,6 +26,7 @@ from .orm import Entity, EntityToEntity, EntityType, Project
 from .redis_queue import load_converted, new_job_id, push_converted, push_sources
 from .table_analysis import TextClusterAnalyzer
 from .utils import get_workers_number
+from .dxf_analyzer import DXFAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +50,13 @@ _QUEUE_EVENT_DONE = "worker_done"
 _QUEUE_EVENT_ERROR = "worker_error"
 
 
-def _should_skip_block(block_name: str) -> bool:
-    return False
-    # return (
-    #     block_name.startswith("*D")
-    #     or block_name.startswith("*U")
-    #     or block_name.startswith("A$")
-    # )
+def skip_blocks(
+    block_entity: Entity, 
+    filter_handler: Callable | None = lambda x : False
+) -> bool:
+    """Признак того, какие блоки надо пропускать."""
+
+    return filter_handler(block_entity)
 
 
 class DWGTreeProcessor:
@@ -69,6 +70,8 @@ class DWGTreeProcessor:
 
     @staticmethod
     def file_md5(path: Path) -> str:
+        """Возвращает MD5-хеш файла для идентификации его содержимого."""
+
         digest = hashlib.md5(usedforsecurity=False)
         with path.open("rb") as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -76,6 +79,8 @@ class DWGTreeProcessor:
         return digest.hexdigest()
 
     def walk(self, root_path: Path) -> Generator[JobEntry, None, None]:
+        """Обходит каталог и генерирует задания на разбор DWG/DXF файлов."""
+
         for file_path in sorted(path for path in root_path.rglob("*") if path.is_file()):
             suffix = file_path.suffix.lower()
             if suffix in {".dwg", ".dxf", ".dxb"}:
@@ -117,28 +122,34 @@ class DWGTreeProcessor:
             except zipfile.BadZipFile:
                 logger.warning("Пропускаем поврежденный ZIP: %s", file_path)
 
+    @staticmethod
+    def split_to_batches(entries: list[JobEntry], workers: int) -> list[list[JobEntry]]:
+        """Разбивает список заданий на батчи для параллельной обработки."""
 
-def _split_to_batches(entries: list[JobEntry], workers: int) -> list[list[JobEntry]]:
-    normalized_workers = max(1, workers)
-    batches: list[list[JobEntry]] = [[] for _ in range(normalized_workers)]
-    for index, entry in enumerate(entries):
-        batches[index % normalized_workers].append(entry)
-    return [batch for batch in batches if batch]
+        normalized_workers = max(1, workers)
+        batches: list[list[JobEntry]] = [[] for _ in range(normalized_workers)]
+        for index, entry in enumerate(entries):
+            batches[index % normalized_workers].append(entry)
+        return [batch for batch in batches if batch]
 
+    @staticmethod
+    def extract_from_zip(zip_path: Path, member: str, temp_dir: Path) -> Path:
+        """Извлекает файл из ZIP-архива во временную папку и возвращает путь к нему."""
 
-def _extract_member_from_zip(zip_path: Path, member: str, temp_dir: Path) -> Path:
-    target_path = temp_dir / Path(member).name
-    with zipfile.ZipFile(zip_path) as archive:
-        data = archive.read(member)
-    target_path.write_bytes(data)
-    return target_path
+        target_path = temp_dir / Path(member).name
+        with zipfile.ZipFile(zip_path) as archive:
+            data = archive.read(member)
+        target_path.write_bytes(data)
+        return target_path
 
+    @staticmethod
+    def read_drawing(path: Path):
+        """Читает DWG/DXF-файл с помощью ezdxf / ODAFC (для DWG) и возвращает объект Drawing."""
 
-def read_drawing(path: Path):
-    suffix = path.suffix.lower()
-    if suffix == ".dwg":
-        return read_odafc(path, "ACAD2018")
-    return readfile(path)
+        suffix = path.suffix.lower()
+        if suffix == ".dwg":
+            return read_odafc(path, "ACAD2018")
+        return readfile(path)
 
 
 def _queue_done_event() -> dict[str, str]:
@@ -210,144 +221,11 @@ def collect_layout_layers(doc, layout) -> list[str]:
     return sorted(layers)
 
 
-def _format_point(point: object | None) -> str:
-    if point is None:
-        return "n/a"
-
-    x = getattr(point, "x", None)
-    y = getattr(point, "y", None)
-    z = getattr(point, "z", 0.0)
-    if x is not None and y is not None:
-        return f"({x:.2f}, {y:.2f}, {z:.2f})"
-
-    if isinstance(point, (tuple, list)) and len(point) >= 2:
-        try:
-            px = float(point[0])
-            py = float(point[1])
-            pz = float(point[2]) if len(point) >= 3 else 0.0
-        except (TypeError, ValueError):
-            return str(point)
-        return f"({px:.2f}, {py:.2f}, {pz:.2f})"
-
-    return str(point)
-
-
-def _is_point_like(value: object) -> bool:
-    if hasattr(value, "x") and hasattr(value, "y"):
-        return True
-
-    if isinstance(value, (tuple, list)) and len(value) >= 2:
-        try:
-            float(value[0])
-            float(value[1])
-        except (TypeError, ValueError):
-            return False
-        return True
-
-    return False
-
-
-def _get_text_content(entity) -> str:
-    entity_type = entity.dxftype()
-    if entity_type == "TEXT" and entity.dxf.hasattr("text"):
-        return str(entity.dxf.text).strip()
-
-    if entity_type == "MTEXT":
-        plain_text = getattr(entity, "plain_text", None)
-        if callable(plain_text):
-            return str(plain_text()).strip()
-
-    return ""
-
-
-def _describe_entity(entity) -> str:
-    params: dict[str, str] = {"type": entity.dxftype()}
-
-    if entity.dxftype() == "INSERT" and entity.dxf.hasattr("name"):
-        params["block"] = str(entity.dxf.name)
-
-    for attr_name, value in entity.dxf.all_existing_dxf_attribs().items():
-        if _is_point_like(value):
-            params[attr_name] = _format_point(value)
-
-    if entity.dxftype() == "LWPOLYLINE":
-        get_points = getattr(entity, "get_points", None)
-        if callable(get_points):
-            raw_points = get_points("xy")
-            if isinstance(raw_points, (list, tuple)):
-                points = [
-                    f"({float(point[0]):.2f}, {float(point[1]):.2f}, 0.00)"
-                    for point in raw_points
-                ]
-                if points:
-                    params["points"] = f"[{', '.join(points)}]"
-
-    text_value = _get_text_content(entity)
-    if text_value:
-        params["text"] = re.sub(r"\s+", " ", text_value).strip()[:200]
-
-    rendered: list[str] = []
-    for key, value in params.items():
-        if key in {"block", "text"}:
-            rendered.append(f"{key}={value!r}")
-        else:
-            rendered.append(f"{key}={value}")
-    return ", ".join(rendered)
-
-
-def collect_primitives(doc) -> list[dict[str, str]]:
+def collect_primitives(doc: Drawing) -> list[dict[str, str]]:
     primitives: list[dict[str, str]] = []
 
     for block in doc.blocks:
-        block_name = str(block.name)
-
-        logger.debug("Process block: %s", block_name)
-        for entity in block:
-            entity_type = entity.dxftype()
-            location = "n/a"
-            if entity.dxf.hasattr("insert"):
-                location = _format_point(getattr(entity.dxf, "insert"))
-
-            if entity_type == "INSERT":
-                target_block = ""
-                if entity.dxf.hasattr("name"):
-                    target_block = str(entity.dxf.name)
-
-                primitives.append(
-                    {
-                        "entity_type": entity_type,
-                        "block": block_name,
-                        "type": entity_type,
-                        "text": target_block,
-                        "location": location,
-                        "layer": str(getattr(entity.dxf, "layer", "")),
-                        "target_block": target_block,
-                    }
-                )
-            elif entity_type in {"TEXT", "MTEXT"}:
-                text_value = _get_text_content(entity)
-                if not text_value:
-                    text_value = ""
-
-                primitives.append(
-                    {
-                        "block": block_name,
-                        "type": entity_type,
-                        "text": re.sub(r"\s+", " ", text_value).strip(),
-                        "location": location,
-                        "layer": str(getattr(entity.dxf, "layer", "")),
-                    }
-                )
-            else:
-                primitives.append(
-                    {
-                        "entity_type": entity_type,
-                        "block": block_name,
-                        "type": entity_type,
-                        "location": location,
-                        "layer": str(getattr(entity.dxf, "layer", "")),
-                    }
-                )
+        primitives += [DXFAnalyzer.get_entity_data(block, entity) for entity in block]
 
     return primitives
 
@@ -362,12 +240,12 @@ def _collect_layout_insert_primitives(doc) -> list[dict[str, str]]:
                 continue
 
             target_block = str(entity.dxf.name)
-            if _should_skip_block(target_block):
+            if skip_blocks(entity):
                 continue
 
             location = "n/a"
             if entity.dxf.hasattr("insert"):
-                location = _format_point(getattr(entity.dxf, "insert"))
+                location = DXFAnalyzer.format_point(getattr(entity.dxf, "insert"))
 
             primitives.append(
                 {
@@ -455,7 +333,7 @@ def collect_dxf_summary(
     """Собирает информацию о Layouts, Blocks и примитивах из DWG/DXF-файла."""
 
     # Чтение файла DWG / DXF
-    doc = read_drawing(drawing_path)
+    doc = DWGTreeProcessor.read_drawing(drawing_path)
     return collect_drawing_summary(doc, name_tags_extractor=name_tags_extractor)
 
 
@@ -476,7 +354,8 @@ def process_entry(
             member_name = entry.get("member")
             if member_name is None:
                 raise ValueError("Для zipped_file не указан member.")
-            working_path = _extract_member_from_zip(source, member_name, temp_dir)
+            
+            working_path = DWGTreeProcessor.extract_from_zip(source, member_name, temp_dir)
             source_ref = f"{entry['source']}::{member_name}"
             file_md5 = DWGTreeProcessor.file_md5(working_path)
 
@@ -639,13 +518,6 @@ async def save_tree_to_db(
                     )
                     session.add(zip_entity)
                     await session.flush()
-                    # session.add(
-                    #     EntityToEntity(
-                    #         src_id=zip_parent_entity.id,
-                    #         dst_id=zip_entity.id,
-                    #         link="contains_zip",
-                    #     )
-                    # )
                     zip_entities[zip_source] = zip_entity
                     created_entities += 1
                 parent_entity = zip_entity
@@ -667,13 +539,6 @@ async def save_tree_to_db(
             )
             session.add(file_entity)
             await session.flush()
-            # session.add(
-            #     EntityToEntity(
-            #         src_id=parent_entity.id,
-            #         dst_id=file_entity.id,
-            #         link="contains_file",
-            #     )
-            # )
             created_entities += 1
 
             summary = cast(dict[str, list[dict[str, object]]], entry["summary"])
@@ -691,13 +556,6 @@ async def save_tree_to_db(
                 )
                 session.add(layout_entity)
                 await session.flush()
-                # session.add(
-                #     EntityToEntity(
-                #         src_id=file_entity.id,
-                #         dst_id=layout_entity.id,
-                #         link="contains_layout",
-                #     )
-                # )
                 created_entities += 1
 
                 for layer_name in cast(list[str], layout["layers"]):
@@ -713,21 +571,13 @@ async def save_tree_to_db(
                     )
                     session.add(layer_entity)
                     await session.flush()
-                    # session.add(
-                    #     EntityToEntity(
-                    #         src_id=layout_entity.id,
-                    #         dst_id=layer_entity.id,
-                    #         link="contains_layer",
-                    #     )
-                    # )
                     layer_entities_by_key[(layout_name, layer_name_str)] = layer_entity
                     created_entities += 1
 
             block_entities_by_name: dict[str, Entity] = {}
-            layer_block_links: set[tuple[object, object]] = set()
             for block in summary["blocks"]:
                 block_name = str(block["name"])
-                if _should_skip_block(block_name):
+                if skip_blocks(block_name):
                     continue
 
                 block_data: dict[str, object] = {
@@ -748,13 +598,6 @@ async def save_tree_to_db(
                 )
                 session.add(block_entity)
                 await session.flush()
-                # session.add(
-                #     EntityToEntity(
-                #         src_id=file_entity.id,
-                #         dst_id=block_entity.id,
-                #         link="contains_block",
-                #     )
-                # )
                 block_entities_by_name[block_name] = block_entity
                 created_entities += 1
 
@@ -769,41 +612,18 @@ async def save_tree_to_db(
                     )
                     continue
 
-                primitive_data = {
-                    "block": block_name,
-                    "layer": primitive["layer"],
-                    "location": primitive["location"],
-                }
-                layout_name = primitive.get("layout")
-                if isinstance(layout_name, str) and layout_name:
-                    primitive_data["layout"] = layout_name
-
-                target_block = primitive.get("target_block")
-                if isinstance(target_block, str) and target_block:
-                    primitive_data["target_block"] = target_block
-
-                ai_name_tags = primitive.get("ai_name_tags")
-                if isinstance(ai_name_tags, list) and ai_name_tags:
-                    primitive_data["ai_name_tags"] = ai_name_tags
-
                 primitive_entity = Entity(
                     parent_id=parent_block_entity.id,
                     project_id=project_id,
                     name=str(primitive.get("type", "")),
                     description=str(primitive.get("text", "")),
                     entity_text=_build_entity_text(str(primitive.get("text", ""))),
-                    entity_type=str(primitive.get("entity_type", "primitive")),
-                    data=primitive_data,
+                    entity_type=str(primitive.get("type", "primitive")),
+                    data=primitive,
+                    geom=primitive.get("geom", None)
                 )
                 session.add(primitive_entity)
                 await session.flush()
-                # session.add(
-                #     EntityToEntity(
-                #         src_id=parent_block_entity.id,
-                #         dst_id=primitive_entity.id,
-                #         link="contains_primitive",
-                #     )
-                # )
 
                 layer_name = primitive.get("layer")
                 if isinstance(layout_name, str) and isinstance(layer_name, str):
@@ -816,16 +636,6 @@ async def save_tree_to_db(
                                 link="on_layer",
                             )
                         )
-                        relation_key = (layer_entity.id, parent_block_entity.id)
-                        if relation_key not in layer_block_links:
-                            session.add(
-                                EntityToEntity(
-                                    dst_id=layer_entity.id,
-                                    src_id=parent_block_entity.id,
-                                    link="on_layer",
-                                )
-                            )
-                            layer_block_links.add(relation_key)
 
                 created_entities += 1
 
@@ -897,7 +707,7 @@ def run_process_tree(
     logger.info("Список файлов сохранён в Redis, job_id=%s, count=%d", job_id, len(entries))
 
     effective_workers = get_workers_number(conversion_workers)
-    batches = _split_to_batches(entries, workers=effective_workers)
+    batches = DWGTreeProcessor.split_to_batches(entries, workers=effective_workers)
 
     processed_entries: list[ProcessedEntry] = []
     if use_process_pool:
@@ -971,4 +781,4 @@ def run_process_tree(
     }
 
 
-__all__ = ["DWGTreeProcessor", "collect_dxf_summary", "run_process_tree", "_describe_entity"]
+__all__ = ["DWGTreeProcessor", "collect_dxf_summary", "run_process_tree"]
