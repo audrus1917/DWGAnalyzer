@@ -50,11 +50,12 @@ _QUEUE_EVENT_ERROR = "worker_error"
 
 
 def _should_skip_block(block_name: str) -> bool:
-    return (
-        block_name.startswith("*D")
-        or block_name.startswith("*U")
-        or block_name.startswith("A$")
-    )
+    return False
+    # return (
+    #     block_name.startswith("*D")
+    #     or block_name.startswith("*U")
+    #     or block_name.startswith("A$")
+    # )
 
 
 class DWGTreeProcessor:
@@ -294,21 +295,15 @@ def _describe_entity(entity) -> str:
     return ", ".join(rendered)
 
 
-def _collect_text_primitives(doc) -> list[dict[str, str]]:
+def collect_primitives(doc) -> list[dict[str, str]]:
     primitives: list[dict[str, str]] = []
 
     for block in doc.blocks:
         block_name = str(block.name)
-        if block_name.startswith("*"):
-            continue
-        if _should_skip_block(block_name):
-            continue
 
+        logger.debug("Process block: %s", block_name)
         for entity in block:
             entity_type = entity.dxftype()
-            if entity_type not in {"TEXT", "MTEXT", "INSERT"}:
-                continue
-
             location = "n/a"
             if entity.dxf.hasattr("insert"):
                 location = _format_point(getattr(entity.dxf, "insert"))
@@ -320,6 +315,7 @@ def _collect_text_primitives(doc) -> list[dict[str, str]]:
 
                 primitives.append(
                     {
+                        "entity_type": entity_type,
                         "block": block_name,
                         "type": entity_type,
                         "text": target_block,
@@ -328,21 +324,30 @@ def _collect_text_primitives(doc) -> list[dict[str, str]]:
                         "target_block": target_block,
                     }
                 )
-                continue
+            elif entity_type in {"TEXT", "MTEXT"}:
+                text_value = _get_text_content(entity)
+                if not text_value:
+                    text_value = ""
 
-            text_value = _get_text_content(entity)
-            if not text_value:
-                continue
-
-            primitives.append(
-                {
-                    "block": block_name,
-                    "type": entity_type,
-                    "text": re.sub(r"\s+", " ", text_value).strip(),
-                    "location": location,
-                    "layer": str(getattr(entity.dxf, "layer", "")),
-                }
-            )
+                primitives.append(
+                    {
+                        "block": block_name,
+                        "type": entity_type,
+                        "text": re.sub(r"\s+", " ", text_value).strip(),
+                        "location": location,
+                        "layer": str(getattr(entity.dxf, "layer", "")),
+                    }
+                )
+            else:
+                primitives.append(
+                    {
+                        "entity_type": entity_type,
+                        "block": block_name,
+                        "type": entity_type,
+                        "location": location,
+                        "layer": str(getattr(entity.dxf, "layer", "")),
+                    }
+                )
 
     return primitives
 
@@ -429,7 +434,7 @@ def collect_drawing_summary(
             }
         )
 
-    primitives = _collect_text_primitives(drawing)
+    primitives = collect_primitives(drawing)
     primitives.extend(_collect_layout_insert_primitives(drawing))
     if name_tags_extractor is not None:
         primitives_payload = _enrich_primitives_with_name_tags(primitives, name_tags_extractor)
@@ -524,7 +529,6 @@ async def _create_folders_tree(
         entity_text=_build_entity_text(f"Источник сканирования: {root_path}"),
         entity_type=EntityType.folder,
         data={"path": str(root_path)},
-        start_from=str(root_path),
         project_id=project_id,
         created_at=func.now(),
 
@@ -548,17 +552,16 @@ async def _create_folders_tree(
             entity_text=_build_entity_text(f"Каталог: {dir_path}"),
             entity_type=EntityType.folder,
             data={"path": str(dir_path)},
-            start_from=str(dir_path),
         )
         session.add(folder_entity)
         await session.flush()
-        session.add(
-            EntityToEntity(
-                src_id=parent_entity.id,
-                dst_id=folder_entity.id,
-                link="contains_folder",
-            )
-        )
+        # session.add(
+        #     EntityToEntity(
+        #         src_id=parent_entity.id,
+        #         dst_id=folder_entity.id,
+        #         link="contains_folder",
+        #     )
+        # )
         folders[rel] = folder_entity
         created += 1
 
@@ -633,17 +636,16 @@ async def save_tree_to_db(
                         entity_text=_build_entity_text(f"ZIP-архив: {zip_source}"),
                         entity_type=EntityType.zipfile,
                         data={"path": zip_source},
-                        start_from=zip_source,
                     )
                     session.add(zip_entity)
                     await session.flush()
-                    session.add(
-                        EntityToEntity(
-                            src_id=zip_parent_entity.id,
-                            dst_id=zip_entity.id,
-                            link="contains_zip",
-                        )
-                    )
+                    # session.add(
+                    #     EntityToEntity(
+                    #         src_id=zip_parent_entity.id,
+                    #         dst_id=zip_entity.id,
+                    #         link="contains_zip",
+                    #     )
+                    # )
                     zip_entities[zip_source] = zip_entity
                     created_entities += 1
                 parent_entity = zip_entity
@@ -662,17 +664,16 @@ async def save_tree_to_db(
                 entity_type=file_type,
                 data={"source_ref": source_ref},
                 file_md5=str(entry.get("file_md5", "")) or None,
-                start_from=source_ref,
             )
             session.add(file_entity)
             await session.flush()
-            session.add(
-                EntityToEntity(
-                    src_id=parent_entity.id,
-                    dst_id=file_entity.id,
-                    link="contains_file",
-                )
-            )
+            # session.add(
+            #     EntityToEntity(
+            #         src_id=parent_entity.id,
+            #         dst_id=file_entity.id,
+            #         link="contains_file",
+            #     )
+            # )
             created_entities += 1
 
             summary = cast(dict[str, list[dict[str, object]]], entry["summary"])
@@ -687,17 +688,16 @@ async def save_tree_to_db(
                     entity_text=_build_entity_text(f"Layout файла {entry['name']}"),
                     entity_type=EntityType.layout,
                     data={},
-                    start_from=source_ref,
                 )
                 session.add(layout_entity)
                 await session.flush()
-                session.add(
-                    EntityToEntity(
-                        src_id=file_entity.id,
-                        dst_id=layout_entity.id,
-                        link="contains_layout",
-                    )
-                )
+                # session.add(
+                #     EntityToEntity(
+                #         src_id=file_entity.id,
+                #         dst_id=layout_entity.id,
+                #         link="contains_layout",
+                #     )
+                # )
                 created_entities += 1
 
                 for layer_name in cast(list[str], layout["layers"]):
@@ -710,17 +710,16 @@ async def save_tree_to_db(
                         entity_text=_build_entity_text(f"Layer layout {layout_name}"),
                         entity_type=EntityType.layer,
                         data={"layout": layout_name},
-                        start_from=source_ref,
                     )
                     session.add(layer_entity)
                     await session.flush()
-                    session.add(
-                        EntityToEntity(
-                            src_id=layout_entity.id,
-                            dst_id=layer_entity.id,
-                            link="contains_layer",
-                        )
-                    )
+                    # session.add(
+                    #     EntityToEntity(
+                    #         src_id=layout_entity.id,
+                    #         dst_id=layer_entity.id,
+                    #         link="contains_layer",
+                    #     )
+                    # )
                     layer_entities_by_key[(layout_name, layer_name_str)] = layer_entity
                     created_entities += 1
 
@@ -746,17 +745,16 @@ async def save_tree_to_db(
                     entity_type=EntityType.block,
                     data=block_data,
                     is_table=cast(bool, block["is_table"]),
-                    start_from=source_ref,
                 )
                 session.add(block_entity)
                 await session.flush()
-                session.add(
-                    EntityToEntity(
-                        src_id=file_entity.id,
-                        dst_id=block_entity.id,
-                        link="contains_block",
-                    )
-                )
+                # session.add(
+                #     EntityToEntity(
+                #         src_id=file_entity.id,
+                #         dst_id=block_entity.id,
+                #         link="contains_block",
+                #     )
+                # )
                 block_entities_by_name[block_name] = block_entity
                 created_entities += 1
 
@@ -791,34 +789,40 @@ async def save_tree_to_db(
                 primitive_entity = Entity(
                     parent_id=parent_block_entity.id,
                     project_id=project_id,
-                    name=str(primitive["type"]),
-                    description=str(primitive["text"]),
-                    entity_text=_build_entity_text(str(primitive["text"])),
-                    entity_type=EntityType.primitive,
+                    name=str(primitive.get("type", "")),
+                    description=str(primitive.get("text", "")),
+                    entity_text=_build_entity_text(str(primitive.get("text", ""))),
+                    entity_type=str(primitive.get("entity_type", "primitive")),
                     data=primitive_data,
-                    start_from=source_ref,
                 )
                 session.add(primitive_entity)
                 await session.flush()
-                session.add(
-                    EntityToEntity(
-                        src_id=parent_block_entity.id,
-                        dst_id=primitive_entity.id,
-                        link="contains_primitive",
-                    )
-                )
+                # session.add(
+                #     EntityToEntity(
+                #         src_id=parent_block_entity.id,
+                #         dst_id=primitive_entity.id,
+                #         link="contains_primitive",
+                #     )
+                # )
 
                 layer_name = primitive.get("layer")
                 if isinstance(layout_name, str) and isinstance(layer_name, str):
                     layer_entity = layer_entities_by_key.get((layout_name, layer_name))
                     if layer_entity is not None:
+                        session.add(
+                            EntityToEntity(
+                                dst_id=layer_entity.id,
+                                src_id=primitive_entity.id,
+                                link="on_layer",
+                            )
+                        )
                         relation_key = (layer_entity.id, parent_block_entity.id)
                         if relation_key not in layer_block_links:
                             session.add(
                                 EntityToEntity(
-                                    src_id=layer_entity.id,
-                                    dst_id=parent_block_entity.id,
-                                    link="contains_block",
+                                    dst_id=layer_entity.id,
+                                    src_id=parent_block_entity.id,
+                                    link="on_layer",
                                 )
                             )
                             layer_block_links.add(relation_key)

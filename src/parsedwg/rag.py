@@ -121,8 +121,6 @@ def _entity_text(entity: Entity) -> str:
         if table_rows_text:
             parts.append(table_rows_text)
 
-    if entity.start_from:
-        parts.append(entity.start_from)
     if entity.data:
         try:
             parts.append(json.dumps(entity.data, ensure_ascii=False))
@@ -204,7 +202,6 @@ async def similarity_search(
                 Entity.name,
                 Entity.description,
                 Entity.entity_type,
-                Entity.start_from,
                 cast(Entity.embedding.op("<->")(text(f"'{vec_str}'::vector")), String).label("distance"),
             )
             .where(Entity.embedding.is_not(None))
@@ -228,7 +225,6 @@ async def similarity_search(
             "entity_type": row["entity_type"].value
             if hasattr(row["entity_type"], "value")
             else str(row["entity_type"]),
-            "start_from": row["start_from"] or "",
             "distance": round(float(row["distance"]), 4),
         }
         for row in rows

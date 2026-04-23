@@ -13,17 +13,15 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 class Base(DeclarativeBase):
     pass
 
-
 class EntityType(str, enum.Enum):
-    folder = "folder"
-    file = "file"
-    zipfile = "zipfile"
-    zipped_file = "zipped_file"
-    block = "block"
-    layout = "layout"
-    layer = "layer"
-    primitive = "primitive"
-
+    folder = "FOLDER"
+    file = "FILE"
+    zipfile = "ZIPFILE"
+    zipped_file = "ZIPPED_FILE"
+    block = "BLOCK"
+    layout = "LAYOUT"
+    layer = "LAYER"
+ 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -61,27 +59,19 @@ class Entity(Base):
         ForeignKey("project.id", ondelete="SET NULL"),
         nullable=True,
     )
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(512), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    entity_text: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
-    entity_type: Mapped[EntityType] = mapped_column(
-        Enum(EntityType, name="entity_type_enum"), nullable=False
-    )
     data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    # pgvector embedding — nomic-embed-text (768 dims); заполняется командой index
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)
-
+    is_table: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
-    created_by: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, onupdate=_utcnow
-    )
-    updated_by: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)
+    entity_text: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
+
     file_md5: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    is_table: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    start_from: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     parent: Mapped[Entity | None] = relationship(
         "Entity",
