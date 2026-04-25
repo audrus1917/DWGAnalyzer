@@ -40,14 +40,6 @@ def get_workers_number(requested_workers: int) -> int:
 def build_args_parser() -> argparse.ArgumentParser:
     """Строит и возвращает парсер аргументов командной строки."""
 
-    list_common = argparse.ArgumentParser(add_help=False)
-    list_common.add_argument("path", help="Путь к DWG/DXF файлу или каталогу")
-    list_common.add_argument(
-        "-o",
-        "--output",
-        help="Путь к JSON-файлу для одного входного файла или каталогу для пакетной обработки.",
-    )
-
     extract_common = argparse.ArgumentParser(add_help=False)
     extract_common.add_argument("drawing", help="Путь к DWG или DXF файлу")
 
@@ -57,16 +49,6 @@ def build_args_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser(
-        "list-layouts",
-        parents=[list_common],
-        help="Показать доступные layout'ы в DWG/DXF файле или каталоге.",
-    )
-    subparsers.add_parser(
-        "list-blocks",
-        parents=[list_common],
-        help="Показать доступные блоки в DWG/DXF файле или каталоге.",
-    )
     extract_block_parser = subparsers.add_parser(
         "extract-block",
         parents=[extract_common],
@@ -167,6 +149,11 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="Обрабатывать последовательно в одном процессе (без ProcessPoolExecutor).",
     )
     process_tree_parser.add_argument(
+        "--dry",
+        action="store_true",
+        help="Выполнить разбор файлов без сохранения результатов в БД.",
+    )
+    process_tree_parser.add_argument(
         "--ai-name-tags",
         action="store_true",
         help="Включить извлечение тегов из текстов через LangChain (опционально).",
@@ -217,6 +204,36 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="OpenAI-совместимый base URL для модели (по умолчанию: Ollama).",
     )
     extract_name_tags_parser.add_argument(
+        "--ai-api-key",
+        default="ollama",
+        help="API ключ для AI провайдера (для Ollama можно оставить по умолчанию).",
+    )
+
+    extract_token_tags_parser = subparsers.add_parser(
+        "extract-token-tags",
+        help="Извлечь JSON-словарь token -> meanings через LLM для списка токенов.",
+    )
+    extract_token_tags_parser.add_argument(
+        "tokens",
+        nargs="*",
+        help="Список токенов, например: M_Doors M_Wall_Glass.",
+    )
+    extract_token_tags_parser.add_argument(
+        "--drawing",
+        default=None,
+        help="Путь к DWG/DXF файлу. Если указан, токены берутся из имен слоев чертежа.",
+    )
+    extract_token_tags_parser.add_argument(
+        "--ai-model",
+        default="llama3.2",
+        help="Имя модели для AI-режима (по умолчанию: llama3.2).",
+    )
+    extract_token_tags_parser.add_argument(
+        "--ai-base-url",
+        default="http://localhost:11434/v1",
+        help="OpenAI-совместимый base URL для модели (по умолчанию: Ollama).",
+    )
+    extract_token_tags_parser.add_argument(
         "--ai-api-key",
         default="ollama",
         help="API ключ для AI провайдера (для Ollama можно оставить по умолчанию).",
@@ -379,7 +396,7 @@ class CustomFormatter(logging.Formatter):
         return formatter.format(record)
     
 
-def pt(value: Any) -> None:
+def out(value: Any) -> None:
     """Выводит на стандартный вывод значение. Алиас для :func:`print`, чтобы 
     не путаться к ненужнйо отладкой."""
 
