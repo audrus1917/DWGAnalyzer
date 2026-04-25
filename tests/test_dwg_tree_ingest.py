@@ -1,12 +1,18 @@
+import asyncio
 from pathlib import Path
+import uuid
 from zipfile import ZipFile
 
 from ezdxf.filemanagement import new
 
 from parsedwg.process_tree import DWGTreeProcessor
 from parsedwg.process_tree import collect_dxf_summary
+from parsedwg.process_tree import collect_drawing_summary
 from parsedwg.process_tree import run_process_tree
+from parsedwg.process_tree import save_tree_to_db
 from parsedwg.dxf_analyzer import DXFAnalyzer
+from parsedwg.orm import Entity
+from parsedwg.orm import EntityType
 
 
 def test_discover_dwg_sources_finds_regular_and_zipped_dwg(tmp_path: Path) -> None:
@@ -152,13 +158,13 @@ def test_collect_dxf_summary_includes_insert_primitives_from_layouts(tmp_path: P
     assert any(
         primitive["layout"] == "Model"
         and primitive["layer"] == "A-INSERTS"
-        and primitive["location"] == ""
+        and primitive["location"] == "[5.0, 6.0, 0.0]"
         for primitive in primitives
     )
     assert any(
         primitive["layout"] == "Sheet1"
         and primitive["layer"] == "S-INSERTS"
-        and primitive["location"] == ""
+        and primitive["location"] == "[7.0, 8.0, 0.0]"
         for primitive in primitives
     )
 
@@ -186,7 +192,118 @@ def test_collect_dxf_summary_marks_table_blocks_and_keeps_table_data(tmp_path: P
     assert table_data["y_clusters"] >= 2
 
 
-def test_run_process_tree_supports_sequential_mode(tmp_path: Path, monkeypatch) -> None:
+def test_collect_drawing_summary_uses_tqdm_with_block_count(monkeypatch) -> None:
+    doc = new()
+    doc.blocks.new("BLOCK_A")
+    doc.blocks.new("BLOCK_B")
+
+    captured: dict[str, object] = {}
+
+    def fake_tqdm(iterable, **kwargs):
+        captured["total"] = kwargs.get("total")
+        captured["desc"] = kwargs.get("desc")
+        captured["unit"] = kwargs.get("unit")
+        captured["disable"] = kwargs.get("disable")
+        return iterable
+
+    monkeypatch.setattr("parsedwg.process_tree._tqdm", fake_tqdm)
+    monkeypatch.setattr("parsedwg.process_tree.sys.stderr.isatty", lambda: True)
+
+    collect_drawing_summary(doc)
+
+    assert captured["total"] == len(list(doc.blocks))
+    assert captured["desc"] == "Blocks"
+    assert captured["unit"] == "block"
+    assert captured["disable"] is False
+
+
+def test_save_tree_to_db_sets_file_id_for_all_descendants(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    processed_entry = {
+        "kind": "file",
+        "source": str(tmp_path / "sample.dxf"),
+        "name": "sample.dxf",
+        "file_type": ".dxf",
+        "parent_rel": "",
+        "source_ref": str(tmp_path / "sample.dxf"),
+        "file_md5": "abc",
+        "summary": {
+            "layouts": [{"name": "Model", "layers": ["A-TEXT"]}],
+            "blocks": [{"name": "BLOCK_A", "entity_count": 1, "is_table": False}],
+            "primitives": [
+                {
+                    "type": "TEXT",
+                    "text": "Подпись",
+                    "block": "BLOCK_A",
+                    "layout": "Model",
+                    "layer": "A-TEXT",
+                }
+            ],
+        },
+    }
+
+    added_entities: list[Entity] = []
+
+    class _FakeScalarResult:
+        def scalar_one_or_none(self):
+            return None
+
+    class _FakeSession:
+        def add(self, obj):
+            if isinstance(obj, Entity):
+                if obj.id is None:
+                    obj.id = uuid.uuid4()
+                added_entities.append(obj)
+
+        async def flush(self):
+            return None
+
+        async def execute(self, _stmt):
+            return _FakeScalarResult()
+
+        async def commit(self):
+            return None
+
+    class _FakeSessionContext:
+        async def __aenter__(self):
+            return _FakeSession()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_async_session_factory():
+        return _FakeSessionContext()
+
+    monkeypatch.setattr("parsedwg.process_tree.async_session_factory", fake_async_session_factory)
+
+    asyncio.run(
+        save_tree_to_db(
+            root_path=str(tmp_path),
+            processed_entries=[processed_entry],
+            project_name="Test Project",
+        )
+    )
+
+    file_entity = next(entity for entity in added_entities if entity.entity_type == EntityType.file)
+
+    descendants = [
+        entity
+        for entity in added_entities
+        if entity.entity_type in {
+            EntityType.layout,
+            EntityType.layer,
+            EntityType.block,
+            "TEXT",
+        }
+    ]
+
+    assert descendants
+    assert all(entity.file_id == file_entity.id for entity in descendants)
+
+
+def test_run_process_tree_uses_single_process_pipeline(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "sample.dxf"
     source.write_text("stub", encoding="utf-8")
 
@@ -203,42 +320,30 @@ def test_run_process_tree_supports_sequential_mode(tmp_path: Path, monkeypatch) 
 
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr("parsedwg.process_tree.new_job_id", lambda: "job-1")
-    monkeypatch.setattr("parsedwg.process_tree.push_sources", lambda _job_id, _entries: None)
-    monkeypatch.setattr("parsedwg.process_tree.load_converted", lambda _job_id: [processed_entry])
-    monkeypatch.setattr("parsedwg.process_tree.get_workers_number", lambda _workers: 1)
-
-    def fake_process_batch(batch, processed_queue=None, job_id=None, name_tags_config=None):
-        _ = (batch, name_tags_config)
-        captured["job_id"] = job_id
-        captured["queue"] = processed_queue
-        if processed_queue is not None:
-            processed_queue.put(processed_entry)
-            processed_queue.put({"__queue_event__": "worker_done"})
+    def fake_process_batch(batch, name_tags_config=None):
+        _ = name_tags_config
+        captured["batch"] = batch
         return [processed_entry]
 
-    def fake_process_queue(
-        processed_queue,
+    async def fake_save_tree_to_db(
         root_path,
-        producer_count,
+        processed_entries,
         project_name,
-        project_description,
-        created_by,
+        project_description=None,
+        created_by=None,
     ):
-        _ = (processed_queue, project_description, created_by)
+        _ = (project_description, created_by)
         captured["root_path"] = root_path
-        captured["producer_count"] = producer_count
+        captured["processed_entries"] = processed_entries
         captured["project_name"] = project_name
         return ("project-1", 7)
 
     monkeypatch.setattr("parsedwg.process_tree.process_batch", fake_process_batch)
-    monkeypatch.setattr("parsedwg.process_tree.process_queue", fake_process_queue)
+    monkeypatch.setattr("parsedwg.process_tree.save_tree_to_db", fake_save_tree_to_db)
 
     result = run_process_tree(
         source,
-        conversion_workers=3,
         project_name="Sequential Project",
-        use_process_pool=False,
     )
 
     assert result["project_id"] == "project-1"
@@ -246,8 +351,9 @@ def test_run_process_tree_supports_sequential_mode(tmp_path: Path, monkeypatch) 
     assert result["processed_count"] == 1
     assert result["workers"] == 1
     assert result["created_entities"] == 7
-    assert captured["job_id"] == "job-1"
-    assert captured["producer_count"] == 1
+    assert result["job_id"] is None
+    assert result["mode"] == "direct"
+    assert captured["processed_entries"] == [processed_entry]
     assert captured["project_name"] == "Sequential Project"
 
 
@@ -268,32 +374,21 @@ def test_run_process_tree_dry_mode_skips_db_save(tmp_path: Path, monkeypatch) ->
 
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr("parsedwg.process_tree.new_job_id", lambda: "job-1")
-    monkeypatch.setattr("parsedwg.process_tree.push_sources", lambda _job_id, _entries: None)
-    monkeypatch.setattr("parsedwg.process_tree.load_converted", lambda _job_id: [processed_entry])
-    monkeypatch.setattr("parsedwg.process_tree.get_workers_number", lambda _workers: 1)
-
-    def fake_process_batch(batch, processed_queue=None, job_id=None, name_tags_config=None):
+    def fake_process_batch(batch, name_tags_config=None):
         _ = (batch, name_tags_config)
-        captured["job_id"] = job_id
-        captured["queue"] = processed_queue
-        if processed_queue is not None:
-            processed_queue.put(processed_entry)
-            processed_queue.put({"__queue_event__": "worker_done"})
+        captured["batch"] = batch
         return [processed_entry]
 
-    def fail_process_queue(*args, **kwargs):
+    async def fail_save_tree_to_db(*args, **kwargs):
         _ = (args, kwargs)
-        raise AssertionError("process_queue should not be called in dry mode")
+        raise AssertionError("save_tree_to_db should not be called in dry mode")
 
     monkeypatch.setattr("parsedwg.process_tree.process_batch", fake_process_batch)
-    monkeypatch.setattr("parsedwg.process_tree.process_queue", fail_process_queue)
+    monkeypatch.setattr("parsedwg.process_tree.save_tree_to_db", fail_save_tree_to_db)
 
     result = run_process_tree(
         source,
-        conversion_workers=3,
         project_name="Sequential Project",
-        use_process_pool=False,
         dry_run=True,
     )
 
@@ -303,4 +398,5 @@ def test_run_process_tree_dry_mode_skips_db_save(tmp_path: Path, monkeypatch) ->
     assert result["workers"] == 1
     assert result["created_entities"] == 0
     assert result["dry_run"] is True
-    assert captured["job_id"] == "job-1"
+    assert result["job_id"] is None
+    assert result["mode"] == "direct"

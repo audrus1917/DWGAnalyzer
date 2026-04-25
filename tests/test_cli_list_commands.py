@@ -12,17 +12,13 @@ def test_main_process_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
 
     def fake_run(
         source_path: Path,
-        conversion_workers: int = 2,
         name_tags_config: dict[str, str] | None = None,
-        use_process_pool: bool = True,
         **kwargs,
     ) -> dict[str, object]:
         project_name = kwargs.get("project_name")
         project_description = kwargs.get("project_description")
         created_by = kwargs.get("created_by")
         captured_args["source_path"] = source_path
-        captured_args["conversion_workers"] = conversion_workers
-        captured_args["use_process_pool"] = use_process_pool
         captured_args["project_name"] = project_name
         captured_args["project_description"] = project_description
         captured_args["created_by"] = created_by
@@ -31,7 +27,7 @@ def test_main_process_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
             "project_id": "11111111-1111-1111-1111-111111111111",
             "file_count": 3,
             "processed_count": 3,
-            "mode": "process_pool",
+            "mode": "direct",
             "created_entities": 42,
         }
 
@@ -41,8 +37,6 @@ def test_main_process_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
         [
             "process",
             str(source_dir),
-            "--workers",
-            "2",
             "--project-name",
             "Башня А",
             "--project-description",
@@ -55,15 +49,13 @@ def test_main_process_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured_args["source_path"] == source_dir
-    assert captured_args["conversion_workers"] == 2
-    assert captured_args["use_process_pool"] is True
     assert captured_args["project_name"] == "Башня А"
     assert captured_args["project_description"] == "Тестовый проект"
     assert captured_args["created_by"] == "andrus"
     assert captured_args["name_tags_config"] is None
     assert "Найдено файлов: 3" in captured.out
     assert "Обработано файлов: 3" in captured.out
-    assert "Режим обработки: process_pool" in captured.out
+    assert "Режим обработки: direct" in captured.out
     assert "Создано сущностей в БД: 42" in captured.out
 
 
@@ -86,21 +78,17 @@ def test_main_process_passes_ai_name_tags_config(tmp_path, monkeypatch) -> None:
 
     def fake_run(
         source_path: Path,
-        conversion_workers: int = 2,
         name_tags_config: dict[str, str] | None = None,
-        use_process_pool: bool = True,
         **kwargs,
     ) -> dict[str, object]:
         _ = kwargs
         captured_args["source_path"] = source_path
-        captured_args["conversion_workers"] = conversion_workers
-        captured_args["use_process_pool"] = use_process_pool
         captured_args["name_tags_config"] = name_tags_config
         return {
             "project_id": "11111111-1111-1111-1111-111111111111",
             "file_count": 1,
             "processed_count": 1,
-            "mode": "process_pool",
+            "mode": "direct",
             "created_entities": 10,
         }
 
@@ -127,8 +115,6 @@ def test_main_process_passes_ai_name_tags_config(tmp_path, monkeypatch) -> None:
     assert captured_args["base_url"] == "http://localhost:11434/v1"
     assert captured_args["api_key"] == "secret"
     assert captured_args["source_path"] == source_dir
-    assert captured_args["conversion_workers"] == 1
-    assert captured_args["use_process_pool"] is True
     assert captured_args["name_tags_config"] == {
         "model": "llama3.1:70b",
         "base_url": "http://localhost:11434/v1",
@@ -136,7 +122,7 @@ def test_main_process_passes_ai_name_tags_config(tmp_path, monkeypatch) -> None:
     }
 
 
-def test_main_process_sequential_disables_process_pool(tmp_path, monkeypatch) -> None:
+def test_main_process_without_optional_flags_runs_pipeline(tmp_path, monkeypatch) -> None:
     source_dir = tmp_path / "tower_A"
     source_dir.mkdir(parents=True)
 
@@ -144,33 +130,27 @@ def test_main_process_sequential_disables_process_pool(tmp_path, monkeypatch) ->
 
     def fake_run(
         source_path: Path,
-        conversion_workers: int = 2,
         name_tags_config: dict[str, str] | None = None,
-        use_process_pool: bool = True,
         **kwargs,
     ) -> dict[str, object]:
         _ = kwargs
         captured_args["source_path"] = source_path
-        captured_args["conversion_workers"] = conversion_workers
         captured_args["name_tags_config"] = name_tags_config
-        captured_args["use_process_pool"] = use_process_pool
         return {
             "project_id": "11111111-1111-1111-1111-111111111111",
             "file_count": 1,
             "processed_count": 1,
-            "mode": "sequential",
+            "mode": "direct",
             "created_entities": 1,
         }
 
     monkeypatch.setattr("parsedwg.cli.run_process_tree", fake_run)
 
-    exit_code = main(["process", str(source_dir), "--sequential"])
+    exit_code = main(["process", str(source_dir)])
 
     assert exit_code == 0
     assert captured_args["source_path"] == source_dir
-    assert captured_args["conversion_workers"] == 1
     assert captured_args["name_tags_config"] is None
-    assert captured_args["use_process_pool"] is False
 
 
 def test_main_process_passes_dry_flag_and_prints_dry_message(tmp_path, monkeypatch, capsys) -> None:
@@ -181,22 +161,18 @@ def test_main_process_passes_dry_flag_and_prints_dry_message(tmp_path, monkeypat
 
     def fake_run(
         source_path: Path,
-        conversion_workers: int = 2,
         name_tags_config: dict[str, str] | None = None,
-        use_process_pool: bool = True,
         dry_run: bool = False,
         **kwargs,
     ) -> dict[str, object]:
         _ = (kwargs, name_tags_config)
         captured_args["source_path"] = source_path
-        captured_args["conversion_workers"] = conversion_workers
-        captured_args["use_process_pool"] = use_process_pool
         captured_args["dry_run"] = dry_run
         return {
             "project_id": None,
             "file_count": 2,
             "processed_count": 2,
-            "mode": "process_pool",
+            "mode": "direct",
             "dry_run": True,
             "created_entities": 0,
         }
@@ -327,6 +303,54 @@ def test_main_extract_token_tags_requires_tokens_or_drawing(capsys) -> None:
 
     _ = capsys.readouterr()
     assert exit_code == 3
+
+
+def test_main_verify_extraction_prints_report(monkeypatch, tmp_path, capsys) -> None:
+    source_path = tmp_path / "sample.dxf"
+    source_path.write_text("stub", encoding="utf-8")
+
+    async def fake_verify(path: Path, file_id: str | None = None) -> dict[str, object]:
+        assert path == source_path
+        assert file_id == "11111111-1111-1111-1111-111111111111"
+        return {
+            "ok": True,
+            "file_id": file_id,
+            "layouts": {"expected": 1, "actual": 1, "mismatches": []},
+            "blocks": {"expected": 1, "actual": 1, "mismatches": []},
+            "primitive_counts": {"expected": 2, "actual": 2, "mismatches": []},
+            "insert_targets": {"unresolved": []},
+            "layer_links": {"missing": []},
+            "file_id_check": {"invalid": []},
+        }
+
+    monkeypatch.setattr("parsedwg.verify_extraction.verify_extraction", fake_verify)
+
+    exit_code = main([
+        "verify-extraction",
+        str(source_path),
+        "--file-id",
+        "11111111-1111-1111-1111-111111111111",
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Проверка file_id=11111111-1111-1111-1111-111111111111" in captured.out
+    assert "ИТОГ: ✓ Всё извлечено корректно" in captured.out
+
+
+def test_main_verify_extraction_returns_not_found(monkeypatch, tmp_path) -> None:
+    source_path = tmp_path / "sample.dxf"
+    source_path.write_text("stub", encoding="utf-8")
+
+    async def fake_verify(path: Path, file_id: str | None = None) -> dict[str, object]:
+        _ = (path, file_id)
+        raise LookupError("not found")
+
+    monkeypatch.setattr("parsedwg.verify_extraction.verify_extraction", fake_verify)
+
+    exit_code = main(["verify-extraction", str(source_path)])
+
+    assert exit_code == 2
 
 
 def test_main_search_passes_parent_id_to_search_entities(monkeypatch) -> None:

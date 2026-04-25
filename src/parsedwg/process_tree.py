@@ -2,31 +2,34 @@
 
 from __future__ import annotations
 
-from typing import Any, Generator, Protocol, Callable, cast
+from typing import Any, Generator, Protocol, Callable, Iterator, cast
 
 import asyncio
 import hashlib
 import logging
-import multiprocessing as mp
-import queue
-import re
+import sys
 import tempfile
 import zipfile
 
-from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 from ezdxf.document import Drawing
+from ezdxf.layouts.blocklayout import BlockLayout
 from ezdxf.addons.odafc import readfile as read_odafc
 from ezdxf.filemanagement import readfile
 from sqlalchemy import func, select
 
 from .db import async_session_factory
 from .orm import Entity, EntityToEntity, EntityType, Project
-from .redis_queue import load_converted, new_job_id, push_converted, push_sources
 from .table_analysis import TextClusterAnalyzer
-from .utils import get_workers_number
 from .dxf_analyzer import DXFAnalyzer
+
+try:
+    from tqdm.auto import tqdm as _tqdm
+except ImportError:
+    def _tqdm(iterable, **kwargs):
+        _ = kwargs
+        return iterable
 
 logger = logging.getLogger(__name__)
 
@@ -39,23 +42,14 @@ class NameTagsExtractor(Protocol):
     def extract(self, text: str) -> list[str]: ...
 
 
-class _QueueLike(Protocol):
-    def put(self, item: object) -> None: ...
-
-    def get(self) -> object: ...
-
-
-_QUEUE_EVENT_KEY = "__queue_event__"
-_QUEUE_EVENT_DONE = "worker_done"
-_QUEUE_EVENT_ERROR = "worker_error"
-
-
 def skip_blocks(
-    block_entity: Entity, 
-    filter_handler: Callable | None = lambda x : False
+    block_entity: object,
+    filter_handler: Callable[[object], bool] | None = None,
 ) -> bool:
     """Признак того, какие блоки надо пропускать."""
 
+    if filter_handler is None:
+        return False
     return filter_handler(block_entity)
 
 
@@ -152,21 +146,6 @@ class DWGTreeProcessor:
         return readfile(path)
 
 
-def _queue_done_event() -> dict[str, str]:
-    return {_QUEUE_EVENT_KEY: _QUEUE_EVENT_DONE}
-
-
-def _queue_error_event(message: str) -> dict[str, str]:
-    return {_QUEUE_EVENT_KEY: _QUEUE_EVENT_ERROR, "message": message}
-
-
-def _queue_event_type(item: object) -> str | None:
-    if not isinstance(item, dict):
-        return None
-    value = item.get(_QUEUE_EVENT_KEY)
-    return str(value) if value is not None else None
-
-
 def _build_name_tags_extractor_from_config(
     name_tags_config: NameTagsAIConfig | None,
 ) -> NameTagsExtractor | None:
@@ -221,17 +200,24 @@ def collect_layout_layers(doc, layout) -> list[str]:
     return sorted(layers)
 
 
-def collect_primitives(doc: Drawing) -> list[dict[str, str]]:
-    primitives: list[dict[str, str]] = []
+def iter_blocks(drawing: Drawing) -> Iterator[BlockLayout]:
+    """Итерирует блоки в документе с отображением прогресса."""
 
-    for block in doc.blocks:
-        primitives += [DXFAnalyzer.get_entity_data(entity, block=block) for entity in block]
+    logger.debug("Step 1")
+    blocks = list(drawing.blocks)
+    return iter(
+        _tqdm(
+            blocks,
+            total=len(blocks),
+            desc="Blocks",
+            unit="block",
+            disable=not sys.stderr.isatty(),
+        )
+    )
 
-    return primitives
 
-
-def _collect_layout_insert_primitives(doc) -> list[dict[str, str]]:
-    primitives: list[dict[str, str]] = []
+def _collect_layout_insert_primitives(doc) -> list[dict[str, object]]:
+    primitives: list[dict[str, object]] = []
 
     for layout in doc.layouts:
         layout_name = str(layout.name)
@@ -243,16 +229,18 @@ def _collect_layout_insert_primitives(doc) -> list[dict[str, str]]:
             if skip_blocks(entity):
                 continue
 
-            for attrib in entity.attribs:
-                # FIXME: удалить отладку
-                print(f"атрибут {attrib.dxf.tag} = {attrib.dxf.text} у блока {target_block} в Layout {layout_name}")
+            location = ""
+            if entity.dxf.hasattr("insert"):
+                point = DXFAnalyzer.format_point(getattr(entity.dxf, "insert"))
+                if point is not None:
+                    location = str(point)
 
             primitives.append(
                 {
                     "block": target_block,
                     "type": "INSERT",
                     "text": target_block,
-                    "location": "",
+                    "location": location,
                     "layer": str(getattr(entity.dxf, "layer", "")),
                     "target_block": target_block,
                     "layout": layout_name,
@@ -263,7 +251,7 @@ def _collect_layout_insert_primitives(doc) -> list[dict[str, str]]:
 
 
 def _enrich_primitives_with_name_tags(
-    primitives: list[dict[str, str]],
+    primitives: list[dict[str, object]],
     name_tags_extractor: NameTagsExtractor,
 ) -> list[dict[str, object]]:
     enriched: list[dict[str, object]] = []
@@ -273,7 +261,7 @@ def _enrich_primitives_with_name_tags(
             enriched.append(payload)
             continue
 
-        text = primitive.get("text", "").strip()
+        text = str(primitive.get("text", "")).strip()
         if text:
             tags = [tag.strip() for tag in name_tags_extractor.extract(text) if tag.strip()]
             if tags:
@@ -294,7 +282,8 @@ def collect_drawing_summary(
         layouts.append({"name": layout.name, "layers": layers})
 
     blocks: list[dict[str, object]] = []
-    for block in drawing.blocks:
+    primitives: list[dict[str, object]] = []
+    for block in iter_blocks(drawing):
         table_stats = TextClusterAnalyzer.analyze_table(block)
         blocks.append(
             {
@@ -312,7 +301,9 @@ def collect_drawing_summary(
             }
         )
 
-    primitives = collect_primitives(drawing)
+        for entity in block:
+            primitives.append(DXFAnalyzer.get_entity_data(entity, block=block))
+
     primitives.extend(_collect_layout_insert_primitives(drawing))
     if name_tags_extractor is not None:
         primitives_payload = _enrich_primitives_with_name_tags(primitives, name_tags_extractor)
@@ -372,27 +363,15 @@ def process_entry(
 
 def process_batch(
     batch: list[JobEntry],
-    processed_queue: _QueueLike | None = None,
-    job_id: str | None = None,
     name_tags_config: NameTagsAIConfig | None = None,
 ) -> list[ProcessedEntry]:
+    """Последовательно обрабатывает набор файлов и возвращает готовые summaries."""
+
     processed: list[ProcessedEntry] = []
-    try:
-        name_tags_extractor = _build_name_tags_extractor_from_config(name_tags_config)
-        for entry in batch:
-            processed_entry = process_entry(entry, name_tags_extractor=name_tags_extractor)
-            processed.append(processed_entry)
-            if job_id is not None:
-                push_converted(job_id, cast(dict[str, str], processed_entry))
-            if processed_queue is not None:
-                processed_queue.put(processed_entry)
-    except Exception as error:
-        if processed_queue is not None:
-            processed_queue.put(_queue_error_event(str(error)))
-        raise
-    finally:
-        if processed_queue is not None:
-            processed_queue.put(_queue_done_event())
+
+    name_tags_extractor = _build_name_tags_extractor_from_config(name_tags_config)
+    for entry in batch:
+        processed.append(process_entry(entry, name_tags_extractor=name_tags_extractor))
 
     return processed
 
@@ -409,7 +388,6 @@ async def _create_folders_tree(
         entity_type=EntityType.folder,
         data={"path": str(root_path)},
         project_id=project_id,
-        created_at=func.now(),
 
     )
     session.add(root_entity)
@@ -449,13 +427,12 @@ async def _create_folders_tree(
 
 async def save_tree_to_db(
     root_path: str,
-    processed_queue: _QueueLike,
-    producer_count: int,
+    processed_entries: list[ProcessedEntry],
     project_name: str,
     project_description: str | None = None,
     created_by: str | None = None,
 ) -> tuple[str, int]:
-    """Сохраняет дерево сущностей в БД, читая обработанные задания из очереди. 
+    """Сохраняет дерево сущностей в БД по уже обработанным файлам.
     Возвращает ID проекта и количество созданных сущностей."""
 
     async with async_session_factory() as session:
@@ -479,21 +456,8 @@ async def save_tree_to_db(
         folders, created_entities = await _create_folders_tree(session, root, project_id)
 
         zip_entities: dict[str, Entity] = {}
-        completed_producers = 0
 
-        while completed_producers < producer_count:
-            queue_item = processed_queue.get()
-            event_type = _queue_event_type(queue_item)
-            if event_type == _QUEUE_EVENT_DONE:
-                completed_producers += 1
-                continue
-            if event_type == _QUEUE_EVENT_ERROR:
-                message = "Неизвестная ошибка обработки"
-                if isinstance(queue_item, dict):
-                    message = str(queue_item.get("message", message))
-                raise RuntimeError(message)
-
-            entry = cast(ProcessedEntry, queue_item)
+        for entry in processed_entries:
             source_ref = str(entry["source_ref"])
             kind = str(entry["kind"])
             file_type = EntityType.file if kind == "file" else EntityType.zipped_file
@@ -547,6 +511,7 @@ async def save_tree_to_db(
                 layout_name = str(layout["name"])
                 layout_entity = Entity(
                     parent_id=file_entity.id,
+                    file_id=file_entity.id,
                     project_id=project_id,
                     name=layout_name,
                     description=f"Layout файла {entry['name']}",
@@ -562,6 +527,7 @@ async def save_tree_to_db(
                     layer_name_str = str(layer_name)
                     layer_entity = Entity(
                         parent_id=layout_entity.id,
+                        file_id=file_entity.id,
                         project_id=project_id,
                         name=layer_name_str,
                         description=f"Layer layout {layout_name}",
@@ -588,6 +554,7 @@ async def save_tree_to_db(
 
                 block_entity = Entity(
                     parent_id=file_entity.id,
+                    file_id=file_entity.id,
                     project_id=project_id,
                     name=block_name,
                     description=f"Block файла {entry['name']}",
@@ -614,6 +581,7 @@ async def save_tree_to_db(
 
                 primitive_entity = Entity(
                     parent_id=parent_block_entity.id,
+                    file_id=file_entity.id,
                     project_id=project_id,
                     name=str(primitive.get("type", "")),
                     description=str(primitive.get("text", "")),
@@ -625,6 +593,7 @@ async def save_tree_to_db(
                 session.add(primitive_entity)
                 await session.flush()
 
+                layout_name = primitive.get("layout")
                 layer_name = primitive.get("layer")
                 if isinstance(layout_name, str) and isinstance(layer_name, str):
                     layer_entity = layer_entities_by_key.get((layout_name, layer_name))
@@ -644,40 +613,15 @@ async def save_tree_to_db(
     return str(project_id), created_entities
 
 
-def process_queue(
-    processed_queue: _QueueLike,
-    root_path: str,
-    producer_count: int,
-    project_name: str,
-    project_description: str | None,
-    created_by: str | None,
-) -> tuple[str, int]:
-    """Проходит по очереди обработанных заданий, сохраняет дерево в БД и возвращает 
-    ID проекта и количество созданных сущностей."""
-
-    return asyncio.run(
-        save_tree_to_db(
-            root_path=root_path,
-            processed_queue=processed_queue,
-            producer_count=producer_count,
-            project_name=project_name,
-            project_description=project_description,
-            created_by=created_by,
-        )
-    )
-
-
 def run_process_tree(
     source_path: Path,
-    conversion_workers: int = 2,
     project_name: str | None = None,
     project_description: str | None = None,
     created_by: str | None = None,
     name_tags_config: NameTagsAIConfig | None = None,
-    use_process_pool: bool = True,
     dry_run: bool = False,
 ) -> dict[str, object]:
-    """Обходит каталог/файл, разбирает DWG/DXF в пуле процессов и сохраняет дерево в БД."""
+    """Обходит каталог/файл, разбирает DWG/DXF последовательно и сохраняет дерево в БД."""
 
     root_path = source_path if source_path.is_dir() else source_path.parent
     if source_path.is_file():
@@ -703,88 +647,37 @@ def run_process_tree(
     else:
         raise ValueError(f"Путь {source_path} не найден.")
 
-    job_id = new_job_id()
-    push_sources(job_id, entries)
-    logger.info("Список файлов сохранён в Redis, job_id=%s, count=%d", job_id, len(entries))
+    processed_entries = process_batch(entries, name_tags_config=name_tags_config)
 
-    effective_workers = get_workers_number(conversion_workers)
-    batches = DWGTreeProcessor.split_to_batches(entries, workers=effective_workers)
-
-    processed_entries: list[ProcessedEntry] = []
-    if use_process_pool:
-        with mp.Manager() as manager:
-            processed_queue = manager.Queue()
-
-            with ProcessPoolExecutor(max_workers=max(2, effective_workers + 1)) as executor:
-                ingest_future = None
-                if not dry_run:
-                    ingest_future = executor.submit(
-                        process_queue,
-                        processed_queue,
-                        str(root_path),
-                        len(batches),
-                        project_name or root_path.name or str(root_path),
-                        project_description,
-                        created_by,
-                    )
-                futures = [
-                    executor.submit(
-                        process_batch,
-                        batch,
-                        processed_queue,
-                        job_id,
-                        name_tags_config,
-                    )
-                    for batch in batches
-                ]
-                for future in futures:
-                    processed_entries.extend(future.result())
-
-                if ingest_future is not None:
-                    project_id, created_entities = ingest_future.result()
-                else:
-                    project_id, created_entities = None, 0
+    project_id: str | None = None
+    created_entities = 0
+    if dry_run:
+        project_id, created_entities = None, 0
     else:
-        logger.info("Запущен последовательный режим обработки без ProcessPoolExecutor.")
-        processed_queue: _QueueLike = queue.Queue()
-        for batch in batches:
-            processed_entries.extend(
-                process_batch(
-                    batch,
-                    processed_queue,
-                    job_id,
-                    name_tags_config,
-                )
+        project_id, created_entities = asyncio.run(
+            save_tree_to_db(
+                root_path=str(root_path),
+                processed_entries=processed_entries,
+                project_name=project_name or root_path.name or str(root_path),
+                project_description=project_description,
+                created_by=created_by,
             )
-        if dry_run:
-            project_id, created_entities = None, 0
-        else:
-            project_id, created_entities = process_queue(
-                processed_queue,
-                str(root_path),
-                len(batches),
-                project_name or root_path.name or str(root_path),
-                project_description,
-                created_by,
-            )
+        )
 
     processed_entries.sort(key=lambda item: str(item.get("source_ref", "")))
-    redis_processed_count = len(load_converted(job_id))
     logger.info(
-        "Обработка завершена: job_id=%s, files=%d (redis=%d)",
-        job_id,
+        "Обработка завершена: files=%d",
         len(processed_entries),
-        redis_processed_count,
     )
 
-    mode = "process_pool" if use_process_pool else "sequential"
+    mode = "direct"
 
     return {
-        "job_id": job_id,
+        "job_id": None,
         "project_id": project_id,
         "file_count": len(entries),
         "processed_count": len(processed_entries),
-        "workers": effective_workers,
+        "workers": 1,
         "mode": mode,
         "dry_run": dry_run,
         "created_entities": created_entities,

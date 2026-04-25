@@ -41,7 +41,6 @@ settings = Settings(
     ollama_llm_model=os.getenv("OLLAMA_LLM_MODEL", "llama3.2"),
     ollama_timeout_seconds=_as_float(os.getenv("OLLAMA_TIMEOUT_SECONDS"), default=120.0),
 )
-print(settings)
 
 
 __all__ = ["Settings", "settings"]
