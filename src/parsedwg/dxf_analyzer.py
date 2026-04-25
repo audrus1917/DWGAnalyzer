@@ -66,7 +66,7 @@ class DXFAnalyzer:
         return ""
 
     @classmethod
-    def get_entity_data(cls, block, entity) -> dict[str, Any]:
+    def get_entity_data(cls, entity, block: Optional[object] = None) -> dict[str, Any]:
         """Возвращает данные DXF-сущности."""
 
         # Получаем тип сущности и базовые атрибуты
@@ -75,7 +75,7 @@ class DXFAnalyzer:
         # Общая обработка
         entity_data = {
             "type": dxftype,
-            "block": block.name,
+            "block": getattr(block, "name", None) if block is not None else None,
             "layer": entity.dxf.layer if hasattr(entity.dxf, "layer") else None,
         }
         if text_value := cls.get_text(entity):

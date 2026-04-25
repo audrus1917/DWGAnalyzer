@@ -7,14 +7,13 @@ import json
 import logging
 import sys
 
-from collections.abc import Callable
 from pathlib import Path
 
 from . import constants
 from .explorer import DXFExplorer
 from .process_tree import run_process_tree
 from .docs_ingest import run_documents_ingest
-from .utils import build_args_parser, pt
+from .utils import build_args_parser, out
 
 type ResultRow = dict[str, object]
 
@@ -24,31 +23,6 @@ logging.basicConfig(
 )
 logging.getLogger("ezdxf").disabled = True
 logger = logging.getLogger(__name__)
-
-SUPPORTED_DRAWING_SUFFIXES = {".dxf", ".dwg"}
-
-
-def _iter_drawing_files(path: Path) -> list[Path]:
-    """Возвращает один файл или все подходящие дочерние файлы каталога рекурсивно."""
-
-    if not path.exists():
-        raise FileNotFoundError(f"Путь {path} не найден.")
-
-    if path.is_file():
-        drawing_files = [path, ] if path.suffix.lower() in SUPPORTED_DRAWING_SUFFIXES else []
-        if not drawing_files:
-            raise ValueError(f"Файл {path} не является поддерживаемым DWG/DXF.")
-        return [path]
-
-    drawing_files = sorted(
-        file_path
-        for file_path in path.rglob("*")
-        if file_path.is_file() and file_path.suffix.lower() in SUPPORTED_DRAWING_SUFFIXES
-    )
-    if not drawing_files:
-        raise ValueError(f"В каталоге {path} не найдено файлов DWG/DXF.")
-    return drawing_files
-
 
 def _save_rows_to_json(output_path: Path, rows: list[ResultRow]) -> None:
     """Сохраняет строки результата в JSON-файл."""
@@ -85,17 +59,7 @@ def as_table(rows: list[ResultRow]) -> str:
 def print_as_table(rows: list[ResultRow]) -> None:
     """Выводит строки результата на экран в виде таблицы."""
 
-    pt(as_table(rows))
-
-
-def _resolve_output_path(source_root: Path, drawing_path: Path, output_path: Path) -> Path:
-    """Определяет путь выходного JSON-файла для одного обработанного файла."""
-
-    if source_root.is_file():
-        return output_path
-
-    relative_path = drawing_path.relative_to(source_root).with_suffix(".json")
-    return output_path / relative_path
+    out(as_table(rows))
 
 
 def handle_search_command(
@@ -111,7 +75,7 @@ def handle_search_command(
     rows: list[ResultRow] = asyncio.run(search_entities(query, entity_type, limit, parent_id))
 
     if not rows:
-        pt("Нет результатов.")
+        out("Нет результатов.")
         return constants.OK
 
     if output_path is not None:
@@ -132,7 +96,7 @@ def handle_index_command(
     from .rag import index_entities
 
     count = asyncio.run(index_entities(entity_type, batch_size, reindex))
-    pt(f"Проиндексировано: {count}")
+    out(f"Проиндексировано: {count}")
     return constants.OK
 
 
@@ -152,9 +116,9 @@ def handle_ask_command(
         logger.info("JSON сохранён: %s", output_path)
         return constants.OK
 
-    pt(result["answer"])
-    pt()
-    pt("Источники:")
+    out(result["answer"])
+    out("")
+    out("Источники:")
     print_as_table(result["sources"])  # type: ignore[arg-type]
     return constants.OK
 
@@ -163,6 +127,7 @@ def handle_process_command(
     source_path: Path,
     workers: int,
     sequential: bool = False,
+    dry: bool = False,
     project_name: str | None = None,
     project_description: str | None = None,
     created_by: str | None = None,
@@ -184,16 +149,20 @@ def handle_process_command(
             source_path,
             conversion_workers=workers,
             use_process_pool=not sequential,
+            dry_run=dry,
             project_name=project_name,
             project_description=project_description,
             created_by=created_by,
             name_tags_config=name_tags_config,
         )
-        pt(f"Создан проект: {summary['project_id']}")
-        pt(f"Найдено файлов: {summary['file_count']}")
-        pt(f"Обработано файлов: {summary['processed_count']}")
-        pt(f"Режим обработки: {summary['mode']}")
-        pt(f"Создано сущностей в БД: {summary['created_entities']}")
+        if summary.get("dry_run"):
+            out("Dry run: запись в БД отключена")
+        else:
+            out(f"Создан проект: {summary['project_id']}")
+        out(f"Найдено файлов: {summary['file_count']}")
+        out(f"Обработано файлов: {summary['processed_count']}")
+        out(f"Режим обработки: {summary['mode']}")
+        out(f"Создано сущностей в БД: {summary['created_entities']}")
         return constants.OK
     except ValueError as e:
         logger.exception("Ошибка при обработке каталога / файла: %s", e)
@@ -229,9 +198,9 @@ def handle_process_docs_command(source_path: Path) -> int:
     """Рекурсивно индексирует PDF/DOCX/XLSX/CSV документы в таблицу entity."""
 
     summary = run_documents_ingest(source_path)
-    pt(f"Найдено документов: {summary['doc_count']}")
-    pt(f"Создано сущностей в БД: {summary['created_entities']}")
-    pt(f"Источник: {summary['source']}")
+    out(f"Найдено документов: {summary['doc_count']}")
+    out(f"Создано сущностей в БД: {summary['created_entities']}")
+    out(f"Источник: {summary['source']}")
     return constants.OK
 
 
@@ -273,13 +242,63 @@ def handle_extract_name_tags_command(
             logger.info("JSON сохранён: %s", output_path)
             return constants.OK
 
-        pt(json.dumps(rows, ensure_ascii=False, indent=2))
+        out(json.dumps(rows, ensure_ascii=False, indent=2))
         return constants.OK
     except RuntimeError as e:
         logger.error("Ошибка AI-режима: %s", e)
         return constants.ERROR
     except (FileNotFoundError, OSError, ValueError) as e:
         logger.error("Сбой извлечения тегов: %s", e)
+        return constants.UNBOUND_ERROR
+
+
+def handle_extract_token_tags_command(
+    tokens: list[str],
+    drawing_path: Path | None = None,
+    ai_model: str = "llama3.2",
+    ai_base_url: str = "http://localhost:11434/v1",
+    ai_api_key: str = "ollama",
+) -> int:
+    """Извлекает JSON-словарь смыслов через LLM для списка токенов."""
+
+    try:
+        from .langchain_name_tags import LangChainAgentConfig, LangChainNameTagsExtractor
+
+        merged_tokens: list[str] = []
+        seen_tokens: set[str] = set()
+
+        def _extend_unique(values: list[str]) -> None:
+            for value in values:
+                cleaned = value.strip()
+                if not cleaned or cleaned in seen_tokens:
+                    continue
+                seen_tokens.add(cleaned)
+                merged_tokens.append(cleaned)
+
+        _extend_unique(tokens)
+
+        if drawing_path is not None:
+            explorer = DXFExplorer(drawing_path)
+            _extend_unique(explorer.list_layer_names())
+
+        if not merged_tokens:
+            logger.error("Не переданы токены и не указан drawing-файл.")
+            return constants.UNBOUND_ERROR
+
+        extractor = LangChainNameTagsExtractor.from_config(
+            LangChainAgentConfig(
+                model=ai_model,
+                base_url=ai_base_url,
+                api_key=ai_api_key,
+            )
+        )
+        out(extractor.extract_token_meanings_json(merged_tokens))
+        return constants.OK
+    except RuntimeError as e:
+        logger.error("Ошибка AI-режима: %s", e)
+        return constants.ERROR
+    except (FileNotFoundError, OSError, ValueError) as e:
+        logger.error("Сбой извлечения тегов по токенам: %s", e)
         return constants.UNBOUND_ERROR
 
 
@@ -292,8 +311,8 @@ def handle_project_add_command(
     from .db import create_project
 
     project = asyncio.run(create_project(name=name, description=description, created_by=created_by))
-    pt(f"Проект создан: {project['id']}")
-    pt(f"Название: {project['name']}")
+    out(f"Проект создан: {project['id']}")
+    out(f"Название: {project['name']}")
     return constants.OK
 
 
@@ -315,11 +334,11 @@ def handle_project_update_command(
         )
     )
     if project is None:
-        pt("Проект не найден.")
+        out("Проект не найден.")
         return constants.NOT_FOUND
 
-    pt(f"Проект обновлён: {project['id']}")
-    pt(f"Название: {project['name']}")
+    out(f"Проект обновлён: {project['id']}")
+    out(f"Название: {project['name']}")
     return constants.OK
 
 
@@ -332,45 +351,15 @@ def handle_project_delete_command(project_id: str, yes: bool) -> int:
             f"Удалить проект {project_id}? Введите YES для подтверждения: "
         ).strip()
         if answer != "YES":
-            pt("Удаление отменено.")
+            out("Удаление отменено.")
             return constants.ERROR
 
     deleted = asyncio.run(delete_project(project_id=project_id))
     if not deleted:
-        pt("Проект не найден.")
+        out("Проект не найден.")
         return constants.NOT_FOUND
 
-    pt(f"Проект удалён: {project_id}")
-    return constants.OK
-
-
-def handle_list_command(
-    source_path: Path,
-    output_path: Path | None,
-    collector: Callable[[DXFExplorer], list[ResultRow]],
-) -> int:
-    """Выполняет list-команду для одного файла или каталога файлов."""
-
-    drawing_files = _iter_drawing_files(source_path)
-    if output_path is not None and source_path.is_dir():
-        output_path.mkdir(parents=True, exist_ok=True)
-
-    all_rows: list[ResultRow] = []
-    for drawing_file in drawing_files:
-        explorer = DXFExplorer(drawing_file)
-        rows = collector(explorer)
-
-        if output_path is None:
-            all_rows.extend(rows)
-            continue
-
-        target_path = _resolve_output_path(source_path, drawing_file, output_path)
-        _save_rows_to_json(target_path, rows)
-        logger.info("JSON сохранён: %s", target_path)
-
-    if output_path is None:
-        print_as_table(all_rows)
-
+    out(f"Проект удалён: {project_id}")
     return constants.OK
 
 
@@ -451,7 +440,7 @@ def handle_file_stat_from_db_command(
 
     stat, err = asyncio.run(collect_db_stat())
     if err:
-        pt(f"Ошибка: {err}")
+        out(f"Ошибка: {err}")
         return constants.ERROR
     assert stat is not None
 
@@ -559,7 +548,7 @@ def handle_file_stat_from_db_command(
         else:
             output_path = Path(f"{file_ref}_dbstat.xlsx")
     wb.save(output_path)
-    pt(f"Статистика по файлу из БД сохранена: {output_path}")
+    out(f"Статистика по файлу из БД сохранена: {output_path}")
     return constants.OK
 
 
@@ -573,27 +562,12 @@ def main(argv: list[str] | None = None) -> int:
     return_code: int = 0
     match args.command:
 
-        case "list-layouts":
-            output_path = Path(args.output) if args.output else None
-            return_code = handle_list_command(
-                Path(args.path),
-                output_path,
-                lambda explorer: explorer.list_layouts(),
-            )
-
-        case "list-blocks":
-            output_path = Path(args.output) if args.output else None
-            return_code = handle_list_command(
-                Path(args.path),
-                output_path,
-                lambda explorer: explorer.list_blocks(),
-            )
-
         case "process":
             return_code = handle_process_command(
                 Path(args.path),
                 workers=max(1, args.workers),
                 sequential=args.sequential,
+                dry=args.dry,
                 project_name=args.project_name,
                 project_description=args.project_description,
                 created_by=args.created_by,
@@ -608,6 +582,15 @@ def main(argv: list[str] | None = None) -> int:
                 source_path=Path(args.path),
                 output_path=Path(args.output) if args.output else None,
                 ai_name_tags=args.ai_name_tags,
+                ai_model=args.ai_model,
+                ai_base_url=args.ai_base_url,
+                ai_api_key=args.ai_api_key,
+            )
+
+        case "extract-token-tags":
+            return_code = handle_extract_token_tags_command(
+                tokens=args.tokens,
+                drawing_path=Path(args.drawing) if args.drawing else None,
                 ai_model=args.ai_model,
                 ai_base_url=args.ai_base_url,
                 ai_api_key=args.ai_api_key,
@@ -684,9 +667,9 @@ def main(argv: list[str] | None = None) -> int:
                         table_blocks=table_blocks,
                         output_dir=output_path.parent,
                     )
-                    pt(f"Таблиц из БД по file_id выгружено: {len(exported_tables)}")
+                    out(f"Таблиц из БД по file_id выгружено: {len(exported_tables)}")
                 else:
-                    pt("file_id не найден для данного файла (source_ref)")
+                    out("file_id не найден для данного файла (source_ref)")
 
             elif args.db_tables:
                 from .db import get_table_blocks_for_source
@@ -695,9 +678,9 @@ def main(argv: list[str] | None = None) -> int:
                     table_blocks=table_blocks,
                     output_dir=output_path.parent,
                 )
-                pt(f"Таблиц из БД по source_ref выгружено: {len(exported_tables)}")
+                out(f"Таблиц из БД по source_ref выгружено: {len(exported_tables)}")
 
-            pt(f"Статистика сохранена: {output_path}")
+            out(f"Статистика сохранена: {output_path}")
             return_code = constants.OK
 
         case "file-stat-from-db":

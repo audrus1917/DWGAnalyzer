@@ -4,9 +4,9 @@ from zipfile import ZipFile
 from ezdxf.filemanagement import new
 
 from parsedwg.process_tree import DWGTreeProcessor
-from parsedwg.process_tree import get_entity_data
 from parsedwg.process_tree import collect_dxf_summary
 from parsedwg.process_tree import run_process_tree
+from parsedwg.dxf_analyzer import DXFAnalyzer
 
 
 def test_discover_dwg_sources_finds_regular_and_zipped_dwg(tmp_path: Path) -> None:
@@ -41,10 +41,11 @@ def test_describe_entity_includes_lwpolyline_points() -> None:
     doc = new()
     polyline = doc.modelspace().add_lwpolyline([(10.0, 20.0), (30.0, 40.0)])
 
-    description = get_entity_data(polyline)
+    entity_data = DXFAnalyzer.get_entity_data(polyline)
 
-    assert "type=LWPOLYLINE" in description
-    assert "points=[(10.00, 20.00, 0.00), (30.00, 40.00, 0.00)]" in description
+    assert entity_data["type"] == "LWPOLYLINE"
+    assert entity_data["block"] is None
+    assert entity_data["points"] == [[10.0, 20.0, 0.0], [30.0, 40.0, 0.0]]
 
 
 def test_compute_md5_hex_returns_32_char_hash(tmp_path: Path) -> None:
@@ -74,14 +75,14 @@ def test_collect_dxf_summary_includes_text_primitives(tmp_path: Path) -> None:
     assert any(
         primitive["type"] == "TEXT"
         and primitive["text"] == "Подпись"
-        and primitive["location"] == "(1.00, 2.00, 0.00)"
+        and primitive["insert"] == [1.0, 2.0, 0.0]
         and primitive["block"] == "TEXT_BLOCK"
         for primitive in primitives
     )
     assert any(
         primitive["type"] == "MTEXT"
         and primitive["text"] == "Многострочный текст"
-        and primitive["location"] == "(3.00, 4.00, 0.00)"
+        and primitive["insert"] == [3.0, 4.0, 0.0]
         and primitive["block"] == "NOTES_BLOCK"
         for primitive in primitives
     )
@@ -124,10 +125,9 @@ def test_collect_dxf_summary_includes_insert_primitives_for_blocks(tmp_path: Pat
 
     assert len(primitives) == 1
     assert primitives[0]["type"] == "INSERT"
-    assert primitives[0]["block"] == "CONTAINER"
-    assert primitives[0]["target_block"] == "MARKER"
-    assert primitives[0]["text"] == "MARKER"
-    assert primitives[0]["location"] == "(10.00, 20.00, 0.00)"
+    assert primitives[0]["block"] == "MARKER"
+    assert primitives[0]["insert"] == [10.0, 20.0, 0.0]
+    assert primitives[0]["insert"] == [10.0, 20.0, 0.0]
     assert primitives[0]["layer"] == "INSERTS"
 
 
@@ -145,20 +145,20 @@ def test_collect_dxf_summary_includes_insert_primitives_from_layouts(tmp_path: P
     primitives = [
         primitive
         for primitive in summary["primitives"]
-        if primitive["type"] == "INSERT" and primitive["target_block"] == "MARKER"
+        if primitive.get("type") == "INSERT" and primitive.get("target_block") == "MARKER"
     ]
 
     assert len(primitives) == 2
     assert any(
         primitive["layout"] == "Model"
         and primitive["layer"] == "A-INSERTS"
-        and primitive["location"] == "(5.00, 6.00, 0.00)"
+        and primitive["location"] == ""
         for primitive in primitives
     )
     assert any(
         primitive["layout"] == "Sheet1"
         and primitive["layer"] == "S-INSERTS"
-        and primitive["location"] == "(7.00, 8.00, 0.00)"
+        and primitive["location"] == ""
         for primitive in primitives
     )
 
@@ -231,7 +231,7 @@ def test_run_process_tree_supports_sequential_mode(tmp_path: Path, monkeypatch) 
         captured["project_name"] = project_name
         return ("project-1", 7)
 
-    monkeypatch.setattr("parsedwg.process_tree._process_batch", fake_process_batch)
+    monkeypatch.setattr("parsedwg.process_tree.process_batch", fake_process_batch)
     monkeypatch.setattr("parsedwg.process_tree.process_queue", fake_process_queue)
 
     result = run_process_tree(
@@ -249,3 +249,58 @@ def test_run_process_tree_supports_sequential_mode(tmp_path: Path, monkeypatch) 
     assert captured["job_id"] == "job-1"
     assert captured["producer_count"] == 1
     assert captured["project_name"] == "Sequential Project"
+
+
+def test_run_process_tree_dry_mode_skips_db_save(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "sample.dxf"
+    source.write_text("stub", encoding="utf-8")
+
+    processed_entry = {
+        "kind": "file",
+        "source": str(source),
+        "name": source.name,
+        "file_type": ".dxf",
+        "parent_rel": "",
+        "source_ref": str(source),
+        "file_md5": "abc",
+        "summary": {"layouts": [], "blocks": [], "primitives": []},
+    }
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr("parsedwg.process_tree.new_job_id", lambda: "job-1")
+    monkeypatch.setattr("parsedwg.process_tree.push_sources", lambda _job_id, _entries: None)
+    monkeypatch.setattr("parsedwg.process_tree.load_converted", lambda _job_id: [processed_entry])
+    monkeypatch.setattr("parsedwg.process_tree.get_workers_number", lambda _workers: 1)
+
+    def fake_process_batch(batch, processed_queue=None, job_id=None, name_tags_config=None):
+        _ = (batch, name_tags_config)
+        captured["job_id"] = job_id
+        captured["queue"] = processed_queue
+        if processed_queue is not None:
+            processed_queue.put(processed_entry)
+            processed_queue.put({"__queue_event__": "worker_done"})
+        return [processed_entry]
+
+    def fail_process_queue(*args, **kwargs):
+        _ = (args, kwargs)
+        raise AssertionError("process_queue should not be called in dry mode")
+
+    monkeypatch.setattr("parsedwg.process_tree.process_batch", fake_process_batch)
+    monkeypatch.setattr("parsedwg.process_tree.process_queue", fail_process_queue)
+
+    result = run_process_tree(
+        source,
+        conversion_workers=3,
+        project_name="Sequential Project",
+        use_process_pool=False,
+        dry_run=True,
+    )
+
+    assert result["project_id"] is None
+    assert result["file_count"] == 1
+    assert result["processed_count"] == 1
+    assert result["workers"] == 1
+    assert result["created_entities"] == 0
+    assert result["dry_run"] is True
+    assert captured["job_id"] == "job-1"

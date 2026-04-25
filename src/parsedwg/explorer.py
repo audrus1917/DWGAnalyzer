@@ -353,6 +353,17 @@ class DXFExplorer:
                 # logger.debug("  Entity: %s", self._describe_entity(params))
         return rows
 
+    def list_layer_names(self) -> list[str]:
+        """Возвращает список имен слоев для текущего DXF/DWG файла."""
+
+        logger.info("Считываем слои для файла: %s", self.drawing)
+        doc = self._read_document()
+        return sorted(
+            str(layer.dxf.name)
+            for layer in doc.layers
+            if getattr(layer.dxf, "name", "")
+        )
+
     def extract_block(self, block_name: str) -> int:
         logger.info("Извлекаем блок '%s' из файла: %s", block_name, self.drawing)
         doc = self._read_document()

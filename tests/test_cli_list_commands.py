@@ -1,105 +1,7 @@
 import json
 from pathlib import Path
 
-from ezdxf.filemanagement import new
-
 from parsedwg.cli import main
-
-
-def test_main_list_layouts_prints_table_for_single_file(tmp_path, capsys) -> None:
-    source_path = tmp_path / "layouts.dxf"
-
-    doc = new()
-    doc.layers.add("MODEL_NOTES")
-    doc.layers.add("SHEET_NOTES")
-    doc.modelspace().add_text("Модель", dxfattribs={"layer": "MODEL_NOTES"})
-    sheet = doc.layouts.new("Sheet1")
-    sheet.add_text("Лист", dxfattribs={"layer": "SHEET_NOTES"})
-    doc.saveas(source_path)
-
-    exit_code = main(["list-layouts", str(source_path)])
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "Sheet1" in captured.out
-    assert "layout" in captured.out.lower()
-    assert "layers" in captured.out.lower()
-    assert "MODEL_NOTES" in captured.out
-    assert "SHEET_NOTES" in captured.out
-
-
-def test_main_list_layouts_converts_dwg_before_reading(tmp_path, monkeypatch, capsys) -> None:
-    source_path = tmp_path / "layouts.dwg"
-    source_path.write_bytes(b"stub")
-
-    doc = new()
-    doc.layouts.new("Sheet1")
-
-    captured_args: dict[str, object] = {}
-
-    def fake_read_odafc(path, version):
-        captured_args["path"] = path
-        captured_args["version"] = version
-        return doc
-
-    monkeypatch.setattr("parsedwg.explorer.read_odafc", fake_read_odafc)
-
-    exit_code = main(["list-layouts", str(source_path)])
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert captured_args["path"] == source_path
-    assert captured_args["version"] == "ACAD2018"
-    assert "Sheet1" in captured.out
-    assert "layout" in captured.out.lower()
-
-
-def test_main_list_blocks_writes_json_for_single_file(tmp_path) -> None:
-    source_path = tmp_path / "blocks.dxf"
-    output_path = tmp_path / "result.json"
-
-    doc = new()
-    doc.blocks.new("BLOCK_A")
-    doc.saveas(source_path)
-
-    exit_code = main(["list-blocks", str(source_path), "-o", str(output_path)])
-
-    assert exit_code == 0
-    assert output_path.exists()
-    rows = json.loads(output_path.read_text(encoding="utf-8"))
-    assert any(row["block"] == "BLOCK_A" for row in rows)
-
-
-def test_main_list_blocks_recurses_directory_and_creates_output_dir(tmp_path) -> None:
-    source_dir = tmp_path / "drawings"
-    nested_dir = source_dir / "nested"
-    nested_dir.mkdir(parents=True)
-
-    first_path = source_dir / "one.dxf"
-    first_doc = new()
-    first_doc.blocks.new("BLOCK_ONE")
-    first_doc.saveas(first_path)
-
-    second_path = nested_dir / "two.dxf"
-    second_doc = new()
-    second_doc.blocks.new("BLOCK_TWO")
-    second_doc.saveas(second_path)
-
-    output_dir = tmp_path / "json-output"
-    exit_code = main(["list-blocks", str(source_dir), "-o", str(output_dir)])
-
-    assert exit_code == 0
-    assert output_dir.exists()
-
-    first_json = output_dir / "one.json"
-    second_json = output_dir / "nested" / "two.json"
-    assert first_json.exists()
-    assert second_json.exists()
-
-    first_rows = json.loads(first_json.read_text(encoding="utf-8"))
-    second_rows = json.loads(second_json.read_text(encoding="utf-8"))
-    assert any(row["block"] == "BLOCK_ONE" for row in first_rows)
-    assert any(row["block"] == "BLOCK_TWO" for row in second_rows)
 
 
 def test_main_process_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
@@ -202,7 +104,7 @@ def test_main_process_passes_ai_name_tags_config(tmp_path, monkeypatch) -> None:
             "created_entities": 10,
         }
 
-    monkeypatch.setattr("parsedwg.cli._build_name_tags_config", fake_config_builder)
+    monkeypatch.setattr("parsedwg.cli.get_name_tags_config", fake_config_builder)
     monkeypatch.setattr("parsedwg.cli.run_process_tree", fake_run)
 
     exit_code = main(
@@ -271,6 +173,46 @@ def test_main_process_sequential_disables_process_pool(tmp_path, monkeypatch) ->
     assert captured_args["use_process_pool"] is False
 
 
+def test_main_process_passes_dry_flag_and_prints_dry_message(tmp_path, monkeypatch, capsys) -> None:
+    source_dir = tmp_path / "tower_A"
+    source_dir.mkdir(parents=True)
+
+    captured_args: dict[str, object] = {}
+
+    def fake_run(
+        source_path: Path,
+        conversion_workers: int = 2,
+        name_tags_config: dict[str, str] | None = None,
+        use_process_pool: bool = True,
+        dry_run: bool = False,
+        **kwargs,
+    ) -> dict[str, object]:
+        _ = (kwargs, name_tags_config)
+        captured_args["source_path"] = source_path
+        captured_args["conversion_workers"] = conversion_workers
+        captured_args["use_process_pool"] = use_process_pool
+        captured_args["dry_run"] = dry_run
+        return {
+            "project_id": None,
+            "file_count": 2,
+            "processed_count": 2,
+            "mode": "process_pool",
+            "dry_run": True,
+            "created_entities": 0,
+        }
+
+    monkeypatch.setattr("parsedwg.cli.run_process_tree", fake_run)
+
+    exit_code = main(["process", str(source_dir), "--dry"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_args["source_path"] == source_dir
+    assert captured_args["dry_run"] is True
+    assert "Dry run: запись в БД отключена" in captured.out
+    assert "Создано сущностей в БД: 0" in captured.out
+
+
 def test_main_extract_name_tags_writes_json(tmp_path) -> None:
     source_dir = tmp_path / "names"
     source_dir.mkdir(parents=True)
@@ -298,7 +240,7 @@ def test_main_extract_name_tags_handles_ai_runtime_error(tmp_path, monkeypatch) 
             raise RuntimeError("model not found")
 
     monkeypatch.setattr(
-        "parsedwg.cli._build_name_tags_config",
+        "parsedwg.cli.get_name_tags_config",
         lambda enabled, model, base_url, api_key: {
             "model": model,
             "base_url": base_url,
@@ -313,6 +255,78 @@ def test_main_extract_name_tags_handles_ai_runtime_error(tmp_path, monkeypatch) 
     exit_code = main(["extract-name-tags", str(source_dir), "--ai-name-tags"])
 
     assert exit_code == 1
+
+
+def test_main_extract_token_tags_prints_csv(tmp_path, monkeypatch, capsys) -> None:
+    _ = tmp_path
+
+    class StubExtractor:
+        def extract_token_meanings_json(self, tokens: list[str]) -> str:
+            assert tokens == ["M_Doors", "M_Wall_Glass"]
+            return '{"M_Doors": ["двери"], "M_Wall_Glass": ["стекло", "перегородки"]}'
+
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.LangChainNameTagsExtractor.from_config",
+        lambda _cfg: StubExtractor(),
+    )
+
+    exit_code = main(["extract-token-tags", "M_Doors", "M_Wall_Glass"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert json.loads(captured.out) == {
+        "M_Doors": ["двери"],
+        "M_Wall_Glass": ["стекло", "перегородки"],
+    }
+
+
+def test_main_extract_token_tags_handles_ai_runtime_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.LangChainNameTagsExtractor.from_config",
+        lambda _cfg: (_ for _ in ()).throw(RuntimeError("model not found")),
+    )
+
+    exit_code = main(["extract-token-tags", "M_Doors"])
+
+    assert exit_code == 1
+
+
+def test_main_extract_token_tags_reads_layer_names_from_drawing(tmp_path, monkeypatch, capsys) -> None:
+    source_path = tmp_path / "layers.dxf"
+
+    from ezdxf.filemanagement import new
+
+    doc = new()
+    doc.layers.add("M_Doors")
+    doc.layers.add("M_Wall_Glass")
+    doc.saveas(source_path)
+
+    class StubExtractor:
+        def extract_token_meanings_json(self, tokens: list[str]) -> str:
+            assert "M_Doors" in tokens
+            assert "M_Wall_Glass" in tokens
+            return '{"M_Doors": ["двери"], "M_Wall_Glass": ["стекло", "перегородки"]}'
+
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.LangChainNameTagsExtractor.from_config",
+        lambda _cfg: StubExtractor(),
+    )
+
+    exit_code = main(["extract-token-tags", "--drawing", str(source_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert json.loads(captured.out) == {
+        "M_Doors": ["двери"],
+        "M_Wall_Glass": ["стекло", "перегородки"],
+    }
+
+
+def test_main_extract_token_tags_requires_tokens_or_drawing(capsys) -> None:
+    exit_code = main(["extract-token-tags"])
+
+    _ = capsys.readouterr()
+    assert exit_code == 3
 
 
 def test_main_search_passes_parent_id_to_search_entities(monkeypatch) -> None:

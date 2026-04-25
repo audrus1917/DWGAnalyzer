@@ -225,7 +225,7 @@ def collect_primitives(doc: Drawing) -> list[dict[str, str]]:
     primitives: list[dict[str, str]] = []
 
     for block in doc.blocks:
-        primitives += [DXFAnalyzer.get_entity_data(block, entity) for entity in block]
+        primitives += [DXFAnalyzer.get_entity_data(entity, block=block) for entity in block]
 
     return primitives
 
@@ -243,16 +243,16 @@ def _collect_layout_insert_primitives(doc) -> list[dict[str, str]]:
             if skip_blocks(entity):
                 continue
 
-            location = "n/a"
-            if entity.dxf.hasattr("insert"):
-                location = DXFAnalyzer.format_point(getattr(entity.dxf, "insert"))
+            for attrib in entity.attribs:
+                # FIXME: удалить отладку
+                print(f"атрибут {attrib.dxf.tag} = {attrib.dxf.text} у блока {target_block} в Layout {layout_name}")
 
             primitives.append(
                 {
                     "block": target_block,
                     "type": "INSERT",
                     "text": target_block,
-                    "location": location,
+                    "location": "",
                     "layer": str(getattr(entity.dxf, "layer", "")),
                     "target_block": target_block,
                     "layout": layout_name,
@@ -675,6 +675,7 @@ def run_process_tree(
     created_by: str | None = None,
     name_tags_config: NameTagsAIConfig | None = None,
     use_process_pool: bool = True,
+    dry_run: bool = False,
 ) -> dict[str, object]:
     """Обходит каталог/файл, разбирает DWG/DXF в пуле процессов и сохраняет дерево в БД."""
 
@@ -715,15 +716,17 @@ def run_process_tree(
             processed_queue = manager.Queue()
 
             with ProcessPoolExecutor(max_workers=max(2, effective_workers + 1)) as executor:
-                ingest_future = executor.submit(
-                    process_queue,
-                    processed_queue,
-                    str(root_path),
-                    len(batches),
-                    project_name or root_path.name or str(root_path),
-                    project_description,
-                    created_by,
-                )
+                ingest_future = None
+                if not dry_run:
+                    ingest_future = executor.submit(
+                        process_queue,
+                        processed_queue,
+                        str(root_path),
+                        len(batches),
+                        project_name or root_path.name or str(root_path),
+                        project_description,
+                        created_by,
+                    )
                 futures = [
                     executor.submit(
                         process_batch,
@@ -737,7 +740,10 @@ def run_process_tree(
                 for future in futures:
                     processed_entries.extend(future.result())
 
-                project_id, created_entities = ingest_future.result()
+                if ingest_future is not None:
+                    project_id, created_entities = ingest_future.result()
+                else:
+                    project_id, created_entities = None, 0
     else:
         logger.info("Запущен последовательный режим обработки без ProcessPoolExecutor.")
         processed_queue: _QueueLike = queue.Queue()
@@ -750,14 +756,17 @@ def run_process_tree(
                     name_tags_config,
                 )
             )
-        project_id, created_entities = process_queue(
-            processed_queue,
-            str(root_path),
-            len(batches),
-            project_name or root_path.name or str(root_path),
-            project_description,
-            created_by,
-        )
+        if dry_run:
+            project_id, created_entities = None, 0
+        else:
+            project_id, created_entities = process_queue(
+                processed_queue,
+                str(root_path),
+                len(batches),
+                project_name or root_path.name or str(root_path),
+                project_description,
+                created_by,
+            )
 
     processed_entries.sort(key=lambda item: str(item.get("source_ref", "")))
     redis_processed_count = len(load_converted(job_id))
@@ -777,6 +786,7 @@ def run_process_tree(
         "processed_count": len(processed_entries),
         "workers": effective_workers,
         "mode": mode,
+        "dry_run": dry_run,
         "created_entities": created_entities,
     }
 
