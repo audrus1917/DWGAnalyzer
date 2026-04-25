@@ -13,6 +13,16 @@ def test_entity_has_parent_id_self_fk() -> None:
     assert fk.target_fullname == "entity.id"
 
 
+def test_entity_has_file_id_self_fk() -> None:
+    file_column = Entity.__table__.c.file_id
+
+    assert file_column.nullable is True
+    assert len(file_column.foreign_keys) == 1
+
+    fk = next(iter(file_column.foreign_keys))
+    assert fk.target_fullname == "entity.id"
+
+
 def test_entity_has_file_md5_column() -> None:
     file_md5_column = Entity.__table__.c.file_md5
 

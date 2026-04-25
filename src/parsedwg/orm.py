@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from geoalchemy2 import Geometry
@@ -54,6 +54,11 @@ class Entity(Base):
         ForeignKey("entity.id", ondelete="SET NULL"),
         nullable=True,
     )
+    file_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("entity.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     project_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("project.id", ondelete="SET NULL"),
@@ -80,11 +85,13 @@ class Entity(Base):
         "Entity",
         remote_side="Entity.id",
         back_populates="children",
+        foreign_keys=[parent_id],
     )
     project: Mapped[Project | None] = relationship("Project", back_populates="entities")
     children: Mapped[list[Entity]] = relationship(
         "Entity",
         back_populates="parent",
+        foreign_keys=[parent_id],
     )
 
     src_links: Mapped[list[EntityToEntity]] = relationship(

@@ -133,22 +133,6 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="Кто создал проект.",
     )
     process_tree_parser.add_argument(
-        "--workers",
-        "-w",
-        type=int,
-        default=0,
-        help=(
-            "Количество процессов для этапа обработки файлов "
-            "(<=0: авторасчет по CPU)."
-        ),
-    )
-    process_tree_parser.add_argument(
-        "--sequential",
-        "-s",
-        action="store_true",
-        help="Обрабатывать последовательно в одном процессе (без ProcessPoolExecutor).",
-    )
-    process_tree_parser.add_argument(
         "--dry",
         action="store_true",
         help="Выполнить разбор файлов без сохранения результатов в БД.",
@@ -237,6 +221,21 @@ def build_args_parser() -> argparse.ArgumentParser:
         "--ai-api-key",
         default="ollama",
         help="API ключ для AI провайдера (для Ollama можно оставить по умолчанию).",
+    )
+
+    verify_extraction_parser = subparsers.add_parser(
+        "verify-extraction",
+        help="Сверить DWG/DXF файл с сущностями, записанными в текущую БД.",
+    )
+    verify_extraction_parser.add_argument(
+        "drawing",
+        help="Путь к DWG/DXF файлу.",
+    )
+    verify_extraction_parser.add_argument(
+        "--file-id",
+        dest="file_id",
+        default=None,
+        help="UUID file-сущности в БД. Если не указан, ищется по source_ref файла.",
     )
 
     project_add_parser = subparsers.add_parser(

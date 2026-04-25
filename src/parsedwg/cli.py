@@ -125,8 +125,6 @@ def handle_ask_command(
 
 def handle_process_command(
     source_path: Path,
-    workers: int,
-    sequential: bool = False,
     dry: bool = False,
     project_name: str | None = None,
     project_description: str | None = None,
@@ -147,8 +145,6 @@ def handle_process_command(
         )
         summary = run_process_tree(
             source_path,
-            conversion_workers=workers,
-            use_process_pool=not sequential,
             dry_run=dry,
             project_name=project_name,
             project_description=project_description,
@@ -299,6 +295,26 @@ def handle_extract_token_tags_command(
         return constants.ERROR
     except (FileNotFoundError, OSError, ValueError) as e:
         logger.error("Сбой извлечения тегов по токенам: %s", e)
+        return constants.UNBOUND_ERROR
+
+
+def handle_verify_extraction_command(
+    drawing_path: Path,
+    file_id: str | None = None,
+) -> int:
+    """Сверяет содержимое DWG/DXF файла с тем, что уже сохранено в БД."""
+
+    from .verify_extraction import format_verification_report, verify_extraction
+
+    try:
+        report = asyncio.run(verify_extraction(drawing_path, file_id=file_id))
+        out(format_verification_report(report))
+        return constants.OK if report["ok"] else constants.ERROR
+    except LookupError as e:
+        logger.error("Файл не найден в БД: %s", e)
+        return constants.NOT_FOUND
+    except (FileNotFoundError, OSError, ValueError) as e:
+        logger.error("Сбой верификации: %s", e)
         return constants.UNBOUND_ERROR
 
 
@@ -565,8 +581,6 @@ def main(argv: list[str] | None = None) -> int:
         case "process":
             return_code = handle_process_command(
                 Path(args.path),
-                workers=max(1, args.workers),
-                sequential=args.sequential,
                 dry=args.dry,
                 project_name=args.project_name,
                 project_description=args.project_description,
@@ -594,6 +608,12 @@ def main(argv: list[str] | None = None) -> int:
                 ai_model=args.ai_model,
                 ai_base_url=args.ai_base_url,
                 ai_api_key=args.ai_api_key,
+            )
+
+        case "verify-extraction":
+            return_code = handle_verify_extraction_command(
+                drawing_path=Path(args.drawing),
+                file_id=args.file_id,
             )
 
         case "ingest-docs" | "process-docs":
