@@ -1,6 +1,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import pytest
 from ezdxf.filemanagement import new
 from openpyxl import load_workbook
 
@@ -190,6 +191,46 @@ def test_extract_block_skips_rows_with_missing_columns() -> None:
         assert rows[0][:3] == ("№", "Наименование", "Ед.")
         assert rows[1][:3] == ("1", "Насос", "шт")
         assert len(rows) == 2
+
+
+def test_export_block_png_writes_png_file() -> None:
+    pytest.importorskip("matplotlib")
+
+    with TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "block.dxf"
+
+        doc = new()
+        block = doc.blocks.new("PNG_BLOCK")
+        block.add_line((0, 0), (10, 0))
+        block.add_circle((5, 5), radius=2)
+        doc.saveas(source_path)
+
+        explorer = DXFExplorer(source_path)
+        output_path = explorer.export_block_png("PNG_BLOCK")
+
+        assert output_path.exists()
+        assert output_path.suffix.lower() == ".png"
+        assert output_path.stat().st_size > 0
+
+
+def test_export_block_svg_writes_svg_file() -> None:
+    pytest.importorskip("matplotlib")
+
+    with TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "block.dxf"
+
+        doc = new()
+        block = doc.blocks.new("SVG_BLOCK")
+        block.add_line((0, 0), (10, 0))
+        block.add_circle((5, 5), radius=2)
+        doc.saveas(source_path)
+
+        explorer = DXFExplorer(source_path)
+        output_path = explorer.export_block_svg("SVG_BLOCK")
+
+        assert output_path.exists()
+        assert output_path.suffix.lower() == ".svg"
+        assert output_path.stat().st_size > 0
 
 
 def test_analyze_text_table_uses_top_y_for_row_clusters() -> None:

@@ -1,6 +1,6 @@
 from sqlalchemy.dialects.postgresql import TSVECTOR
 
-from parsedwg.orm import Entity, Project
+from parsedwg.orm import Category, Entity, Project, category_to_entity
 
 
 def test_entity_has_parent_id_self_fk() -> None:
@@ -51,6 +51,40 @@ def test_entity_has_project_id_fk() -> None:
 
     fk = next(iter(project_column.foreign_keys))
     assert fk.target_fullname == "project.id"
+
+
+def test_category_has_parent_id_self_fk() -> None:
+    parent_column = Category.__table__.c.parent_id
+
+    assert parent_column.nullable is True
+    assert len(parent_column.foreign_keys) == 1
+
+    fk = next(iter(parent_column.foreign_keys))
+    assert fk.target_fullname == "category.id"
+
+
+def test_category_has_required_columns() -> None:
+    columns = Category.__table__.c
+
+    assert "name" in columns
+    assert "description" in columns
+    assert "parent_id" in columns
+
+
+def test_category_to_entity_has_required_fks() -> None:
+    category_fk = next(iter(category_to_entity.c.category_id.foreign_keys))
+    entity_fk = next(iter(category_to_entity.c.entity_id.foreign_keys))
+
+    assert category_fk.target_fullname == "category.id"
+    assert entity_fk.target_fullname == "entity.id"
+
+
+def test_entity_has_categories_relationship() -> None:
+    assert "categories" in Entity.__mapper__.relationships
+
+
+def test_category_has_entities_relationship() -> None:
+    assert "entities" in Category.__mapper__.relationships
 
 
 def test_project_has_required_columns() -> None:

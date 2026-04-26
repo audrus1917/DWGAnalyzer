@@ -200,6 +200,41 @@ def handle_process_docs_command(source_path: Path) -> int:
     return constants.OK
 
 
+def handle_export_block_png_command(
+    drawing_path: Path,
+    block_name: str,
+    output_path: Path | None,
+    dpi: int,
+) -> int:
+    """Экспортирует выбранный блок в PNG."""
+
+    try:
+        explorer = DXFExplorer(drawing_path)
+        saved_path = explorer.export_block_png(block_name, output_path=output_path, dpi=dpi)
+        out(f"PNG сохранён: {saved_path}")
+        return constants.OK
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        logger.error("Не удалось экспортировать блок в PNG: %s", exc)
+        return constants.ERROR
+
+
+def handle_export_block_svg_command(
+    drawing_path: Path,
+    block_name: str,
+    output_path: Path | None,
+) -> int:
+    """Экспортирует выбранный блок в SVG."""
+
+    try:
+        explorer = DXFExplorer(drawing_path)
+        saved_path = explorer.export_block_svg(block_name, output_path=output_path)
+        out(f"SVG сохранён: {saved_path}")
+        return constants.OK
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        logger.error("Не удалось экспортировать блок в SVG: %s", exc)
+        return constants.ERROR
+
+
 def handle_extract_name_tags_command(
     source_path: Path,
     output_path: Path | None,
@@ -254,6 +289,7 @@ def handle_extract_token_tags_command(
     ai_model: str = "llama3.2",
     ai_base_url: str = "http://localhost:11434/v1",
     ai_api_key: str = "ollama",
+    with_scores: bool = False,
 ) -> int:
     """Извлекает JSON-словарь смыслов через LLM для списка токенов."""
 
@@ -288,7 +324,10 @@ def handle_extract_token_tags_command(
                 api_key=ai_api_key,
             )
         )
-        out(extractor.extract_token_meanings_json(merged_tokens))
+        if with_scores:
+            out(extractor.extract_token_meanings_scored_json(merged_tokens))
+        else:
+            out(extractor.extract_token_meanings_json(merged_tokens))
         return constants.OK
     except RuntimeError as e:
         logger.error("Ошибка AI-режима: %s", e)
@@ -311,11 +350,11 @@ def handle_verify_extraction_command(
         out(format_verification_report(report))
         return constants.OK if report["ok"] else constants.ERROR
     except LookupError as e:
-        logger.error("Файл не найден в БД: %s", e)
+        logger.error("Файл не найден в БД: %s", e, exc_info=True)
         return constants.NOT_FOUND
     except (FileNotFoundError, OSError, ValueError) as e:
-        logger.error("Сбой верификации: %s", e)
-        return constants.UNBOUND_ERROR
+        logger.error("Ошибка верификации: %s", e)
+        return constants.ERROR
 
 
 def handle_project_add_command(
@@ -379,6 +418,95 @@ def handle_project_delete_command(project_id: str, yes: bool) -> int:
     return constants.OK
 
 
+def handle_category_add_command(
+    name: str,
+    description: str | None,
+    parent_id: str | None,
+) -> int:
+    """Создаёт категорию."""
+    from .db import create_category
+
+    category = asyncio.run(
+        create_category(name=name, description=description, parent_id=parent_id)
+    )
+    out(f"Категория создана: {category['id']}")
+    out(f"Название: {category['name']}")
+    if category["parent_id"]:
+        out(f"Родитель: {category['parent_id']}")
+    return constants.OK
+
+
+def handle_category_update_command(
+    category_id: str,
+    name: str | None,
+    description: str | None,
+    parent_id: str | None,
+) -> int:
+    """Обновляет категорию."""
+    from .db import update_category
+
+    category = asyncio.run(
+        update_category(
+            category_id=category_id,
+            name=name,
+            description=description,
+            parent_id=parent_id,
+        )
+    )
+    if category is None:
+        out("Категория не найдена.")
+        return constants.NOT_FOUND
+
+    out(f"Категория обновлена: {category['id']}")
+    out(f"Название: {category['name']}")
+    if category["parent_id"]:
+        out(f"Родитель: {category['parent_id']}")
+    return constants.OK
+
+
+def handle_category_delete_command(category_id: str, yes: bool) -> int:
+    """Удаляет категорию с подтверждением согласия."""
+    from .db import delete_category
+
+    if not yes:
+        answer = input(
+            f"Удалить категорию {category_id}? Введите YES для подтверждения: "
+        ).strip()
+        if answer != "YES":
+            out("Удаление отменено.")
+            return constants.ERROR
+
+    deleted = asyncio.run(delete_category(category_id=category_id))
+    if not deleted:
+        out("Категория не найдена.")
+        return constants.NOT_FOUND
+
+    out(f"Категория удалена: {category_id}")
+    return constants.OK
+
+
+def handle_category_list_command(parent_id: str | None) -> int:
+    """Показывает список категорий."""
+    from .db import list_categories
+
+    rows: list[ResultRow] = []
+    for row in asyncio.run(list_categories(parent_id=parent_id)):
+        rows.append(
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "description": row["description"],
+                "parent_id": row["parent_id"],
+            }
+        )
+    if not rows:
+        out("Нет категорий.")
+        return constants.OK
+
+    print_as_table(rows)
+    return constants.OK
+
+
 def handle_file_stat_from_db_command(
     file_ref: str,
     by_path: bool,
@@ -402,7 +530,7 @@ def handle_file_stat_from_db_command(
                 file_entity = await session.scalar(
                     sa.select(Entity).where(
                         Entity.entity_type == EntityType.file,
-                        Entity.start_from == file_ref,
+                        Entity.data["source_ref"].astext == file_ref,
                     )
                 )
             else:
@@ -440,7 +568,6 @@ def handle_file_stat_from_db_command(
                 sa.select(Entity)
                 .where(
                     Entity.parent_id.in_([block.id for block in blocks]),
-                    Entity.entity_type == EntityType.primitive,
                 )
             )
             primitives = [primitive for (primitive,) in primitives.all()]
@@ -608,6 +735,7 @@ def main(argv: list[str] | None = None) -> int:
                 ai_model=args.ai_model,
                 ai_base_url=args.ai_base_url,
                 ai_api_key=args.ai_api_key,
+                with_scores=args.with_scores,
             )
 
         case "verify-extraction":
@@ -640,6 +768,30 @@ def main(argv: list[str] | None = None) -> int:
                 yes=args.yes,
             )
 
+        case "category-add":
+            return_code = handle_category_add_command(
+                name=args.name,
+                description=args.description,
+                parent_id=args.parent_id,
+            )
+
+        case "category-update":
+            return_code = handle_category_update_command(
+                category_id=args.category_id,
+                name=args.name,
+                description=args.description,
+                parent_id=args.parent_id,
+            )
+
+        case "category-delete":
+            return_code = handle_category_delete_command(
+                category_id=args.category_id,
+                yes=args.yes,
+            )
+
+        case "category-list":
+            return_code = handle_category_list_command(parent_id=args.parent_id)
+
         case "search":
             output_path = Path(args.output) if args.output else None
             return_code = handle_search_command(
@@ -669,6 +821,21 @@ def main(argv: list[str] | None = None) -> int:
         case "extract-block":
             explorer = DXFExplorer(args.drawing)
             return_code = explorer.extract_block(args.block_name)
+
+        case "export-block-png":
+            return_code = handle_export_block_png_command(
+                drawing_path=Path(args.drawing),
+                block_name=args.block_name,
+                output_path=Path(args.output) if args.output else None,
+                dpi=args.dpi,
+            )
+
+        case "export-block-svg":
+            return_code = handle_export_block_svg_command(
+                drawing_path=Path(args.drawing),
+                block_name=args.block_name,
+                output_path=Path(args.output) if args.output else None,
+            )
 
         case "file-stat":
             drawing_path = Path(args.drawing)

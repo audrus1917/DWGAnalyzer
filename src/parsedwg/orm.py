@@ -5,13 +5,23 @@ import uuid
 from datetime import datetime, timezone
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Table, Text, Column
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from geoalchemy2 import Geometry
 
 class Base(DeclarativeBase):
     pass
+
+
+category_to_entity = Table(
+    "category_to_entity",
+    Base.metadata,
+    Column("category_id", UUID(as_uuid=True), ForeignKey("category.id", ondelete="CASCADE"),
+           primary_key=True),
+    Column("entity_id", UUID(as_uuid=True), ForeignKey("entity.id", ondelete="CASCADE"),
+           primary_key=True),
+)
 
 class EntityType(str, enum.Enum):
     folder = "FOLDER"
@@ -43,6 +53,38 @@ class Project(Base):
     entities: Mapped[list[Entity]] = relationship("Entity", back_populates="project")
 
 
+class Category(Base):
+    __tablename__ = "category"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("category.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    name: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    parent: Mapped[Category | None] = relationship(
+        "Category",
+        remote_side="Category.id",
+        back_populates="children",
+        foreign_keys=[parent_id],
+    )
+    children: Mapped[list[Category]] = relationship(
+        "Category",
+        back_populates="parent",
+        foreign_keys=[parent_id],
+    )
+    entities: Mapped[list[Entity]] = relationship(
+        "Entity",
+        secondary=category_to_entity,
+        back_populates="categories",
+    )
+
+
 class Entity(Base):
     __tablename__ = "entity"
 
@@ -69,6 +111,7 @@ class Entity(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     is_table: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_primitive: Mapped[bool | None] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow,
         index=True
@@ -105,6 +148,11 @@ class Entity(Base):
         foreign_keys="EntityToEntity.dst_id",
         back_populates="dst_entity",
         cascade="all, delete-orphan",
+    )
+    categories: Mapped[list[Category]] = relationship(
+        "Category",
+        secondary=category_to_entity,
+        back_populates="entities",
     )
 
 

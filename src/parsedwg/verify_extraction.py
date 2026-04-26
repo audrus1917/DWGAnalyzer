@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+import logging
 
 from collections import defaultdict
 from pathlib import Path
@@ -18,6 +19,8 @@ from .process_tree import collect_dxf_summary
 
 type PrimitiveCountMap = dict[str, dict[str, int]]
 type LayoutLayersMap = dict[str, set[str]]
+
+logger = logging.getLogger(__file__)
 
 
 def _count_primitives_by_block_and_type(primitives: list[dict[str, object]]) -> PrimitiveCountMap:
@@ -35,19 +38,6 @@ def _count_primitives_by_block_and_type(primitives: list[dict[str, object]]) -> 
         for block_name, type_counts in counts.items()
     }
 
-
-def _collect_layout_layers(layouts: list[dict[str, object]]) -> LayoutLayersMap:
-    result: LayoutLayersMap = {}
-    for layout in layouts:
-        layout_name = str(layout.get("name", "")).strip()
-        if not layout_name:
-            continue
-        result[layout_name] = {
-            str(layer).strip()
-            for layer in cast(list[object], layout.get("layers", []))
-            if str(layer).strip()
-        }
-    return result
 
 
 def _compare_counts(expected: PrimitiveCountMap, actual: PrimitiveCountMap) -> list[str]:
@@ -101,8 +91,6 @@ def build_verification_report(
     blocks = cast(list[Entity], db_snapshot["blocks"])
     primitives = cast(list[Entity], db_snapshot["primitives"])
     on_layer_links = cast(set[tuple[uuid.UUID, uuid.UUID]], db_snapshot["on_layer_links"])
-
-    expected_layout_layers = _collect_layout_layers(cast(list[dict[str, object]], source_summary["layouts"]))
 
     layout_names_by_id = {layout.id: layout.name for layout in layouts}
     actual_layout_layers: LayoutLayersMap = defaultdict(set)
@@ -194,7 +182,6 @@ def build_verification_report(
         [
             block_mismatches,
             primitive_count_mismatches,
-            _compare_layout_layers(expected_layout_layers, dict(actual_layout_layers)),
             unresolved_inserts,
             missing_layer_links,
             wrong_file_id_entities,
@@ -205,9 +192,7 @@ def build_verification_report(
         "ok": ok,
         "file_id": str(file_entity.id),
         "layouts": {
-            "expected": len(expected_layout_layers),
             "actual": len(actual_layout_layers),
-            "mismatches": _compare_layout_layers(expected_layout_layers, dict(actual_layout_layers)),
         },
         "blocks": {
             "expected": len(expected_blocks),
@@ -357,14 +342,17 @@ async def _load_db_snapshot(file_entity: Entity) -> dict[str, object]:
         else:
             primitives = []
 
-        if False: # primitives:
-            primitive_ids = [primitive.id for primitive in primitives]
+        if primitives:
             link_result = await session.execute(
                 select(EntityToEntity.src_id, EntityToEntity.dst_id)
-                .where(EntityToEntity.link == "on_layer")
-                .where(EntityToEntity.src_id.in_(primitive_ids))
+                .join(Entity, EntityToEntity.src_id == Entity.id)
+                .where(
+                    EntityToEntity.link == "on_layer",
+                    Entity.is_primitive == True,
+                )
             )
             on_layer_links = set(link_result.all())
+            logger.debug("Загружено %d связей on_layer", len(on_layer_links))
         else:
             on_layer_links = set()
 

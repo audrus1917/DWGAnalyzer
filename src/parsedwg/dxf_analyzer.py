@@ -81,12 +81,15 @@ class DXFAnalyzer:
         if text_value := cls.get_text(entity):
             entity_data["text"] = re.sub(r"\s+", " ", text_value).strip()
 
+        attribs = {}
         for attr_name, value in entity.dxf.all_existing_dxf_attribs().items():
             if cls.is_point_like(value):
-                entity_data[attr_name] = cls.format_point(value)
+                attribs[attr_name] = cls.format_point(value)
             else:
-                entity_data[attr_name] = value
-
+                attribs[attr_name] = value
+        if attribs:
+            entity_data["attribs"] = attribs
+            
         match dxftype:
             case "INSERT":
                 entity_data["block"] = entity.dxf.name
@@ -105,11 +108,18 @@ class DXFAnalyzer:
             case "CIRCLE":
                 entity_data["center"] = cls.format_point(entity.dxf.center)
                 entity_data["radius"] = entity.dxf.radius
+                entity_data["geom"] = "SRID=4326;POINT({} {})".format(
+                    entity.dxf.center.x, entity.dxf.center.y
+                )
             case "ARC":
                 entity_data["center"] = cls.format_point(entity.dxf.center)
                 entity_data["radius"] = entity.dxf.radius
                 entity_data["start_angle"] = entity.dxf.start_angle
                 entity_data["end_angle"] = entity.dxf.end_angle
+            case "TEXT" | "MTEXT":
+                entity_data["geom"] = "SRID=4326;POINT({} {})".format(
+                    entity.dxf.insert.x, entity.dxf.insert.y
+                )
 
         rendered: list[str] = []
         for key, value in entity_data.items():

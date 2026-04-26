@@ -189,6 +189,91 @@ def test_main_process_passes_dry_flag_and_prints_dry_message(tmp_path, monkeypat
     assert "Создано сущностей в БД: 0" in captured.out
 
 
+def test_main_export_block_png_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
+    source_path = tmp_path / "sample.dxf"
+    source_path.write_text("stub", encoding="utf-8")
+    target_path = tmp_path / "block.png"
+
+    captured_args: dict[str, object] = {}
+
+    class StubExplorer:
+        def __init__(self, drawing: Path):
+            captured_args["drawing"] = drawing
+
+        def export_block_png(
+            self,
+            block_name: str,
+            output_path: Path | None = None,
+            dpi: int = 300,
+        ) -> Path:
+            captured_args["block_name"] = block_name
+            captured_args["output_path"] = output_path
+            captured_args["dpi"] = dpi
+            return output_path or target_path
+
+    monkeypatch.setattr("parsedwg.cli.DXFExplorer", StubExplorer)
+
+    exit_code = main(
+        [
+            "export-block-png",
+            str(source_path),
+            "BLOCK_A",
+            "-o",
+            str(target_path),
+            "--dpi",
+            "200",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_args["drawing"] == source_path
+    assert captured_args["block_name"] == "BLOCK_A"
+    assert captured_args["output_path"] == target_path
+    assert captured_args["dpi"] == 200
+    assert f"PNG сохранён: {target_path}" in captured.out
+
+
+def test_main_export_block_svg_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
+    source_path = tmp_path / "sample.dxf"
+    source_path.write_text("stub", encoding="utf-8")
+    target_path = tmp_path / "block.svg"
+
+    captured_args: dict[str, object] = {}
+
+    class StubExplorer:
+        def __init__(self, drawing: Path):
+            captured_args["drawing"] = drawing
+
+        def export_block_svg(
+            self,
+            block_name: str,
+            output_path: Path | None = None,
+        ) -> Path:
+            captured_args["block_name"] = block_name
+            captured_args["output_path"] = output_path
+            return output_path or target_path
+
+    monkeypatch.setattr("parsedwg.cli.DXFExplorer", StubExplorer)
+
+    exit_code = main(
+        [
+            "export-block-svg",
+            str(source_path),
+            "BLOCK_A",
+            "-o",
+            str(target_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_args["drawing"] == source_path
+    assert captured_args["block_name"] == "BLOCK_A"
+    assert captured_args["output_path"] == target_path
+    assert f"SVG сохранён: {target_path}" in captured.out
+
+
 def test_main_extract_name_tags_writes_json(tmp_path) -> None:
     source_dir = tmp_path / "names"
     source_dir.mkdir(parents=True)
@@ -295,6 +380,33 @@ def test_main_extract_token_tags_reads_layer_names_from_drawing(tmp_path, monkey
     assert json.loads(captured.out) == {
         "M_Doors": ["двери"],
         "M_Wall_Glass": ["стекло", "перегородки"],
+    }
+
+
+def test_main_extract_token_tags_with_scores_prints_weighted_json(monkeypatch, capsys) -> None:
+    class StubExtractor:
+        def extract_token_meanings_scored_json(self, tokens: list[str]) -> str:
+            assert tokens == ["M_Doors"]
+            return (
+                '{"M_Doors": ['
+                '{"meaning": "дверь", "score": 0.96}, '
+                '{"meaning": "проем", "score": 0.41}]}'
+            )
+
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.LangChainNameTagsExtractor.from_config",
+        lambda _cfg: StubExtractor(),
+    )
+
+    exit_code = main(["extract-token-tags", "M_Doors", "--with-scores"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert json.loads(captured.out) == {
+        "M_Doors": [
+            {"meaning": "дверь", "score": 0.96},
+            {"meaning": "проем", "score": 0.41},
+        ]
     }
 
 
@@ -491,3 +603,154 @@ def test_main_project_delete_with_yes(monkeypatch, capsys) -> None:
     assert exit_code == 0
     assert captured_kwargs["project_id"] == pid
     assert "Проект удалён" in captured.out
+
+
+def test_main_category_add_runs_pipeline(monkeypatch, capsys) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    async def fake_create_category(
+        name: str,
+        description: str | None = None,
+        parent_id: str | None = None,
+    ):
+        captured_kwargs["name"] = name
+        captured_kwargs["description"] = description
+        captured_kwargs["parent_id"] = parent_id
+        return {
+            "id": "22222222-2222-2222-2222-222222222222",
+            "name": name,
+            "description": description or "",
+            "parent_id": parent_id or "",
+        }
+
+    monkeypatch.setattr("parsedwg.db.create_category", fake_create_category)
+
+    parent_id = "11111111-1111-1111-1111-111111111111"
+    exit_code = main([
+        "category-add",
+        "Архитектура",
+        "--description",
+        "Разделы по архитектуре",
+        "--parent-id",
+        parent_id,
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_kwargs["name"] == "Архитектура"
+    assert captured_kwargs["description"] == "Разделы по архитектуре"
+    assert captured_kwargs["parent_id"] == parent_id
+    assert "Категория создана" in captured.out
+
+
+def test_main_category_update_runs_pipeline(monkeypatch, capsys) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    async def fake_update_category(
+        category_id: str,
+        name: str | None = None,
+        description: str | None = None,
+        parent_id: str | None = None,
+    ):
+        captured_kwargs["category_id"] = category_id
+        captured_kwargs["name"] = name
+        captured_kwargs["description"] = description
+        captured_kwargs["parent_id"] = parent_id
+        return {
+            "id": category_id,
+            "name": name or "",
+            "description": description or "",
+            "parent_id": parent_id or "",
+        }
+
+    monkeypatch.setattr("parsedwg.db.update_category", fake_update_category)
+
+    category_id = "22222222-2222-2222-2222-222222222222"
+    exit_code = main([
+        "category-update",
+        category_id,
+        "--name",
+        "ОВ",
+        "--description",
+        "Обновленное описание",
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_kwargs["category_id"] == category_id
+    assert captured_kwargs["name"] == "ОВ"
+    assert captured_kwargs["description"] == "Обновленное описание"
+    assert "Категория обновлена" in captured.out
+
+
+def test_main_category_delete_requires_confirmation(monkeypatch, capsys) -> None:
+    async def fake_delete_category(category_id: str) -> bool:
+        _ = category_id
+        return True
+
+    monkeypatch.setattr("parsedwg.db.delete_category", fake_delete_category)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "NO")
+
+    category_id = "22222222-2222-2222-2222-222222222222"
+    exit_code = main(["category-delete", category_id])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Удаление отменено." in captured.out
+
+
+def test_main_category_delete_with_yes(monkeypatch, capsys) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    async def fake_delete_category(category_id: str) -> bool:
+        captured_kwargs["category_id"] = category_id
+        return True
+
+    monkeypatch.setattr("parsedwg.db.delete_category", fake_delete_category)
+
+    category_id = "22222222-2222-2222-2222-222222222222"
+    exit_code = main(["category-delete", category_id, "--yes"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_kwargs["category_id"] == category_id
+    assert "Категория удалена" in captured.out
+
+
+def test_main_category_list_prints_rows(monkeypatch, capsys) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    async def fake_list_categories(parent_id: str | None = None):
+        captured_kwargs["parent_id"] = parent_id
+        return [
+            {
+                "id": "22222222-2222-2222-2222-222222222222",
+                "name": "Архитектура",
+                "description": "Разделы по архитектуре",
+                "parent_id": "",
+            }
+        ]
+
+    monkeypatch.setattr("parsedwg.db.list_categories", fake_list_categories)
+
+    parent_id = "11111111-1111-1111-1111-111111111111"
+    exit_code = main(["category-list", "--parent-id", parent_id])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_kwargs["parent_id"] == parent_id
+    assert "Архитектура" in captured.out
+
+
+def test_main_category_list_handles_empty_result(monkeypatch, capsys) -> None:
+    async def fake_list_categories(parent_id: str | None = None):
+        _ = parent_id
+        return []
+
+    monkeypatch.setattr("parsedwg.db.list_categories", fake_list_categories)
+
+    exit_code = main(["category-list"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Нет категорий." in captured.out

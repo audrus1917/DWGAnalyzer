@@ -10,7 +10,7 @@ from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from .settings import settings
-from .orm import Entity, EntityType, Project
+from .orm import Category, Entity, EntityType, Project
 
 engine = create_async_engine(settings.database_url, echo=settings.database_echo)
 
@@ -24,6 +24,8 @@ async def get_file_id_by_source(source_ref: str) -> str | None:
     stmt = (
         select(Entity.id)
         .where(Entity.entity_type == EntityType.file)
+        .where(Entity.data["source_ref"].astext == source_ref)
+        .order_by(Entity.created_at.desc())
         .limit(1)
     )
     async with async_session_factory() as session:
@@ -105,7 +107,6 @@ async def search_entities(
     if entity_type is not None:
         stmt = stmt.where(Entity.entity_type == entity_type)
     if parent_id is not None:
-        import uuid as _uuid
         stmt = stmt.where(Entity.parent_id == _uuid.UUID(parent_id))
 
     async with async_session_factory() as session:
@@ -158,6 +159,103 @@ async def create_project(
         }
 
 
+async def create_category(
+    name: str,
+    description: str | None = None,
+    parent_id: str | None = None,
+) -> dict[str, str]:
+    """Создаёт категорию и возвращает её основные поля."""
+
+    parent_uuid = _uuid.UUID(parent_id) if parent_id is not None else None
+
+    async with async_session_factory() as session:
+        category = Category(
+            name=name,
+            description=description,
+            parent_id=parent_uuid,
+        )
+        session.add(category)
+        await session.flush()
+        await session.commit()
+
+        return {
+            "id": str(category.id),
+            "name": category.name,
+            "description": category.description or "",
+            "parent_id": str(category.parent_id) if category.parent_id is not None else "",
+        }
+
+
+async def update_category(
+    category_id: str,
+    name: str | None = None,
+    description: str | None = None,
+    parent_id: str | None = None,
+) -> dict[str, str] | None:
+    """Обновляет категорию по id. Возвращает None, если категория не найдена."""
+
+    category_uuid = _uuid.UUID(category_id)
+    parent_uuid = _uuid.UUID(parent_id) if parent_id is not None else None
+
+    async with async_session_factory() as session:
+        category = await session.get(Category, category_uuid)
+        if category is None:
+            return None
+
+        if name is not None:
+            category.name = name
+        if description is not None:
+            category.description = description
+        if parent_id is not None:
+            category.parent_id = parent_uuid
+
+        await session.commit()
+
+        return {
+            "id": str(category.id),
+            "name": category.name,
+            "description": category.description or "",
+            "parent_id": str(category.parent_id) if category.parent_id is not None else "",
+        }
+
+
+async def delete_category(category_id: str) -> bool:
+    """Удаляет категорию по id. Возвращает True, если удаление произошло."""
+
+    category_uuid = _uuid.UUID(category_id)
+
+    async with async_session_factory() as session:
+        category = await session.get(Category, category_uuid)
+        if category is None:
+            return False
+
+        await session.delete(category)
+        await session.commit()
+        return True
+
+
+async def list_categories(parent_id: str | None = None) -> list[dict[str, str]]:
+    """Возвращает список категорий, опционально отфильтрованный по parent_id."""
+
+    stmt = select(Category).order_by(Category.name.asc())
+    if parent_id is not None:
+        stmt = stmt.where(Category.parent_id == _uuid.UUID(parent_id))
+
+    async with async_session_factory() as session:
+        result = await session.execute(stmt)
+        categories = result.scalars().all()
+
+    return [
+        {
+            "id": str(category.id),
+            "name": category.name,
+            "description": category.description or "",
+            "parent_id": str(category.parent_id) if category.parent_id is not None else "",
+        }
+        for category in categories
+    ]
+
+
 async def update_project(
     project_id: str,
     name: str | None = None,
@@ -165,10 +263,6 @@ async def update_project(
     created_by: str | None = None,
 ) -> dict[str, str] | None:
     """Обновляет проект по id. Возвращает None, если проект не найден."""
-    import uuid as _uuid
-
-    from .orm import Project
-
     async with async_session_factory() as session:
         project = await session.get(Project, _uuid.UUID(project_id))
         if project is None:
@@ -193,10 +287,6 @@ async def update_project(
 
 async def delete_project(project_id: str) -> bool:
     """Удаляет проект по id. Возвращает True, если удаление произошло."""
-    import uuid as _uuid
-
-    from .orm import Project
-
     async with async_session_factory() as session:
         project = await session.get(Project, _uuid.UUID(project_id))
         if project is None:
@@ -209,12 +299,19 @@ async def delete_project(project_id: str) -> bool:
 
 async def get_table_blocks_for_source(source_ref: str) -> list[dict[str, object]]:
     """Возвращает блоки-таблицы из БД для заданного source_ref файла."""
-    from .orm import Entity, EntityType
-
+    file_id_subquery = (
+        select(Entity.id)
+        .where(Entity.entity_type == EntityType.file)
+        .where(Entity.data["source_ref"].astext == source_ref)
+        .order_by(Entity.created_at.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
     stmt = (
         select(Entity.name, Entity.data)
         .where(Entity.entity_type == EntityType.block)
         .where(Entity.is_table.is_(True))
+        .where(Entity.parent_id == file_id_subquery)
         .order_by(Entity.name.asc())
     )
 

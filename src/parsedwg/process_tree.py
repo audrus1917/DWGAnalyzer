@@ -23,6 +23,7 @@ from .db import async_session_factory
 from .orm import Entity, EntityToEntity, EntityType, Project
 from .table_analysis import TextClusterAnalyzer
 from .dxf_analyzer import DXFAnalyzer
+from .utils import safe_float
 
 try:
     from tqdm.auto import tqdm as _tqdm
@@ -32,6 +33,8 @@ except ImportError:
         return iterable
 
 logger = logging.getLogger(__name__)
+
+PRIMITIVE_BATCH_SIZE = 1000
 
 type JobEntry = dict[str, str]
 type ProcessedEntry = dict[str, object]
@@ -193,13 +196,6 @@ def collect_entity_layers(doc, entity, seen_blocks: set[str] | None = None) -> s
     return layers
 
 
-def collect_layout_layers(doc, layout) -> list[str]:
-    layers: set[str] = set()
-    for entity in layout:
-        layers.update(collect_entity_layers(doc, entity))
-    return sorted(layers)
-
-
 def iter_blocks(drawing: Drawing) -> Iterator[BlockLayout]:
     """Итерирует блоки в документе с отображением прогресса."""
 
@@ -278,8 +274,28 @@ def collect_drawing_summary(
     
     layouts: list[dict[str, object]] = []
     for layout in drawing.layouts:
-        layers = collect_layout_layers(drawing, layout)
-        layouts.append({"name": layout.name, "layers": layers})
+        layouts.append({
+            "name": layout.name,
+            "data": {
+                "ms": layout.is_modelspace,
+                "tab": safe_float(layout.dxf.get("taborder", None)),
+            }
+        })
+
+    layers: list[dict[str, Any]] = []
+    for layer in drawing.layers:
+        name = str(layer.dxf.name)
+        layers.append({
+            "name": name,
+            "data": {
+                "color": safe_float(layer.dxf.get("color", None)),
+                "lt": str(layer.dxf.get("linetype", "")) or None,
+                "lw": safe_float(layer.dxf.get("lineweight", None)),
+                "on": not layer.is_off(),
+                "frozen": layer.is_frozen(),
+                "locked": layer.is_locked(),
+            }
+        })
 
     blocks: list[dict[str, object]] = []
     primitives: list[dict[str, object]] = []
@@ -312,6 +328,7 @@ def collect_drawing_summary(
 
     return {
         "layouts": layouts,
+        "layers": layers,
         "blocks": blocks,
         "primitives": primitives_payload,
     }
@@ -337,11 +354,13 @@ def process_entry(
     with tempfile.TemporaryDirectory(prefix="parsedwg-process-") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
 
+        is_zip = ""
         if entry["kind"] == "file":
             source_ref = entry["source"]
             working_path = source
             file_md5 = DWGTreeProcessor.file_md5(working_path)
         else:
+            is_zip = " (zip)"
             member_name = entry.get("member")
             if member_name is None:
                 raise ValueError("Для zipped_file не указан member.")
@@ -350,6 +369,7 @@ def process_entry(
             source_ref = f"{entry['source']}::{member_name}"
             file_md5 = DWGTreeProcessor.file_md5(working_path)
 
+        logger.info("Обрабатываем файл: %s%s", source_ref, is_zip)
         summary = collect_dxf_summary(working_path, name_tags_extractor=name_tags_extractor)
 
     processed_entry: ProcessedEntry = {
@@ -412,17 +432,57 @@ async def _create_folders_tree(
         )
         session.add(folder_entity)
         await session.flush()
-        # session.add(
-        #     EntityToEntity(
-        #         src_id=parent_entity.id,
-        #         dst_id=folder_entity.id,
-        #         link="contains_folder",
-        #     )
-        # )
         folders[rel] = folder_entity
         created += 1
 
     return folders, created
+
+
+async def _flush_primitives_batch(
+    session,
+    primitive_entities_batch: list[Entity],
+    primitive_layer_links_batch: list[tuple[Entity, Entity]],
+    processed_count: int,
+    primitives_total: int,
+    final: bool = False,
+) -> int:
+    if not primitive_entities_batch:
+        return 0
+
+    if final:
+        logger.info(
+            "Сохраняем финальную пачку примитивов: %d / %d",
+            processed_count,
+            primitives_total,
+        )
+    else:
+        logger.info(
+            "Сохраняем пачку примитивов: %d / %d",
+            processed_count,
+            primitives_total,
+        )
+
+    session.add_all(primitive_entities_batch)
+    await session.flush()
+
+    if primitive_layer_links_batch:
+        session.add_all(
+            [
+                EntityToEntity(
+                    dst_id=layer_entity.id,
+                    src_id=primitive_entity.id,
+                    link="on_layer",
+                )
+                for primitive_entity, layer_entity in primitive_layer_links_batch
+            ]
+        )
+        await session.flush()
+
+    created_count = len(primitive_entities_batch)
+    await session.commit()
+    primitive_entities_batch.clear()
+    primitive_layer_links_batch.clear()
+    return created_count
 
 
 async def save_tree_to_db(
@@ -435,6 +495,7 @@ async def save_tree_to_db(
     """Сохраняет дерево сущностей в БД по уже обработанным файлам.
     Возвращает ID проекта и количество созданных сущностей."""
 
+    logger.info("Сохраняем результаты в БД")
     async with async_session_factory() as session:
         # Выбираем существующий проект или создаем новый
         result = await session.execute(
@@ -460,6 +521,7 @@ async def save_tree_to_db(
         for entry in processed_entries:
             source_ref = str(entry["source_ref"])
             kind = str(entry["kind"])
+            logger.info("Сохраняем для файла для сохранения: %s (%s)", source_ref, kind)
             file_type = EntityType.file if kind == "file" else EntityType.zipped_file
 
             if kind == "zipped_file":
@@ -506,7 +568,8 @@ async def save_tree_to_db(
             created_entities += 1
 
             summary = cast(dict[str, list[dict[str, object]]], entry["summary"])
-            layer_entities_by_key: dict[tuple[str, str], Entity] = {}
+            layer_entities_by_key: dict[str, Entity] = {}
+            logger.info("Layouts (%d шт.)", len(summary.get("layouts", [])))
             for layout in summary["layouts"]:
                 layout_name = str(layout["name"])
                 layout_entity = Entity(
@@ -514,8 +577,8 @@ async def save_tree_to_db(
                     file_id=file_entity.id,
                     project_id=project_id,
                     name=layout_name,
-                    description=f"Layout файла {entry['name']}",
-                    entity_text=_build_entity_text(f"Layout файла {entry['name']}"),
+                    description="",
+                    entity_text=_build_entity_text(f"Layout {entry['name']}"),
                     entity_type=EntityType.layout,
                     data={},
                 )
@@ -523,24 +586,26 @@ async def save_tree_to_db(
                 await session.flush()
                 created_entities += 1
 
-                for layer_name in cast(list[str], layout["layers"]):
-                    layer_name_str = str(layer_name)
-                    layer_entity = Entity(
-                        parent_id=layout_entity.id,
-                        file_id=file_entity.id,
-                        project_id=project_id,
-                        name=layer_name_str,
-                        description=f"Layer layout {layout_name}",
-                        entity_text=_build_entity_text(f"Layer layout {layout_name}"),
-                        entity_type=EntityType.layer,
-                        data={"layout": layout_name},
-                    )
-                    session.add(layer_entity)
-                    await session.flush()
-                    layer_entities_by_key[(layout_name, layer_name_str)] = layer_entity
-                    created_entities += 1
+            logger.info("Слои (%d шт.)", len(summary.get("layers", [])))
+            for layer in summary["layers"]:
+                layer_name = str(layer["name"])
+                layer_entity = Entity(
+                    parent_id=file_entity.id,
+                    file_id=file_entity.id,
+                    project_id=project_id,
+                    name=layer_name,
+                    description="",
+                    entity_text=_build_entity_text(f"Layer {layer_name}"),
+                    entity_type=EntityType.layer,
+                    data=layer.get("data", {}),
+                )
+                session.add(layer_entity)
+                await session.flush()
+                layer_entities_by_key[layer_name] = layer_entity
+                created_entities += 1
 
             block_entities_by_name: dict[str, Entity] = {}
+            logger.info("Блоки (%d шт.)", len(summary.get("blocks", [])))
             for block in summary["blocks"]:
                 block_name = str(block["name"])
                 if skip_blocks(block_name):
@@ -568,7 +633,19 @@ async def save_tree_to_db(
                 block_entities_by_name[block_name] = block_entity
                 created_entities += 1
 
-            for primitive in summary["primitives"]:
+            primitives = summary.get("primitives", [])
+            primitive_entities_batch: list[Entity] = []
+            primitive_layer_links_batch: list[tuple[Entity, Entity]] = []
+
+            logger.info("Примитивы (%d шт.)", len(primitives))
+            primitive_iterable = _tqdm(
+                primitives,
+                total=len(primitives),
+                desc="Primitives",
+                unit="primitive",
+                disable=not sys.stderr.isatty(),
+            )
+            for idx, primitive in enumerate(primitive_iterable, start=1):
                 block_name = str(primitive["block"])
                 parent_block_entity = block_entities_by_name.get(block_name)
                 if parent_block_entity is None:
@@ -577,38 +654,61 @@ async def save_tree_to_db(
                         primitive.get("text", ""),
                         block_name,
                     )
+                    if idx % PRIMITIVE_BATCH_SIZE == 0:
+                        created_entities += await _flush_primitives_batch(
+                            session,
+                            primitive_entities_batch,
+                            primitive_layer_links_batch,
+                            processed_count=idx,
+                            primitives_total=len(primitives),
+                        )
                     continue
+
+                if "name" in primitive and isinstance(primitive["name"], str):
+                    name = primitive["name"].strip()
+                else:
+                    name = str(primitive.get("type", ""))
 
                 primitive_entity = Entity(
                     parent_id=parent_block_entity.id,
                     file_id=file_entity.id,
                     project_id=project_id,
-                    name=str(primitive.get("type", "")),
+                    name=name,
                     description=str(primitive.get("text", "")),
                     entity_text=_build_entity_text(str(primitive.get("text", ""))),
                     entity_type=str(primitive.get("type", "primitive")),
                     data=primitive,
-                    geom=primitive.get("geom", None)
+                    geom=primitive.get("geom", None),
+                    is_primitive=True,
                 )
-                session.add(primitive_entity)
-                await session.flush()
+                primitive_entities_batch.append(primitive_entity)
 
-                layout_name = primitive.get("layout")
                 layer_name = primitive.get("layer")
-                if isinstance(layout_name, str) and isinstance(layer_name, str):
-                    layer_entity = layer_entities_by_key.get((layout_name, layer_name))
+                if isinstance(layer_name, str):
+                    layer_entity = layer_entities_by_key.get(layer_name)
                     if layer_entity is not None:
-                        session.add(
-                            EntityToEntity(
-                                dst_id=layer_entity.id,
-                                src_id=primitive_entity.id,
-                                link="on_layer",
-                            )
-                        )
+                        primitive_layer_links_batch.append((primitive_entity, layer_entity))
 
-                created_entities += 1
+                if idx % PRIMITIVE_BATCH_SIZE == 0:
+                    created_entities += await _flush_primitives_batch(
+                        session,
+                        primitive_entities_batch,
+                        primitive_layer_links_batch,
+                        processed_count=idx,
+                        primitives_total=len(primitives),
+                    )
 
-            await session.commit()
+            if primitive_entities_batch:
+                created_entities += await _flush_primitives_batch(
+                    session,
+                    primitive_entities_batch,
+                    primitive_layer_links_batch,
+                    processed_count=len(primitives),
+                    primitives_total=len(primitives),
+                    final=True,
+                )
+            else:
+                await session.commit()
 
     return str(project_id), created_entities
 
@@ -624,7 +724,9 @@ def run_process_tree(
     """Обходит каталог/файл, разбирает DWG/DXF последовательно и сохраняет дерево в БД."""
 
     root_path = source_path if source_path.is_dir() else source_path.parent
+    logger.info("Старт обработки")
     if source_path.is_file():
+        logger.info("Обрабатываем файл: %s", source_path)
         suffix = source_path.suffix.lower()
         if suffix not in {".dwg", ".dxf", ".dxb"}:
             raise ValueError("Поддерживаются только файлы DWG, DXF, DXB.")
@@ -639,6 +741,7 @@ def run_process_tree(
             }
         ]
     elif source_path.is_dir():
+        logger.info("Обрабатываем каталог: %s", source_path)
         entries = list(DWGTreeProcessor(source_path).walk(source_path))
         if not entries:
             raise ValueError(
@@ -647,6 +750,7 @@ def run_process_tree(
     else:
         raise ValueError(f"Путь {source_path} не найден.")
 
+    logger.info("Найдено файлов для обработки: %d", len(entries))
     processed_entries = process_batch(entries, name_tags_config=name_tags_config)
 
     project_id: str | None = None

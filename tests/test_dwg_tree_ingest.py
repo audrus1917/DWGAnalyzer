@@ -81,14 +81,14 @@ def test_collect_dxf_summary_includes_text_primitives(tmp_path: Path) -> None:
     assert any(
         primitive["type"] == "TEXT"
         and primitive["text"] == "Подпись"
-        and primitive["insert"] == [1.0, 2.0, 0.0]
+        and primitive["attribs"]["insert"] == [1.0, 2.0, 0.0]
         and primitive["block"] == "TEXT_BLOCK"
         for primitive in primitives
     )
     assert any(
         primitive["type"] == "MTEXT"
         and primitive["text"] == "Многострочный текст"
-        and primitive["insert"] == [3.0, 4.0, 0.0]
+        and primitive["attribs"]["insert"] == [3.0, 4.0, 0.0]
         and primitive["block"] == "NOTES_BLOCK"
         for primitive in primitives
     )
@@ -132,8 +132,8 @@ def test_collect_dxf_summary_includes_insert_primitives_for_blocks(tmp_path: Pat
     assert len(primitives) == 1
     assert primitives[0]["type"] == "INSERT"
     assert primitives[0]["block"] == "MARKER"
-    assert primitives[0]["insert"] == [10.0, 20.0, 0.0]
-    assert primitives[0]["insert"] == [10.0, 20.0, 0.0]
+    assert primitives[0]["attribs"]["insert"] == [10.0, 20.0, 0.0]
+    assert primitives[0]["attribs"]["insert"] == [10.0, 20.0, 0.0]
     assert primitives[0]["layer"] == "INSERTS"
 
 
@@ -230,7 +230,8 @@ def test_save_tree_to_db_sets_file_id_for_all_descendants(
         "source_ref": str(tmp_path / "sample.dxf"),
         "file_md5": "abc",
         "summary": {
-            "layouts": [{"name": "Model", "layers": ["A-TEXT"]}],
+            "layouts": [{"name": "Model"}],
+            "layers": [{"name": "A-TEXT", "data": {}}],
             "blocks": [{"name": "BLOCK_A", "entity_count": 1, "is_table": False}],
             "primitives": [
                 {
@@ -256,6 +257,10 @@ def test_save_tree_to_db_sets_file_id_for_all_descendants(
                 if obj.id is None:
                     obj.id = uuid.uuid4()
                 added_entities.append(obj)
+
+        def add_all(self, objects):
+            for obj in objects:
+                self.add(obj)
 
         async def flush(self):
             return None
@@ -301,6 +306,185 @@ def test_save_tree_to_db_sets_file_id_for_all_descendants(
 
     assert descendants
     assert all(entity.file_id == file_entity.id for entity in descendants)
+
+
+def test_save_tree_to_db_commits_primitives_in_batches(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    primitives = [
+        {
+            "type": "TEXT",
+            "text": f"Подпись {index}",
+            "block": "BLOCK_A",
+            "layout": "Model",
+            "layer": "A-TEXT",
+        }
+        for index in range(1001)
+    ]
+    processed_entry = {
+        "kind": "file",
+        "source": str(tmp_path / "sample.dxf"),
+        "name": "sample.dxf",
+        "file_type": ".dxf",
+        "parent_rel": "",
+        "source_ref": str(tmp_path / "sample.dxf"),
+        "file_md5": "abc",
+        "summary": {
+            "layouts": [{"name": "Model"}],
+            "layers": [{"name": "A-TEXT", "data": {}}],
+            "blocks": [{"name": "BLOCK_A", "entity_count": 1001, "is_table": False}],
+            "primitives": primitives,
+        },
+    }
+
+    commit_calls = 0
+    primitive_entity_batch_sizes: list[int] = []
+
+    class _FakeScalarResult:
+        def scalar_one_or_none(self):
+            return None
+
+    class _FakeSession:
+        def add(self, obj):
+            if isinstance(obj, Entity) and obj.id is None:
+                obj.id = uuid.uuid4()
+
+        def add_all(self, objects):
+            nonlocal primitive_entity_batch_sizes
+
+            objects = list(objects)
+            for obj in objects:
+                self.add(obj)
+            if objects and all(isinstance(obj, Entity) for obj in objects):
+                primitive_entity_batch_sizes.append(len(objects))
+
+        async def flush(self):
+            return None
+
+        async def execute(self, _stmt):
+            return _FakeScalarResult()
+
+        async def commit(self):
+            nonlocal commit_calls
+            commit_calls += 1
+
+    class _FakeSessionContext:
+        async def __aenter__(self):
+            return _FakeSession()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_async_session_factory():
+        return _FakeSessionContext()
+
+    monkeypatch.setattr("parsedwg.process_tree.async_session_factory", fake_async_session_factory)
+
+    asyncio.run(
+        save_tree_to_db(
+            root_path=str(tmp_path),
+            processed_entries=[processed_entry],
+            project_name="Test Project",
+        )
+    )
+
+    assert primitive_entity_batch_sizes == [1000, 1]
+    assert commit_calls == 2
+
+
+def test_save_tree_to_db_uses_tqdm_for_primitives(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    processed_entry = {
+        "kind": "file",
+        "source": str(tmp_path / "sample.dxf"),
+        "name": "sample.dxf",
+        "file_type": ".dxf",
+        "parent_rel": "",
+        "source_ref": str(tmp_path / "sample.dxf"),
+        "file_md5": "abc",
+        "summary": {
+            "layouts": [{"name": "Model"}],
+            "layers": [{"name": "A-TEXT", "data": {}}],
+            "blocks": [{"name": "BLOCK_A", "entity_count": 2, "is_table": False}],
+            "primitives": [
+                {
+                    "type": "TEXT",
+                    "text": "Подпись 1",
+                    "block": "BLOCK_A",
+                    "layout": "Model",
+                    "layer": "A-TEXT",
+                },
+                {
+                    "type": "TEXT",
+                    "text": "Подпись 2",
+                    "block": "BLOCK_A",
+                    "layout": "Model",
+                    "layer": "A-TEXT",
+                },
+            ],
+        },
+    }
+
+    captured: dict[str, object] = {}
+
+    def fake_tqdm(iterable, **kwargs):
+        captured["total"] = kwargs.get("total")
+        captured["desc"] = kwargs.get("desc")
+        captured["unit"] = kwargs.get("unit")
+        captured["disable"] = kwargs.get("disable")
+        return iterable
+
+    class _FakeScalarResult:
+        def scalar_one_or_none(self):
+            return None
+
+    class _FakeSession:
+        def add(self, obj):
+            if isinstance(obj, Entity) and obj.id is None:
+                obj.id = uuid.uuid4()
+
+        def add_all(self, objects):
+            for obj in objects:
+                self.add(obj)
+
+        async def flush(self):
+            return None
+
+        async def execute(self, _stmt):
+            return _FakeScalarResult()
+
+        async def commit(self):
+            return None
+
+    class _FakeSessionContext:
+        async def __aenter__(self):
+            return _FakeSession()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_async_session_factory():
+        return _FakeSessionContext()
+
+    monkeypatch.setattr("parsedwg.process_tree._tqdm", fake_tqdm)
+    monkeypatch.setattr("parsedwg.process_tree.sys.stderr.isatty", lambda: True)
+    monkeypatch.setattr("parsedwg.process_tree.async_session_factory", fake_async_session_factory)
+
+    asyncio.run(
+        save_tree_to_db(
+            root_path=str(tmp_path),
+            processed_entries=[processed_entry],
+            project_name="Test Project",
+        )
+    )
+
+    assert captured["total"] == 2
+    assert captured["desc"] == "Primitives"
+    assert captured["unit"] == "primitive"
+    assert captured["disable"] is False
 
 
 def test_run_process_tree_uses_single_process_pipeline(tmp_path: Path, monkeypatch) -> None:

@@ -10,7 +10,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from ezdxf.document import Drawing
-from ezdxf.filemanagement import readfile
+from ezdxf.filemanagement import new, readfile
 from ezdxf.addons.odafc import readfile as read_odafc
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -278,6 +278,23 @@ class DXFExplorer:
         workbook.save(output_path)
         return output_path
 
+    @staticmethod
+    def _make_default_export_path(
+        drawing: Path,
+        file_stem: str,
+        suffix: str,
+    ) -> Path:
+        safe_file_name = re.sub(r"[^0-9A-Za-zА-Яа-я._-]+", "_", file_stem).strip("_")
+        safe_file_name = safe_file_name or drawing.stem
+        output_path = drawing.parent / f"{safe_file_name}{suffix}"
+
+        duplicate_index = 2
+        while output_path.exists():
+            output_path = drawing.parent / f"{safe_file_name}_{duplicate_index}{suffix}"
+            duplicate_index += 1
+
+        return output_path
+
     def export_tables_from_db(
         self,
         table_blocks: list[dict[str, object]],
@@ -396,6 +413,123 @@ class DXFExplorer:
         else:
             logger.info("Табличная структура не определена, XLSX не создан.")
         return 0
+
+    def export_block_png(
+        self,
+        block_name: str,
+        output_path: Path | None = None,
+        dpi: int = 300,
+    ) -> Path:
+        """Экспортирует указанный блок в PNG."""
+
+        return self._export_block_image(
+            block_name,
+            image_format="png",
+            output_path=output_path,
+            dpi=dpi,
+        )
+
+    def export_block_svg(
+        self,
+        block_name: str,
+        output_path: Path | None = None,
+    ) -> Path:
+        """Экспортирует указанный блок в SVG."""
+
+        return self._export_block_image(
+            block_name,
+            image_format="svg",
+            output_path=output_path,
+        )
+
+    def _export_block_image(
+        self,
+        block_name: str,
+        image_format: str,
+        output_path: Path | None = None,
+        dpi: int = 300,
+    ) -> Path:
+        """Экспортирует указанный блок в графический файл."""
+
+        normalized_format = image_format.lower()
+        if normalized_format not in {"png", "svg"}:
+            raise ValueError(f"Неподдерживаемый формат экспорта: {image_format}.")
+
+        if dpi <= 0:
+            raise ValueError("DPI должен быть положительным числом.")
+
+        logger.info(
+            "Экспортируем блок '%s' в %s из файла: %s",
+            block_name,
+            normalized_format.upper(),
+            self.drawing,
+        )
+        doc = self._read_document()
+        block = doc.blocks.get(block_name)
+        if block is None:
+            logger.error("Блок '%s' не найден в файле.", block_name)
+            raise ValueError(f"Блок '{block_name}' не найден в файле.")
+
+        try:
+            import matplotlib
+
+            matplotlib.use("Agg")
+
+            import matplotlib.pyplot as plt
+            from ezdxf.addons.drawing import Frontend, RenderContext
+            from ezdxf.addons.drawing.config import Configuration
+            from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
+            from ezdxf.addons.importer import Importer
+        except ImportError as exc:
+            raise RuntimeError(
+                "Для экспорта блока в PNG/SVG требуется установленный matplotlib."
+            ) from exc
+
+        target_doc = new()
+        importer = Importer(doc, target_doc)
+        importer.import_block(block_name)
+        importer.finalize()
+        target_doc.modelspace().add_blockref(block_name, (0, 0))
+
+        if output_path is None:
+            resolved_output_path = self._make_default_export_path(
+                self.drawing,
+                f"{self.drawing.stem}-{block_name}",
+                f".{normalized_format}",
+            )
+        else:
+            resolved_output_path = output_path
+            if resolved_output_path.suffix.lower() != f".{normalized_format}":
+                resolved_output_path = resolved_output_path.with_suffix(
+                    f".{normalized_format}"
+                )
+            resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        figure = plt.figure(figsize=(8, 8))
+        try:
+            axis = figure.add_axes([0, 0, 1, 1])
+            axis.set_axis_off()
+            axis.set_aspect("equal", adjustable="datalim")
+            axis.margins(0.05)
+
+            context = RenderContext(target_doc)
+            backend = MatplotlibBackend(axis)
+            Frontend(context, backend, config=Configuration()).draw_layout(target_doc.modelspace())
+            axis.autoscale_view()
+
+            figure.savefig(
+                resolved_output_path,
+                dpi=dpi,
+                format=normalized_format,
+                bbox_inches="tight",
+                pad_inches=0.05,
+                facecolor="white",
+            )
+        finally:
+            plt.close(figure)
+
+        logger.info("%s сохранён: %s", normalized_format.upper(), resolved_output_path)
+        return resolved_output_path
 
     @staticmethod
     def _md5_file(path: Path) -> str:

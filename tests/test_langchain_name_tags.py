@@ -2,6 +2,7 @@ import pytest
 
 from parsedwg.langchain_name_tags import LangChainNameTagsExtractor
 from parsedwg.langchain_name_tags import _build_prompt_template
+from parsedwg.langchain_name_tags import _build_scored_token_tags_prompt_template
 from parsedwg.langchain_name_tags import _build_token_tags_prompt_template
 
 
@@ -19,6 +20,15 @@ def test_token_tags_prompt_template_uses_only_tokens_variable() -> None:
     chat_prompt_template_cls = getattr(prompts, "ChatPromptTemplate")
 
     prompt = _build_token_tags_prompt_template(chat_prompt_template_cls)
+
+    assert prompt.input_variables == ["tokens"]
+
+
+def test_scored_token_tags_prompt_template_uses_only_tokens_variable() -> None:
+    prompts = pytest.importorskip("langchain_core.prompts")
+    chat_prompt_template_cls = getattr(prompts, "ChatPromptTemplate")
+
+    prompt = _build_scored_token_tags_prompt_template(chat_prompt_template_cls)
 
     assert prompt.input_variables == ["tokens"]
 
@@ -48,3 +58,60 @@ def test_extract_token_meanings_json_returns_json_object() -> None:
     meanings_json = extractor.extract_token_meanings_json(["M_Doors"])
 
     assert meanings_json == '{\n  "M_Doors": [\n    "двери",\n    "проемы",\n    "архитектура"\n  ]\n}'
+
+
+def test_extract_token_meanings_scored_parses_json_and_keeps_max_score() -> None:
+    class StubChain:
+        def invoke(self, _payload):
+            return (
+                '{"M_Doors": ['
+                '{"meaning": "двери", "score": 0.91}, '
+                '{"meaning": "двери", "score": 0.73}, '
+                '{"label": "проемы", "confidence": "0.42"}, '
+                '{"tag": "вход", "weight": 1.4}]}'
+            )
+
+    extractor = LangChainNameTagsExtractor(
+        chain=StubChain(),
+        token_tags_chain=StubChain(),
+        scored_token_tags_chain=StubChain(),
+    )
+
+    meanings = extractor.extract_token_meanings_scored(["M_Doors"])
+
+    assert meanings == {
+        "M_Doors": [
+            {"meaning": "вход", "score": 1.0},
+            {"meaning": "двери", "score": 0.91},
+            {"meaning": "проемы", "score": 0.42},
+        ]
+    }
+
+
+def test_extract_token_meanings_scored_json_accepts_plain_strings_fallback() -> None:
+    class StubChain:
+        def invoke(self, _payload):
+            return '{"M_Doors": ["двери", "проемы"]}'
+
+    extractor = LangChainNameTagsExtractor(
+        chain=StubChain(),
+        token_tags_chain=StubChain(),
+        scored_token_tags_chain=StubChain(),
+    )
+
+    meanings_json = extractor.extract_token_meanings_scored_json(["M_Doors"])
+
+    assert meanings_json == (
+        '{\n'
+        '  "M_Doors": [\n'
+        '    {\n'
+        '      "meaning": "двери",\n'
+        '      "score": null\n'
+        '    },\n'
+        '    {\n'
+        '      "meaning": "проемы",\n'
+        '      "score": null\n'
+        '    }\n'
+        '  ]\n'
+        '}'
+    )

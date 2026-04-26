@@ -56,6 +56,38 @@ def build_args_parser() -> argparse.ArgumentParser:
     )
     extract_block_parser.add_argument("block_name", help="Имя блока для извлечения")
 
+    export_block_png_parser = subparsers.add_parser(
+        "export-block-png",
+        parents=[extract_common],
+        help="Экспортировать выбранный блок в PNG.",
+    )
+    export_block_png_parser.add_argument("block_name", help="Имя блока для экспорта")
+    export_block_png_parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Путь к PNG-файлу результата (по умолчанию: рядом с исходным файлом).",
+    )
+    export_block_png_parser.add_argument(
+        "--dpi",
+        type=int,
+        default=300,
+        help="Разрешение PNG в DPI (по умолчанию: 300).",
+    )
+
+    export_block_svg_parser = subparsers.add_parser(
+        "export-block-svg",
+        parents=[extract_common],
+        help="Экспортировать выбранный блок в SVG.",
+    )
+    export_block_svg_parser.add_argument("block_name", help="Имя блока для экспорта")
+    export_block_svg_parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Путь к SVG-файлу результата (по умолчанию: рядом с исходным файлом).",
+    )
+
     file_stat_parser = subparsers.add_parser(
         "file-stat",
         parents=[extract_common],
@@ -222,6 +254,11 @@ def build_args_parser() -> argparse.ArgumentParser:
         default="ollama",
         help="API ключ для AI провайдера (для Ollama можно оставить по умолчанию).",
     )
+    extract_token_tags_parser.add_argument(
+        "--with-scores",
+        action="store_true",
+        help="Вернуть для каждого смысла объект с полем meaning и score от 0 до 1.",
+    )
 
     verify_extraction_parser = subparsers.add_parser(
         "verify-extraction",
@@ -284,6 +321,65 @@ def build_args_parser() -> argparse.ArgumentParser:
         "--yes",
         action="store_true",
         help="Подтвердить удаление без интерактивного запроса.",
+    )
+
+    category_add_parser = subparsers.add_parser(
+        "category-add",
+        help="Добавить категорию.",
+    )
+    category_add_parser.add_argument("name", help="Название категории.")
+    category_add_parser.add_argument(
+        "--description",
+        dest="description",
+        default=None,
+        help="Описание категории.",
+    )
+    category_add_parser.add_argument(
+        "--parent-id",
+        dest="parent_id",
+        default=None,
+        help="UUID родительской категории.",
+    )
+
+    category_update_parser = subparsers.add_parser(
+        "category-update",
+        help="Изменить существующую категорию.",
+    )
+    category_update_parser.add_argument("category_id", help="UUID категории.")
+    category_update_parser.add_argument("--name", dest="name", default=None, help="Новое название.")
+    category_update_parser.add_argument(
+        "--description",
+        dest="description",
+        default=None,
+        help="Новое описание.",
+    )
+    category_update_parser.add_argument(
+        "--parent-id",
+        dest="parent_id",
+        default=None,
+        help="UUID новой родительской категории.",
+    )
+
+    category_delete_parser = subparsers.add_parser(
+        "category-delete",
+        help="Удалить категорию.",
+    )
+    category_delete_parser.add_argument("category_id", help="UUID категории.")
+    category_delete_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Подтвердить удаление без интерактивного запроса.",
+    )
+
+    category_list_parser = subparsers.add_parser(
+        "category-list",
+        help="Показать список категорий.",
+    )
+    category_list_parser.add_argument(
+        "--parent-id",
+        dest="parent_id",
+        default=None,
+        help="Вернуть только прямых потомков указанной категории.",
     )
 
     ingest_docs_parser = subparsers.add_parser(
@@ -402,3 +498,8 @@ def out(value: Any) -> None:
     print(value)
 
 
+def safe_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
