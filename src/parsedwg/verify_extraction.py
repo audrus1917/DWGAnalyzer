@@ -18,12 +18,11 @@ from .process_tree import collect_dxf_summary
 
 
 type PrimitiveCountMap = dict[str, dict[str, int]]
-type LayoutLayersMap = dict[str, set[str]]
 
 logger = logging.getLogger(__file__)
 
 
-def _count_primitives_by_block_and_type(primitives: list[dict[str, object]]) -> PrimitiveCountMap:
+def count_primitives(primitives: list[dict[str, object]]) -> PrimitiveCountMap:
     counts: defaultdict[str, defaultdict[str, int]] = defaultdict(lambda: defaultdict(int))
 
     for primitive in primitives:
@@ -40,7 +39,7 @@ def _count_primitives_by_block_and_type(primitives: list[dict[str, object]]) -> 
 
 
 
-def _compare_counts(expected: PrimitiveCountMap, actual: PrimitiveCountMap) -> list[str]:
+def compare_counts(expected: PrimitiveCountMap, actual: PrimitiveCountMap) -> list[str]:
     mismatches: list[str] = []
     for block_name in sorted(set(expected) | set(actual)):
         expected_types = expected.get(block_name, {})
@@ -61,22 +60,80 @@ def _compare_counts(expected: PrimitiveCountMap, actual: PrimitiveCountMap) -> l
     return mismatches
 
 
-def _compare_layout_layers(expected: LayoutLayersMap, actual: LayoutLayersMap) -> list[str]:
+def compare_layers(expected_layers: set[str], actual_layers: set[str]) -> list[str]:
     mismatches: list[str] = []
-    for layout_name in sorted(set(expected) | set(actual)):
-        expected_layers = expected.get(layout_name, set())
-        actual_layers = actual.get(layout_name, set())
-        missing_layers = sorted(expected_layers - actual_layers)
-        extra_layers = sorted(actual_layers - expected_layers)
-        if missing_layers:
-            mismatches.append(
-                f"layout={layout_name!r} отсутствуют слои в БД: {', '.join(missing_layers)}"
-            )
-        if extra_layers:
-            mismatches.append(
-                f"layout={layout_name!r} лишние слои в БД: {', '.join(extra_layers)}"
-            )
+    missing_layers = sorted(expected_layers - actual_layers)
+    extra_layers = sorted(actual_layers - expected_layers)
+    if missing_layers:
+        mismatches.append(
+            f"Отсутствуют слои в БД: {', '.join(missing_layers)}"
+        )
+    if extra_layers:
+        mismatches.append(
+            f"Лишние слои в БД: {', '.join(extra_layers)}"
+        )
     return mismatches
+
+
+def compare_layout_names(expected_layouts: set[str], actual_layouts: set[str]) -> list[str]:
+    mismatches: list[str] = []
+    missing_layouts = sorted(expected_layouts - actual_layouts)
+    extra_layouts = sorted(actual_layouts - expected_layouts)
+    if missing_layouts:
+        mismatches.append(
+            f"Отсутствуют layout в БД: {', '.join(missing_layouts)}"
+        )
+    if extra_layouts:
+        mismatches.append(
+            f"Лишние layout в БД: {', '.join(extra_layouts)}"
+        )
+    return mismatches
+
+
+def _safe_int(value: object) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _collect_expected_layer_names(source_summary: dict[str, Any]) -> set[str]:
+    layers_payload = source_summary.get("layers")
+    if isinstance(layers_payload, list):
+        return {
+            str(layer.get("name", "")).strip()
+            for layer in layers_payload
+            if isinstance(layer, dict) and str(layer.get("name", "")).strip()
+        }
+
+    collected: set[str] = set()
+    layouts_payload = source_summary.get("layouts")
+    if not isinstance(layouts_payload, list):
+        return collected
+
+    for layout in layouts_payload:
+        if not isinstance(layout, dict):
+            continue
+        layout_layers = layout.get("layers")
+        if not isinstance(layout_layers, list):
+            continue
+        collected.update(
+            str(layer_name).strip()
+            for layer_name in layout_layers
+            if str(layer_name).strip()
+        )
+    return collected
 
 
 def build_verification_report(
@@ -92,19 +149,36 @@ def build_verification_report(
     primitives = cast(list[Entity], db_snapshot["primitives"])
     on_layer_links = cast(set[tuple[uuid.UUID, uuid.UUID]], db_snapshot["on_layer_links"])
 
-    layout_names_by_id = {layout.id: layout.name for layout in layouts}
-    actual_layout_layers: LayoutLayersMap = defaultdict(set)
-    for layer in layers:
-        layout_name = layout_names_by_id.get(layer.parent_id)
-        if layout_name:
-            actual_layout_layers[str(layout_name)].add(layer.name)
+    expected_layout_names = {
+        str(layout.get("name", "")).strip()
+        for layout in cast(list[dict[str, object]], source_summary.get("layouts", []))
+        if str(layout.get("name", "")).strip()
+    }
+    actual_layout_names = {
+        str(layout.name).strip()
+        for layout in layouts
+        if str(layout.name).strip()
+    }
+
+    expected_layer_names = _collect_expected_layer_names(source_summary)
+    actual_layer_names = {
+        str(layer.name).strip()
+        for layer in layers
+        if str(layer.name).strip()
+    }
+
+    layout_mismatches = compare_layout_names(expected_layout_names, actual_layout_names)
+    layout_mismatches.extend(compare_layers(expected_layer_names, actual_layer_names))
 
     expected_blocks = {
-        str(block.get("name", "")).strip(): int(block.get("entity_count", 0))
+        str(block.get("name", "")).strip(): _safe_int(block.get("entity_count", 0))
         for block in cast(list[dict[str, object]], source_summary["blocks"])
         if str(block.get("name", "")).strip()
     }
-    actual_blocks = {block.name: int((block.data or {}).get("entity_count", 0)) for block in blocks}
+    actual_blocks = {
+        block.name: _safe_int((block.data or {}).get("entity_count", 0))
+        for block in blocks
+    }
 
     block_mismatches: list[str] = []
     for block_name in sorted(set(expected_blocks) | set(actual_blocks)):
@@ -121,10 +195,10 @@ def build_verification_report(
                 f"block={block_name!r} entity_count файл={expected_count} БД={actual_count}"
             )
 
-    expected_primitive_counts = _count_primitives_by_block_and_type(
+    expected_primitive_counts = count_primitives(
         cast(list[dict[str, object]], source_summary["primitives"])
     )
-    actual_primitive_counts = _count_primitives_by_block_and_type(
+    actual_primitive_counts = count_primitives(
         [
             {
                 "block": (primitive.data or {}).get("block"),
@@ -133,7 +207,10 @@ def build_verification_report(
             for primitive in primitives
         ]
     )
-    primitive_count_mismatches = _compare_counts(expected_primitive_counts, actual_primitive_counts)
+    primitive_count_mismatches = compare_counts(
+        expected_primitive_counts, 
+        actual_primitive_counts
+    )
 
     block_names = {block.name for block in blocks}
     unresolved_inserts: list[str] = []
@@ -145,29 +222,24 @@ def build_verification_report(
         if target_block and target_block not in block_names:
             unresolved_inserts.append(target_block)
 
-    layer_by_key = {
-        (layout_names_by_id.get(layer.parent_id), layer.name): layer
-        for layer in layers
-        if layout_names_by_id.get(layer.parent_id) is not None
-    }
+    layer_by_name = {str(layer.name): layer for layer in layers if str(layer.name).strip()}
     missing_layer_links: list[str] = []
     for primitive in primitives:
         primitive_data = primitive.data or {}
-        layout_name = primitive_data.get("layout")
         layer_name = primitive_data.get("layer")
-        if not isinstance(layout_name, str) or not isinstance(layer_name, str):
+        if not isinstance(layer_name, str):
             continue
 
-        layer_entity = layer_by_key.get((layout_name, layer_name))
+        layer_entity = layer_by_name.get(layer_name)
         if layer_entity is None:
             missing_layer_links.append(
-                f"primitive={primitive.id} layout={layout_name!r} layer={layer_name!r}: нет layer entity"
+                f"primitive={primitive.id} layer={layer_name!r}: нет layer entity"
             )
             continue
 
         if (primitive.id, layer_entity.id) not in on_layer_links:
             missing_layer_links.append(
-                f"primitive={primitive.id} layout={layout_name!r} layer={layer_name!r}: нет link on_layer"
+                f"primitive={primitive.id} layer={layer_name!r}: нет link on_layer"
             )
 
     wrong_file_id_entities: list[str] = []
@@ -180,6 +252,7 @@ def build_verification_report(
 
     ok = not any(
         [
+            layout_mismatches,
             block_mismatches,
             primitive_count_mismatches,
             unresolved_inserts,
@@ -192,7 +265,9 @@ def build_verification_report(
         "ok": ok,
         "file_id": str(file_entity.id),
         "layouts": {
-            "actual": len(actual_layout_layers),
+            "expected": len(expected_layout_names),
+            "actual": len(actual_layout_names),
+            "mismatches": layout_mismatches,
         },
         "blocks": {
             "expected": len(expected_blocks),
@@ -316,13 +391,12 @@ async def _load_db_snapshot(file_entity: Entity) -> dict[str, object]:
         )
         blocks = block_result.scalars().all()
 
-        layout_ids = [layout.id for layout in layouts]
         block_ids = [block.id for block in blocks]
 
-        if layout_ids:
+        if file_entity.id is not None:
             layer_result = await session.execute(
                 select(Entity)
-                .where(Entity.parent_id.in_(layout_ids))
+                .where(Entity.parent_id == file_entity.id)
                 .where(Entity.entity_type == EntityType.layer)
                 .order_by(Entity.name.asc())
             )
@@ -335,7 +409,7 @@ async def _load_db_snapshot(file_entity: Entity) -> dict[str, object]:
             primitive_result = await session.execute(
                 select(Entity)
                 .join(parent_alias, Entity.parent_id == parent_alias.id)
-                .where(parent_alias.entity_type == EntityType.block)
+                .where(parent_alias.id.in_(block_ids))
                 .order_by(Entity.created_at.asc())
             )
             primitives = primitive_result.scalars().all()
@@ -343,12 +417,14 @@ async def _load_db_snapshot(file_entity: Entity) -> dict[str, object]:
             primitives = []
 
         if primitives:
+            layer_ids = [layer.id for layer in layers]
             link_result = await session.execute(
                 select(EntityToEntity.src_id, EntityToEntity.dst_id)
-                .join(Entity, EntityToEntity.src_id == Entity.id)
+                .join(Entity, Entity.id == EntityToEntity.src_id)
                 .where(
                     EntityToEntity.link == "on_layer",
-                    Entity.is_primitive == True,
+                    Entity.is_primitive.is_(True),
+                    EntityToEntity.dst_id.in_(layer_ids),
                 )
             )
             on_layer_links = set(link_result.all())
