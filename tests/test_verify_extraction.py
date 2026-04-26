@@ -14,7 +14,8 @@ def test_build_verification_report_is_ok_for_matching_snapshot() -> None:
 
     report = build_verification_report(
         source_summary={
-            "layouts": [{"name": "Model", "layers": ["A-TEXT"]}],
+            "layouts": [{"name": "Model"}],
+            "layers": [{"name": "A-TEXT", "data": {}}],
             "blocks": [{"name": "BLOCK_A", "entity_count": 2}],
             "primitives": [
                 {"block": "BLOCK_A", "type": "TEXT", "layout": "Model", "layer": "A-TEXT"},
@@ -31,7 +32,7 @@ def test_build_verification_report_is_ok_for_matching_snapshot() -> None:
             "file_entity": SimpleNamespace(id=file_id),
             "layouts": [SimpleNamespace(id=layout_id, name="Model", file_id=file_id)],
             "layers": [
-                SimpleNamespace(id=layer_id, name="A-TEXT", parent_id=layout_id, file_id=file_id)
+                SimpleNamespace(id=layer_id, name="A-TEXT", parent_id=file_id, file_id=file_id)
             ],
             "blocks": [
                 SimpleNamespace(
@@ -82,7 +83,8 @@ def test_build_verification_report_detects_mismatches() -> None:
 
     report = build_verification_report(
         source_summary={
-            "layouts": [{"name": "Model", "layers": ["A-TEXT"]}],
+            "layouts": [{"name": "Model"}],
+            "layers": [{"name": "A-TEXT", "data": {}}],
             "blocks": [{"name": "BLOCK_A", "entity_count": 2}],
             "primitives": [
                 {"block": "BLOCK_A", "type": "TEXT", "layout": "Model", "layer": "A-TEXT"},
