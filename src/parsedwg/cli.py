@@ -9,6 +9,9 @@ import sys
 
 from pathlib import Path
 
+from .langchain_name_tags import LangChainAgentConfig, LangChainNameTagsExtractor
+
+
 from . import constants
 from .explorer import DXFExplorer
 from .process_tree import run_process_tree
@@ -19,9 +22,11 @@ type ResultRow = dict[str, object]
 
 logging.basicConfig(
     level=logging.DEBUG,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(filename)s - %(levelname)s - %(message)s",
 )
 logging.getLogger("ezdxf").disabled = True
+logging.getLogger('fontTools.ttLib.ttFont').setLevel(logging.WARNING)
+logging.getLogger('matplotlib.font_manager').disabled = True
 logger = logging.getLogger(__name__)
 
 def _save_rows_to_json(output_path: Path, rows: list[ResultRow]) -> None:
@@ -294,8 +299,6 @@ def handle_extract_token_tags_command(
     """Извлекает JSON-словарь смыслов через LLM для списка токенов."""
 
     try:
-        from .langchain_name_tags import LangChainAgentConfig, LangChainNameTagsExtractor
-
         merged_tokens: list[str] = []
         seen_tokens: set[str] = set()
 

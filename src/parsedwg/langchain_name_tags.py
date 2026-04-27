@@ -133,7 +133,12 @@ class LangChainNameTagsExtractor:
     def extract_token_meanings_json(self, tokens: list[str]) -> str:
         return json.dumps(self.extract_token_meanings(tokens), ensure_ascii=False, indent=2)
 
-    def extract_token_meanings_scored(self, tokens: list[str]) -> dict[str, list[dict[str, object]]]:
+    def extract_token_meanings_scored(
+        self, 
+        tokens: list[str]
+    ) -> dict[str, list[dict[str, object]]]:
+        """Возвращает словарь token -> list[{"meaning": str, "score": float | None}]."""
+        
         cleaned_tokens = [token.strip() for token in tokens if isinstance(token, str) and token.strip()]
         if not cleaned_tokens:
             return {}
