@@ -1,4 +1,5 @@
 from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import ARRAY
 
 from parsedwg.orm import Category, Entity, Project, category_to_entity
 
@@ -69,6 +70,8 @@ def test_category_has_required_columns() -> None:
     assert "name" in columns
     assert "description" in columns
     assert "parent_id" in columns
+    assert "aliases" in columns
+    assert isinstance(columns.aliases.type, ARRAY)
 
 
 def test_category_to_entity_has_required_fks() -> None:

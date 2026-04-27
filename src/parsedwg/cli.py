@@ -29,6 +29,24 @@ logging.getLogger('fontTools.ttLib.ttFont').setLevel(logging.WARNING)
 logging.getLogger('matplotlib.font_manager').disabled = True
 logger = logging.getLogger(__name__)
 
+
+def _write_progress_line(message: str, previous_width: int = 0) -> int:
+    """Обновляет одну строку прогресса в stdout."""
+
+    width = max(previous_width, len(message))
+    sys.stdout.write("\r" + message.ljust(width))
+    sys.stdout.flush()
+    return width
+
+
+def _finish_progress_line(width: int) -> None:
+    """Завершает строку прогресса переводом строки."""
+
+    if width <= 0:
+        return
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
 def _save_rows_to_json(output_path: Path, rows: list[ResultRow]) -> None:
     """Сохраняет строки результата в JSON-файл."""
 
@@ -254,8 +272,6 @@ def handle_extract_name_tags_command(
     try:
         ai_extractor = None
         if ai_name_tags:
-            from .langchain_name_tags import LangChainAgentConfig, LangChainNameTagsExtractor
-
             ensure_config = get_name_tags_config(
                 enabled=True,
                 model=ai_model,
@@ -297,6 +313,7 @@ def handle_extract_token_tags_command(
     with_scores: bool = False,
 ) -> int:
     """Извлекает JSON-словарь смыслов через LLM для списка токенов."""
+    token_context = "строительство, чертеж"
 
     try:
         merged_tokens: list[str] = []
@@ -328,15 +345,206 @@ def handle_extract_token_tags_command(
             )
         )
         if with_scores:
-            out(extractor.extract_token_meanings_scored_json(merged_tokens))
+            out(
+                extractor.extract_token_meanings_scored_json(
+                    merged_tokens,
+                    extra_context=token_context,
+                )
+            )
         else:
-            out(extractor.extract_token_meanings_json(merged_tokens))
+            out(
+                extractor.extract_token_meanings_json(
+                    merged_tokens,
+                    extra_context=token_context,
+                )
+            )
         return constants.OK
     except RuntimeError as e:
         logger.error("Ошибка AI-режима: %s", e)
         return constants.ERROR
     except (FileNotFoundError, OSError, ValueError) as e:
         logger.error("Сбой извлечения тегов по токенам: %s", e)
+        return constants.UNBOUND_ERROR
+
+
+def handle_categorize_entities_command(
+    entity_ids: list[str] | None,
+    entity_type: str | None,
+    ai_model: str = "llama3.2",
+    ai_base_url: str = "http://localhost:11434/v1",
+    ai_api_key: str = "ollama",
+    workers: int = 1,
+    dry: bool = False,
+) -> int:
+    """Извлекает смысловые категории для сущностей и привязывает их в БД."""
+    extra_context = "строительство, чертеж"
+
+    from .db import assign_semantic_category, list_entities_for_semantic_categorization
+
+    if bool(entity_ids) == bool(entity_type):
+        logger.error("Нужно указать либо --entity-id, либо --entity-type.")
+        return constants.UNBOUND_ERROR
+    if workers <= 0:
+        logger.error("--workers должен быть больше 0.")
+        return constants.UNBOUND_ERROR
+
+    def _build_dry_row(entity: dict[str, str], meanings: list[dict[str, object]]) -> dict[str, object]:
+        normalized_meanings = [
+            {
+                "meaning": str(item.get("meaning")),
+                "score": item.get("score"),
+            }
+            for item in meanings
+            if isinstance(item, dict) and isinstance(item.get("meaning"), str)
+        ]
+        category_name = normalized_meanings[0]["meaning"] if normalized_meanings else ""
+        return {
+            "entity_id": str(entity["id"]),
+            "entity_name": str(entity["name"]),
+            "entity_type": str(entity["entity_type"]),
+            "category_id": "",
+            "category_name": category_name,
+            "matched_meaning": category_name,
+            "status": "dry-run" if normalized_meanings else "no-tags",
+            "meanings": normalized_meanings,
+        }
+
+    async def _run_stream() -> list[dict[str, object]]:
+        selected_entities = await list_entities_for_semantic_categorization(
+            entity_ids=entity_ids,
+            entity_type=entity_type,
+        )
+        if not selected_entities:
+            return []
+        if not dry:
+            out(f"Выбрано сущностей: {len(selected_entities)}")
+
+        queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
+        semaphore = asyncio.Semaphore(workers)
+
+        async def _extract_entity(entity: dict[str, str]) -> dict[str, object]:
+            async with semaphore:
+                text = "\n".join(
+                    part.strip()
+                    for part in [
+                        str(entity["name"]),
+                        str(entity["description"]),
+                    ]
+                    if str(part).strip()
+                )
+                meanings = await asyncio.to_thread(
+                    extractor.extract_scored_tags,
+                    text,
+                    extra_context,
+                )
+                return {
+                    "entity": entity,
+                    "entity_id": entity["id"],
+                    "meanings": meanings,
+                }
+
+        async def producer() -> None:
+            try:
+                tasks = [asyncio.create_task(_extract_entity(entity)) for entity in selected_entities]
+                for task in asyncio.as_completed(tasks):
+                    await queue.put(await task)
+            except (RuntimeError, OSError, ValueError) as exc:
+                await queue.put({"exception": exc})
+            finally:
+                await queue.put(None)
+
+        async def consumer() -> list[dict[str, object]]:
+            rows: list[dict[str, object]] = []
+            total = len(selected_entities)
+            progress_width = 0
+            while True:
+                item = await queue.get()
+                try:
+                    if item is None:
+                        if not dry:
+                            _finish_progress_line(progress_width)
+                        return rows
+                    if "exception" in item:
+                        raise item["exception"]  # type: ignore[misc]
+                    raw_meanings = item.get("meanings", [])
+                    normalized_meanings = (
+                        [value for value in raw_meanings if isinstance(value, dict)]
+                        if isinstance(raw_meanings, list)
+                        else []
+                    )
+                    if dry:
+                        entity_payload = item.get("entity")
+                        if not isinstance(entity_payload, dict):
+                            raise ValueError("Некорректная сущность в dry-режиме категоризации.")
+                        rows.append(_build_dry_row(entity_payload, normalized_meanings))
+                        continue
+
+                    saved_row = await assign_semantic_category(
+                        entity_id=str(item["entity_id"]),
+                        meanings=normalized_meanings,
+                    )
+                    rows.append(saved_row)
+                    progress_width = _write_progress_line(
+                        "Сохранено {current}/{total}: {entity_id} -> {category_name} [{status}]".format(
+                            current=len(rows),
+                            total=total,
+                            entity_id=saved_row["entity_id"],
+                            category_name=saved_row["category_name"] or "-",
+                            status=saved_row["status"],
+                        ),
+                        previous_width=progress_width,
+                    )
+                finally:
+                    queue.task_done()
+
+        producer_task = asyncio.create_task(producer())
+        consumer_task = asyncio.create_task(consumer())
+        await producer_task
+        await queue.join()
+        return await consumer_task
+
+    try:
+        extractor = LangChainNameTagsExtractor.from_config(
+            LangChainAgentConfig(
+                model=ai_model,
+                base_url=ai_base_url,
+                api_key=ai_api_key,
+            )
+        )
+
+        rows = asyncio.run(_run_stream())
+        if not rows:
+            if dry:
+                out("[]")
+            else:
+                out("Нет сущностей для категоризации.")
+            return constants.OK
+        if dry:
+            out(json.dumps(rows, ensure_ascii=False, indent=2))
+            return constants.OK
+        printable_rows: list[ResultRow] = []
+        for row in rows:
+            raw_meanings = row.get("meanings", [])
+            printable_rows.append(
+                {
+                    "entity_id": row["entity_id"],
+                    "entity_type": row["entity_type"],
+                    "entity_name": row["entity_name"],
+                    "category_name": row["category_name"],
+                    "matched_meaning": row["matched_meaning"],
+                    "status": row["status"],
+                    "meanings": ", ".join(str(value) for value in raw_meanings)
+                    if isinstance(raw_meanings, list)
+                    else "",
+                }
+            )
+        print_as_table(printable_rows)
+        return constants.OK
+    except RuntimeError as e:
+        logger.error("Ошибка AI-режима: %s", e)
+        return constants.ERROR
+    except (LookupError, OSError, ValueError) as e:
+        logger.error("Сбой категоризации сущностей: %s", e)
         return constants.UNBOUND_ERROR
 
 
@@ -739,6 +947,17 @@ def main(argv: list[str] | None = None) -> int:
                 ai_base_url=args.ai_base_url,
                 ai_api_key=args.ai_api_key,
                 with_scores=args.with_scores,
+            )
+
+        case "categorize-entities":
+            return_code = handle_categorize_entities_command(
+                entity_ids=args.entity_ids,
+                entity_type=args.entity_type,
+                ai_model=args.ai_model,
+                ai_base_url=args.ai_base_url,
+                ai_api_key=args.ai_api_key,
+                workers=args.workers,
+                dry=args.dry,
             )
 
         case "verify-extraction":

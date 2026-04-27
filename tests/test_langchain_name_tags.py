@@ -2,6 +2,7 @@ import pytest
 
 from parsedwg.langchain_name_tags import LangChainNameTagsExtractor
 from parsedwg.langchain_name_tags import _build_prompt_template
+from parsedwg.langchain_name_tags import _build_scored_text_tags_prompt_template
 from parsedwg.langchain_name_tags import _build_scored_token_tags_prompt_template
 from parsedwg.langchain_name_tags import _build_token_tags_prompt_template
 
@@ -21,7 +22,7 @@ def test_token_tags_prompt_template_uses_only_tokens_variable() -> None:
 
     prompt = _build_token_tags_prompt_template(chat_prompt_template_cls)
 
-    assert prompt.input_variables == ["tokens"]
+    assert prompt.input_variables == ["context", "tokens"]
 
 
 def test_scored_token_tags_prompt_template_uses_only_tokens_variable() -> None:
@@ -30,22 +31,43 @@ def test_scored_token_tags_prompt_template_uses_only_tokens_variable() -> None:
 
     prompt = _build_scored_token_tags_prompt_template(chat_prompt_template_cls)
 
-    assert prompt.input_variables == ["tokens"]
+    assert prompt.input_variables == ["context", "tokens"]
+
+
+def test_scored_text_tags_prompt_template_uses_only_text_variable() -> None:
+    prompts = pytest.importorskip("langchain_core.prompts")
+    chat_prompt_template_cls = getattr(prompts, "ChatPromptTemplate")
+
+    prompt = _build_scored_text_tags_prompt_template(chat_prompt_template_cls)
+
+    assert prompt.input_variables == ["context", "text"]
 
 
 def test_extract_token_meanings_parses_json_and_removes_duplicates() -> None:
+    captured_payloads: list[dict[str, str]] = []
+
     class StubChain:
-        def invoke(self, _payload):
+        def invoke(self, payload):
+            captured_payloads.append(payload)
             return '{"M_Doors": ["двери", "проемы", "двери"], "M_Wall_Glass": ["стекло"]}'
 
     extractor = LangChainNameTagsExtractor(chain=StubChain(), token_tags_chain=StubChain())
 
-    meanings = extractor.extract_token_meanings(["M_Doors", "M_Wall_Glass"])
+    meanings = extractor.extract_token_meanings(
+        ["M_Doors", "M_Wall_Glass"],
+        extra_context="строительство, чертеж",
+    )
 
     assert meanings == {
         "M_Doors": ["двери", "проемы"],
         "M_Wall_Glass": ["стекло"],
     }
+    assert captured_payloads == [
+        {
+            "tokens": "M_Doors, M_Wall_Glass",
+            "context": "строительство, чертеж",
+        }
+    ]
 
 
 def test_extract_token_meanings_json_returns_json_object() -> None:
@@ -61,8 +83,11 @@ def test_extract_token_meanings_json_returns_json_object() -> None:
 
 
 def test_extract_token_meanings_scored_parses_json_and_keeps_max_score() -> None:
+    captured_payloads: list[dict[str, str]] = []
+
     class StubChain:
-        def invoke(self, _payload):
+        def invoke(self, payload):
+            captured_payloads.append(payload)
             return (
                 '{"M_Doors": ['
                 '{"meaning": "двери", "score": 0.91}, '
@@ -77,7 +102,10 @@ def test_extract_token_meanings_scored_parses_json_and_keeps_max_score() -> None
         scored_token_tags_chain=StubChain(),
     )
 
-    meanings = extractor.extract_token_meanings_scored(["M_Doors"])
+    meanings = extractor.extract_token_meanings_scored(
+        ["M_Doors"],
+        extra_context="строительство, чертеж",
+    )
 
     assert meanings == {
         "M_Doors": [
@@ -86,6 +114,12 @@ def test_extract_token_meanings_scored_parses_json_and_keeps_max_score() -> None
             {"meaning": "проемы", "score": 0.42},
         ]
     }
+    assert captured_payloads == [
+        {
+            "tokens": "M_Doors",
+            "context": "строительство, чертеж",
+        }
+    ]
 
 
 def test_extract_token_meanings_scored_json_accepts_plain_strings_fallback() -> None:
@@ -115,3 +149,38 @@ def test_extract_token_meanings_scored_json_accepts_plain_strings_fallback() -> 
         '  ]\n'
         '}'
     )
+
+
+def test_extract_scored_tags_parses_json_and_keeps_max_score() -> None:
+    captured_payloads: list[dict[str, str]] = []
+
+    class StubChain:
+        def invoke(self, payload):
+            captured_payloads.append(payload)
+            return (
+                '{"tags": ['
+                '{"meaning": "насос", "score": 0.84}, '
+                '{"tag": "насос", "weight": 0.42}, '
+                '{"label": "пожаротушение", "confidence": "0.57"}]}'
+            )
+
+    extractor = LangChainNameTagsExtractor(
+        chain=StubChain(),
+        scored_text_tags_chain=StubChain(),
+    )
+
+    meanings = extractor.extract_scored_tags(
+        "Насос пожаротушения",
+        extra_context="строительство, чертеж",
+    )
+
+    assert meanings == [
+        {"meaning": "насос", "score": 0.84},
+        {"meaning": "пожаротушение", "score": 0.57},
+    ]
+    assert captured_payloads == [
+        {
+            "text": "Насос пожаротушения",
+            "context": "строительство, чертеж",
+        }
+    ]

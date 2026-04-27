@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -25,6 +26,24 @@ LLM_MODEL = settings.ollama_llm_model
 EMBED_DIM = 768
 # Таймаут для запросов к Ollama (генерация может быть долгой)
 _TIMEOUT = httpx.Timeout(settings.ollama_timeout_seconds)
+_QUESTION_TERM_PATTERNS = (
+    re.compile(
+        (
+            r"^\s*(?:что\s+такое|что\s+значит|объясни(?:\s+термин)?|"
+            r"поясни(?:\s+термин)?|дай\s+определение(?:\s+термину)?|"
+            r"определи)\s+(?P<body>.+?)\s*[?.!]*\s*$"
+        ),
+        re.IGNORECASE,
+    ),
+)
+_TERM_CONTEXT_SPLIT_RE = re.compile(
+    (
+        r"^(?P<term>.+?)(?P<context>\s+(?:для|в\s+контексте|"
+        r"применительно\s+к|на\s+чертеже|в\s+чертежах|в\s+документации|"
+        r"по\s+проекту)\b.+)$"
+    ),
+    re.IGNORECASE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -53,18 +72,13 @@ async def _embed(text_input: str) -> list[float]:
 
 async def _generate(prompt: str, context_docs: list[str]) -> str:
     """Задать вопрос LLM с контекстом из найденных документов."""
-    context = "\n\n".join(
-        f"[{i + 1}] {doc}" for i, doc in enumerate(context_docs)
-    )
+    full_prompt = _build_generation_prompt(prompt, context_docs)
     system = (
         "Ты — ассистент по технической документации и чертежам. "
+        "Целевой термин, который нужно пояснить, передаётся отдельно от "
+        "дополнительного контекста. "
         "Отвечай на основе предоставленного контекста. "
         "Если ответа в контексте нет, скажи об этом явно."
-    )
-    full_prompt = (
-        f"Контекст:\n{context}\n\n"
-        f"Вопрос: {prompt}\n\n"
-        "Ответ:"
     )
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         response = await client.post(
@@ -74,6 +88,58 @@ async def _generate(prompt: str, context_docs: list[str]) -> str:
         response.raise_for_status()
     data = response.json()
     return data.get("response", "").strip()
+
+
+def _extract_target_term(question: str) -> tuple[str | None, str | None]:
+    """Выделяет термин и дополнительный контекст из вопроса о термине."""
+    cleaned_question = question.strip()
+    for pattern in _QUESTION_TERM_PATTERNS:
+        match = pattern.match(cleaned_question)
+        if not match:
+            continue
+
+        body = match.group("body").strip()
+        quoted_match = re.search(r"[\"«](?P<term>.+?)[\"»]", body)
+        if quoted_match:
+            term = quoted_match.group("term").strip(" \t,;:-")
+            context = re.sub(r"[\"«].+?[\"»]", " ", body, count=1).strip(" \t,;:-")
+            return term or None, context or None
+
+        context_match = _TERM_CONTEXT_SPLIT_RE.match(body)
+        if context_match:
+            term = context_match.group("term").strip(" \t,;:-")
+            context = context_match.group("context").strip()
+            return term or None, context or None
+
+        body = body.strip(" \t\"'«».,;:-")
+        return body or None, None
+
+    return None, None
+
+
+def _build_generation_prompt(question: str, context_docs: list[str]) -> str:
+    """Собирает prompt так, чтобы термин был отделён от остального контекста."""
+    target_term, extra_question_context = _extract_target_term(question)
+    context = "\n\n".join(
+        f"[{i + 1}] {doc}" for i, doc in enumerate(context_docs)
+    ) or "Контекст не найден."
+
+    if target_term:
+        additional_context = extra_question_context or "Не указан."
+        return (
+            f"Целевой термин:\n{target_term}\n\n"
+            f"Дополнительный контекст запроса:\n{additional_context}\n\n"
+            f"Контекст из документов:\n{context}\n\n"
+            "Сначала поясни именно целевой термин. Дополнительный контекст "
+            "используй только для уточнения ответа.\n\n"
+            "Ответ:"
+        )
+
+    return (
+        f"Запрос пользователя:\n{question.strip()}\n\n"
+        f"Контекст из документов:\n{context}\n\n"
+        "Ответ:"
+    )
 
 
 # ---------------------------------------------------------------------------

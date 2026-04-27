@@ -322,8 +322,9 @@ def test_main_extract_token_tags_prints_csv(tmp_path, monkeypatch, capsys) -> No
     _ = tmp_path
 
     class StubExtractor:
-        def extract_token_meanings_json(self, tokens: list[str]) -> str:
+        def extract_token_meanings_json(self, tokens: list[str], extra_context: str = "") -> str:
             assert tokens == ["M_Doors", "M_Wall_Glass"]
+            assert extra_context == "строительство, чертеж"
             return '{"M_Doors": ["двери"], "M_Wall_Glass": ["стекло", "перегородки"]}'
 
     monkeypatch.setattr(
@@ -363,9 +364,10 @@ def test_main_extract_token_tags_reads_layer_names_from_drawing(tmp_path, monkey
     doc.saveas(source_path)
 
     class StubExtractor:
-        def extract_token_meanings_json(self, tokens: list[str]) -> str:
+        def extract_token_meanings_json(self, tokens: list[str], extra_context: str = "") -> str:
             assert "M_Doors" in tokens
             assert "M_Wall_Glass" in tokens
+            assert extra_context == "строительство, чертеж"
             return '{"M_Doors": ["двери"], "M_Wall_Glass": ["стекло", "перегородки"]}'
 
     monkeypatch.setattr(
@@ -385,8 +387,13 @@ def test_main_extract_token_tags_reads_layer_names_from_drawing(tmp_path, monkey
 
 def test_main_extract_token_tags_with_scores_prints_weighted_json(monkeypatch, capsys) -> None:
     class StubExtractor:
-        def extract_token_meanings_scored_json(self, tokens: list[str]) -> str:
+        def extract_token_meanings_scored_json(
+            self,
+            tokens: list[str],
+            extra_context: str = "",
+        ) -> str:
             assert tokens == ["M_Doors"]
+            assert extra_context == "строительство, чертеж"
             return (
                 '{"M_Doors": ['
                 '{"meaning": "дверь", "score": 0.96}, '
@@ -415,6 +422,326 @@ def test_main_extract_token_tags_requires_tokens_or_drawing(capsys) -> None:
 
     _ = capsys.readouterr()
     assert exit_code == 3
+
+
+def test_main_categorize_entities_by_ids(monkeypatch, capsys) -> None:
+    captured_args: dict[str, object] = {}
+
+    async def fake_list_entities_for_semantic_categorization(
+        entity_ids: list[str] | None = None,
+        entity_type: str | None = None,
+    ):
+        captured_args["entity_ids"] = entity_ids
+        captured_args["entity_type"] = entity_type
+        return [
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "name": "Насос пожарный",
+                "description": "Система пожаротушения",
+                "entity_type": "BLOCK",
+            }
+        ]
+
+    async def fake_assign_semantic_category(
+        entity_id: str,
+        meanings: list[dict[str, object]],
+    ):
+        captured_args.setdefault("saved", []).append(
+            {
+                "entity_id": entity_id,
+                "meanings": meanings,
+            }
+        )
+        return {
+            "entity_id": entity_id,
+            "entity_name": "Насос пожарный",
+            "entity_type": "BLOCK",
+            "category_id": "22222222-2222-2222-2222-222222222222",
+            "category_name": "насос",
+            "matched_meaning": "насос",
+            "status": "created",
+            "meanings": ["насос", "пожаротушение"],
+        }
+
+    class StubExtractor:
+        def extract_scored_tags(
+            self,
+            text: str,
+            extra_context: str = "",
+        ) -> list[dict[str, object]]:
+            assert "Насос пожарный" in text
+            assert "Система пожаротушения" in text
+            assert extra_context == "строительство, чертеж"
+            return [
+                {"meaning": "насос", "score": 0.93},
+                {"meaning": "пожаротушение", "score": 0.58},
+            ]
+
+    monkeypatch.setattr(
+        "parsedwg.db.list_entities_for_semantic_categorization",
+        fake_list_entities_for_semantic_categorization,
+    )
+    monkeypatch.setattr(
+        "parsedwg.db.assign_semantic_category",
+        fake_assign_semantic_category,
+    )
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.LangChainNameTagsExtractor.from_config",
+        lambda _cfg: StubExtractor(),
+    )
+
+    exit_code = main([
+        "categorize-entities",
+        "--entity-id",
+        "11111111-1111-1111-1111-111111111111",
+        "--workers",
+        "2",
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_args["entity_ids"] == ["11111111-1111-1111-1111-111111111111"]
+    assert captured_args["entity_type"] is None
+    saved = captured_args["saved"]
+    assert isinstance(saved, list)
+    assert saved[0]["entity_id"] == "11111111-1111-1111-1111-111111111111"
+    assert "Выбрано сущностей: 1" in captured.out
+    assert "Сохранено 1/1: 11111111-1111-1111-1111-111111111111 -> насос [created]" in captured.out
+    assert "насос" in captured.out
+    assert "created" in captured.out
+
+
+def test_main_categorize_entities_rejects_non_positive_workers(capsys) -> None:
+    exit_code = main(["categorize-entities", "--entity-type", "BLOCK", "--workers", "0"])
+
+    _ = capsys.readouterr()
+    assert exit_code == 3
+
+
+def test_main_categorize_entities_saves_one_by_one(monkeypatch, capsys) -> None:
+    saved_ids: list[str] = []
+
+    async def fake_list_entities_for_semantic_categorization(
+        entity_ids: list[str] | None = None,
+        entity_type: str | None = None,
+    ):
+        _ = entity_ids
+        assert entity_type == "BLOCK"
+        return [
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "name": "Насос",
+                "description": "Пожарный",
+                "entity_type": "BLOCK",
+            },
+            {
+                "id": "22222222-2222-2222-2222-222222222222",
+                "name": "Клапан",
+                "description": "Дымоудаление",
+                "entity_type": "BLOCK",
+            },
+        ]
+
+    async def fake_assign_semantic_category(
+        entity_id: str,
+        meanings: list[dict[str, object]],
+    ):
+        saved_ids.append(entity_id)
+        assert meanings
+        return {
+            "entity_id": entity_id,
+            "entity_name": "stub",
+            "entity_type": "BLOCK",
+            "category_id": "33333333-3333-3333-3333-333333333333",
+            "category_name": str(meanings[0]["meaning"]),
+            "matched_meaning": str(meanings[0]["meaning"]),
+            "status": "created",
+            "meanings": [str(value["meaning"]) for value in meanings],
+        }
+
+    class StubExtractor:
+        def extract_scored_tags(
+            self,
+            text: str,
+            extra_context: str = "",
+        ) -> list[dict[str, object]]:
+            assert extra_context == "строительство, чертеж"
+            if "Насос" in text:
+                return [{"meaning": "насос", "score": 0.9}]
+            return [{"meaning": "клапан", "score": 0.8}]
+
+    monkeypatch.setattr(
+        "parsedwg.db.list_entities_for_semantic_categorization",
+        fake_list_entities_for_semantic_categorization,
+    )
+    monkeypatch.setattr(
+        "parsedwg.db.assign_semantic_category",
+        fake_assign_semantic_category,
+    )
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.LangChainNameTagsExtractor.from_config",
+        lambda _cfg: StubExtractor(),
+    )
+
+    exit_code = main(["categorize-entities", "--entity-type", "BLOCK", "--workers", "2"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert sorted(saved_ids) == [
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+    ]
+    assert "Выбрано сущностей: 2" in captured.out
+    assert "Сохранено 1/2:" in captured.out
+    assert "Сохранено 2/2:" in captured.out
+
+
+def test_main_categorize_entities_requires_single_selection_mode(capsys) -> None:
+    exit_code = main(["categorize-entities"])
+
+    _ = capsys.readouterr()
+    assert exit_code == 3
+
+
+def test_main_categorize_entities_by_type_handles_empty_result(monkeypatch, capsys) -> None:
+    async def fake_list_entities_for_semantic_categorization(
+        entity_ids: list[str] | None = None,
+        entity_type: str | None = None,
+    ):
+        assert entity_ids is None
+        assert entity_type == "BLOCK"
+        return []
+
+    class StubExtractor:
+        def extract_scored_tags(
+            self,
+            text: str,
+            extra_context: str = "",
+        ) -> list[dict[str, object]]:
+            _ = text
+            assert extra_context == "строительство, чертеж"
+            return []
+
+    monkeypatch.setattr(
+        "parsedwg.db.list_entities_for_semantic_categorization",
+        fake_list_entities_for_semantic_categorization,
+    )
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.LangChainNameTagsExtractor.from_config",
+        lambda _cfg: StubExtractor(),
+    )
+
+    exit_code = main(["categorize-entities", "--entity-type", "BLOCK"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Нет сущностей для категоризации." in captured.out
+
+
+def test_main_categorize_entities_dry_prints_json_and_skips_db_write(monkeypatch, capsys) -> None:
+    async def fake_list_entities_for_semantic_categorization(
+        entity_ids: list[str] | None = None,
+        entity_type: str | None = None,
+    ):
+        assert entity_ids is None
+        assert entity_type == "BLOCK"
+        return [
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "name": "Насос",
+                "description": "Пожаротушение",
+                "entity_type": "BLOCK",
+            }
+        ]
+
+    async def fake_assign_semantic_category(
+        entity_id: str,
+        meanings: list[dict[str, object]],
+    ):
+        _ = entity_id, meanings
+        raise AssertionError("assign_semantic_category should not be called in dry mode")
+
+    class StubExtractor:
+        def extract_scored_tags(
+            self,
+            text: str,
+            extra_context: str = "",
+        ) -> list[dict[str, object]]:
+            assert "Насос" in text
+            assert extra_context == "строительство, чертеж"
+            return [
+                {"meaning": "насос", "score": 0.91},
+                {"meaning": "пожаротушение", "score": 0.57},
+            ]
+
+    monkeypatch.setattr(
+        "parsedwg.db.list_entities_for_semantic_categorization",
+        fake_list_entities_for_semantic_categorization,
+    )
+    monkeypatch.setattr(
+        "parsedwg.db.assign_semantic_category",
+        fake_assign_semantic_category,
+    )
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.LangChainNameTagsExtractor.from_config",
+        lambda _cfg: StubExtractor(),
+    )
+
+    exit_code = main(["categorize-entities", "--entity-type", "BLOCK", "--dry"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Выбрано сущностей" not in captured.out
+    payload = json.loads(captured.out)
+    assert payload == [
+        {
+            "entity_id": "11111111-1111-1111-1111-111111111111",
+            "entity_name": "Насос",
+            "entity_type": "BLOCK",
+            "category_id": "",
+            "category_name": "насос",
+            "matched_meaning": "насос",
+            "status": "dry-run",
+            "meanings": [
+                {"meaning": "насос", "score": 0.91},
+                {"meaning": "пожаротушение", "score": 0.57},
+            ],
+        }
+    ]
+
+
+def test_main_categorize_entities_dry_empty_result_prints_empty_json(monkeypatch, capsys) -> None:
+    async def fake_list_entities_for_semantic_categorization(
+        entity_ids: list[str] | None = None,
+        entity_type: str | None = None,
+    ):
+        assert entity_ids is None
+        assert entity_type == "BLOCK"
+        return []
+
+    class StubExtractor:
+        def extract_scored_tags(
+            self,
+            text: str,
+            extra_context: str = "",
+        ) -> list[dict[str, object]]:
+            _ = text, extra_context
+            return []
+
+    monkeypatch.setattr(
+        "parsedwg.db.list_entities_for_semantic_categorization",
+        fake_list_entities_for_semantic_categorization,
+    )
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.LangChainNameTagsExtractor.from_config",
+        lambda _cfg: StubExtractor(),
+    )
+
+    exit_code = main(["categorize-entities", "--entity-type", "BLOCK", "--dry"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert json.loads(captured.out) == []
 
 
 def test_main_verify_extraction_prints_report(monkeypatch, tmp_path, capsys) -> None:

@@ -260,6 +260,50 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="Вернуть для каждого смысла объект с полем meaning и score от 0 до 1.",
     )
 
+    categorize_entities_parser = subparsers.add_parser(
+        "categorize-entities",
+        help="Извлечь AI-категорию для сущностей и привязать её в БД.",
+    )
+    categorize_entities_parser.add_argument(
+        "--entity-id",
+        dest="entity_ids",
+        action="append",
+        default=None,
+        help="UUID сущности. Можно указывать несколько раз.",
+    )
+    categorize_entities_parser.add_argument(
+        "--entity-type",
+        dest="entity_type",
+        default=None,
+        help="Тип сущности из поля entity_type, например BLOCK.",
+    )
+    categorize_entities_parser.add_argument(
+        "--ai-model",
+        default="llama3.2",
+        help="Имя модели для AI-режима (по умолчанию: llama3.2).",
+    )
+    categorize_entities_parser.add_argument(
+        "--ai-base-url",
+        default="http://localhost:11434/v1",
+        help="OpenAI-совместимый base URL для модели (по умолчанию: Ollama).",
+    )
+    categorize_entities_parser.add_argument(
+        "--ai-api-key",
+        default="ollama",
+        help="API ключ для AI провайдера (для Ollama можно оставить по умолчанию).",
+    )
+    categorize_entities_parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Число параллельных AI-запросов при категоризации (по умолчанию: 1).",
+    )
+    categorize_entities_parser.add_argument(
+        "--dry",
+        action="store_true",
+        help="Не записывать результат в БД, а вывести JSON-предпросмотр категоризации.",
+    )
+
     verify_extraction_parser = subparsers.add_parser(
         "verify-extraction",
         help="Сверить DWG/DXF файл с сущностями, записанными в текущую БД.",

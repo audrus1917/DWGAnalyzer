@@ -93,6 +93,10 @@ class DXFAnalyzer:
         match dxftype:
             case "INSERT":
                 entity_data["block"] = entity.dxf.name
+                entity_data["geom"] = "SRID=4326;POINT({} {})".format(
+                    entity.dxf.insert.x, entity.dxf.insert.y
+                )
+                entity_data["parent_block"] = getattr(block, "name", None) if block is not None else None
             case "LWPOLYLINE":
                 points = entity.get_points("xy")
                 entity_data["points"] = [cls.format_point(point) for point in points]
@@ -116,6 +120,18 @@ class DXFAnalyzer:
                 entity_data["radius"] = entity.dxf.radius
                 entity_data["start_angle"] = entity.dxf.start_angle
                 entity_data["end_angle"] = entity.dxf.end_angle
+                entity_data["geom"] = "SRID=4326;POINT({} {})".format(
+                    entity.dxf.center.x, entity.dxf.center.y
+                )
+            case "ELLIPSE":
+                entity_data["center"] = cls.format_point(entity.dxf.center)
+                entity_data["major_axis"] = cls.format_point(entity.dxf.major_axis)
+                entity_data["ratio"] = entity.dxf.ratio
+                entity_data["start_param"] = entity.dxf.start_param
+                entity_data["end_param"] = entity.dxf.end_param
+                entity_data["geom"] = "SRID=4326;POINT({} {})".format(
+                    entity.dxf.center.x, entity.dxf.center.y
+                )
             case "TEXT" | "MTEXT":
                 entity_data["geom"] = "SRID=4326;POINT({} {})".format(
                     entity.dxf.insert.x, entity.dxf.insert.y

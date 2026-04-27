@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import logging
 import sys
+import uuid
 import tempfile
 import zipfile
 
@@ -320,7 +321,7 @@ def collect_drawing_summary(
         for entity in block:
             primitives.append(DXFAnalyzer.get_entity_data(entity, block=block))
 
-    primitives.extend(_collect_layout_insert_primitives(drawing))
+    # primitives.extend(_collect_layout_insert_primitives(drawing))
     if name_tags_extractor is not None:
         primitives_payload = _enrich_primitives_with_name_tags(primitives, name_tags_extractor)
     else:
@@ -604,7 +605,7 @@ async def save_tree_to_db(
                 layer_entities_by_key[layer_name] = layer_entity
                 created_entities += 1
 
-            block_entities_by_name: dict[str, Entity] = {}
+            block_entities_by_name: dict[str, uuid.UUID] = {}
             logger.info("Блоки (%d шт.)", len(summary.get("blocks", [])))
             for block in summary["blocks"]:
                 block_name = str(block["name"])
@@ -630,7 +631,7 @@ async def save_tree_to_db(
                 )
                 session.add(block_entity)
                 await session.flush()
-                block_entities_by_name[block_name] = block_entity
+                block_entities_by_name[block_name] = block_entity.id
                 created_entities += 1
 
             primitives = summary.get("primitives", [])
@@ -647,8 +648,9 @@ async def save_tree_to_db(
             )
             for idx, primitive in enumerate(primitive_iterable, start=1):
                 block_name = str(primitive["block"])
-                parent_block_entity = block_entities_by_name.get(block_name)
-                if parent_block_entity is None:
+                parent_block_name = str(primitive.get("parent_block", block_name))
+                parent_block_entity_id = block_entities_by_name.get(parent_block_name)
+                if parent_block_entity_id is None:
                     logger.warning(
                         "Пропускаем примитив %s: не найден block entity %s",
                         primitive.get("text", ""),
@@ -670,7 +672,7 @@ async def save_tree_to_db(
                     name = str(primitive.get("type", ""))
 
                 primitive_entity = Entity(
-                    parent_id=parent_block_entity.id,
+                    parent_id=parent_block_entity_id,
                     file_id=file_entity.id,
                     project_id=project_id,
                     name=name,

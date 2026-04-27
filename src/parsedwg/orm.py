@@ -5,9 +5,11 @@ import uuid
 from datetime import datetime, timezone
 
 from pgvector.sqlalchemy import Vector
+
 from sqlalchemy import Boolean, DateTime, ForeignKey, String, Table, Text, Column
-from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
 from geoalchemy2 import Geometry
 
 class Base(DeclarativeBase):
@@ -66,6 +68,7 @@ class Category(Base):
     )
     name: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    aliases: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True) 
 
     parent: Mapped[Category | None] = relationship(
         "Category",

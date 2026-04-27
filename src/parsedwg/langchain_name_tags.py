@@ -31,6 +31,7 @@ _TOKEN_TAGS_SYSTEM_PROMPT = (
 )
 _TOKEN_TAGS_HUMAN_PROMPT = (
     "Токены: {tokens}\n"
+    "Дополнительный контекст: {context}\n"
     "Для каждого токена определи возможный инженерный смысл и верни JSON-словарь "
     "вида {{\"TOKEN\": [\"смысл1\", \"смысл2\"]}}."
 )
@@ -44,9 +45,24 @@ _TOKEN_TAGS_SCORED_SYSTEM_PROMPT = (
 )
 _TOKEN_TAGS_SCORED_HUMAN_PROMPT = (
     "Токены: {tokens}\n"
+    "Дополнительный контекст: {context}\n"
     "Для каждого токена определи возможный инженерный смысл и верни JSON-словарь "
-    "вида {{\"TOKEN\": [{{\"meaning\": \"смысл1\", \"score\": 0.95}}, "
-    "{{\"meaning\": \"смысл2\", \"score\": 0.42}}]}}."
+    "вида {{\"TOKEN\": [{{\"meaning\": \"смысл1\", \"score\": score}}, "
+    "{{\"meaning\": \"смысл2\", \"score\": score}}]}}."
+)
+_TEXT_TAGS_SCORED_SYSTEM_PROMPT = (
+    "Ты анализируешь наименование сущности. "
+    "Верни только JSON-объект вида {{\"tags\": [{{\"meaning\": \"...\", \"score\": 0.0}}]}}. "
+    "score это уверенность от 0 до 1. "
+    "Список отсортируй по убыванию score. "
+    "Без пояснений, без markdown, без текста вне JSON."
+)
+_TEXT_TAGS_SCORED_HUMAN_PROMPT = (
+    "Наименование сущности: {text}\n"
+    "Дополнительный контекст: {context}\n"
+    "Определи 0..3 коротких инженерных смыслов на русском и верни JSON-объект вида "
+    "{{\"tags\": [{{\"meaning\": \"смысл1\", \"score\": score}}, "
+    "{{\"meaning\": \"смысл2\", \"score\": score}}]}}."
 )
 
 
@@ -61,10 +77,17 @@ class LangChainAgentConfig:
 class LangChainNameTagsExtractor:
     """Извлекает смысловые теги через LLM, завернутый в LangChain."""
 
-    def __init__(self, chain, token_tags_chain=None, scored_token_tags_chain=None):
+    def __init__(
+        self,
+        chain,
+        token_tags_chain=None,
+        scored_token_tags_chain=None,
+        scored_text_tags_chain=None,
+    ):
         self._chain = chain
         self._token_tags_chain = token_tags_chain or chain
         self._scored_token_tags_chain = scored_token_tags_chain or self._token_tags_chain
+        self._scored_text_tags_chain = scored_text_tags_chain or chain
 
     @classmethod
     def from_config(cls, config: LangChainAgentConfig) -> "LangChainNameTagsExtractor":
@@ -89,14 +112,17 @@ class LangChainNameTagsExtractor:
         prompt = _build_prompt_template(ChatPromptTemplate)
         token_tags_prompt = _build_token_tags_prompt_template(ChatPromptTemplate)
         scored_token_tags_prompt = _build_scored_token_tags_prompt_template(ChatPromptTemplate)
+        scored_text_tags_prompt = _build_scored_text_tags_prompt_template(ChatPromptTemplate)
 
         chain = prompt | model | StrOutputParser()
         token_tags_chain = token_tags_prompt | model | StrOutputParser()
         scored_token_tags_chain = scored_token_tags_prompt | model | StrOutputParser()
+        scored_text_tags_chain = scored_text_tags_prompt | model | StrOutputParser()
         return cls(
             chain,
             token_tags_chain=token_tags_chain,
             scored_token_tags_chain=scored_token_tags_chain,
+            scored_text_tags_chain=scored_text_tags_chain,
         )
 
     def extract(self, text: str) -> list[str]:
@@ -119,23 +145,70 @@ class LangChainNameTagsExtractor:
         # Стабильный порядок без дублей
         return sorted(set(normalized))
 
-    def extract_token_meanings(self, tokens: list[str]) -> dict[str, list[str]]:
+    def extract_token_meanings(
+        self,
+        tokens: list[str],
+        extra_context: str = "",
+    ) -> dict[str, list[str]]:
         cleaned_tokens = [token.strip() for token in tokens if isinstance(token, str) and token.strip()]
         if not cleaned_tokens:
             return {}
 
         joined_tokens = ", ".join(cleaned_tokens)
         logger.debug("LLM input tokens: %s", joined_tokens)
-        raw = self._token_tags_chain.invoke({"tokens": joined_tokens})
+        raw = self._token_tags_chain.invoke(
+            {"tokens": joined_tokens, "context": extra_context.strip()}
+        )
         logger.debug("LLM raw token-tags response: %s", raw)
         return self._parse_token_meanings(raw, cleaned_tokens)
 
-    def extract_token_meanings_json(self, tokens: list[str]) -> str:
-        return json.dumps(self.extract_token_meanings(tokens), ensure_ascii=False, indent=2)
+    def extract_token_meanings_json(
+        self,
+        tokens: list[str],
+        extra_context: str = "",
+    ) -> str:
+        return json.dumps(
+            self.extract_token_meanings(tokens, extra_context=extra_context),
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    def extract_scored_tags(
+        self,
+        text: str,
+        extra_context: str = "",
+    ) -> list[dict[str, object]]:
+        cleaned_text = " ".join(text.split())
+        if not cleaned_text:
+            return []
+
+        logger.debug("LLM input scored text: %s", cleaned_text)
+        raw = self._scored_text_tags_chain.invoke(
+            {"text": cleaned_text, "context": extra_context.strip()}
+        )
+        logger.debug("LLM raw scored text-tags response: %s", raw)
+
+        payload = self._parse_json(raw)
+        tags = payload.get("tags", []) if isinstance(payload, dict) else []
+        if not isinstance(tags, list):
+            return []
+        return self._normalize_scored_tags(tags)
+
+    def extract_scored_tags_json(
+        self,
+        text: str,
+        extra_context: str = "",
+    ) -> str:
+        return json.dumps(
+            self.extract_scored_tags(text, extra_context=extra_context),
+            ensure_ascii=False,
+            indent=2,
+        )
 
     def extract_token_meanings_scored(
         self, 
-        tokens: list[str]
+        tokens: list[str],
+        extra_context: str = "",
     ) -> dict[str, list[dict[str, object]]]:
         """Возвращает словарь token -> list[{"meaning": str, "score": float | None}]."""
         
@@ -145,12 +218,22 @@ class LangChainNameTagsExtractor:
 
         joined_tokens = ", ".join(cleaned_tokens)
         logger.debug("LLM input scored tokens: %s", joined_tokens)
-        raw = self._scored_token_tags_chain.invoke({"tokens": joined_tokens})
+        raw = self._scored_token_tags_chain.invoke(
+            {"tokens": joined_tokens, "context": extra_context.strip()}
+        )
         logger.debug("LLM raw scored token-tags response: %s", raw)
         return self._parse_scored_token_meanings(raw, cleaned_tokens)
 
-    def extract_token_meanings_scored_json(self, tokens: list[str]) -> str:
-        return json.dumps(self.extract_token_meanings_scored(tokens), ensure_ascii=False, indent=2)
+    def extract_token_meanings_scored_json(
+        self,
+        tokens: list[str],
+        extra_context: str = "",
+    ) -> str:
+        return json.dumps(
+            self.extract_token_meanings_scored(tokens, extra_context=extra_context),
+            ensure_ascii=False,
+            indent=2,
+        )
 
     @staticmethod
     def _parse_json(raw: str) -> dict[str, object]:
@@ -385,5 +468,14 @@ def _build_scored_token_tags_prompt_template(chat_prompt_template_cls):
         [
             ("system", _TOKEN_TAGS_SCORED_SYSTEM_PROMPT),
             ("human", _TOKEN_TAGS_SCORED_HUMAN_PROMPT),
+        ]
+    )
+
+
+def _build_scored_text_tags_prompt_template(chat_prompt_template_cls):
+    return chat_prompt_template_cls.from_messages(
+        [
+            ("system", _TEXT_TAGS_SCORED_SYSTEM_PROMPT),
+            ("human", _TEXT_TAGS_SCORED_HUMAN_PROMPT),
         ]
     )

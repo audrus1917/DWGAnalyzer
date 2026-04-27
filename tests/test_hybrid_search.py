@@ -91,3 +91,28 @@ def test_ask_includes_table_rows_in_context(monkeypatch: pytest.MonkeyPatch) -> 
     assert "Таблица:" in context_text
     assert "Код | Наименование" in context_text
     assert "1 | Насос" in context_text
+
+
+def test_extract_target_term_separates_additional_context() -> None:
+    """Проверить, что из вопроса о термине выделяется сам термин и хвост контекста."""
+    from parsedwg.rag import _extract_target_term
+
+    term, extra_context = _extract_target_term("Что такое BIM для инженера ОВ?")
+
+    assert term == "BIM"
+    assert extra_context == "для инженера ОВ"
+
+
+def test_build_generation_prompt_puts_term_into_separate_block() -> None:
+    """Проверить, что prompt отделяет термин от дополнительного контекста."""
+    from parsedwg.rag import _build_generation_prompt
+
+    prompt = _build_generation_prompt(
+        "Поясни термин BIM для инженера ОВ",
+        ["BIM: информационное моделирование здания."],
+    )
+
+    assert "Целевой термин:\nBIM" in prompt
+    assert "Дополнительный контекст запроса:\nдля инженера ОВ" in prompt
+    assert "Контекст из документов:\n[1] BIM: информационное моделирование здания." in prompt
+    assert "Запрос пользователя:" not in prompt
