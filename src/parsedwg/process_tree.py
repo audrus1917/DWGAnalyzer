@@ -200,7 +200,6 @@ def collect_entity_layers(doc, entity, seen_blocks: set[str] | None = None) -> s
 def iter_blocks(drawing: Drawing) -> Iterator[BlockLayout]:
     """Итерирует блоки в документе с отображением прогресса."""
 
-    logger.debug("Step 1")
     blocks = list(drawing.blocks)
     return iter(
         _tqdm(
@@ -211,6 +210,10 @@ def iter_blocks(drawing: Drawing) -> Iterator[BlockLayout]:
             disable=not sys.stderr.isatty(),
         )
     )
+
+
+def _is_layout_block(block_name: str) -> bool:
+    return block_name.startswith("*Model_Space") or block_name.startswith("*Paper_Space")
 
 
 def _collect_layout_insert_primitives(doc) -> list[dict[str, object]]:
@@ -241,6 +244,9 @@ def _collect_layout_insert_primitives(doc) -> list[dict[str, object]]:
                     "layer": str(getattr(entity.dxf, "layer", "")),
                     "target_block": target_block,
                     "layout": layout_name,
+                    "attribs": {
+                        "insert": DXFAnalyzer.format_point(getattr(entity.dxf, "insert", None)),
+                    },
                 }
             )
 
@@ -301,6 +307,9 @@ def collect_drawing_summary(
     blocks: list[dict[str, object]] = []
     primitives: list[dict[str, object]] = []
     for block in iter_blocks(drawing):
+        if _is_layout_block(str(block.name)):
+            continue
+
         table_stats = TextClusterAnalyzer.analyze_table(block)
         blocks.append(
             {
@@ -321,7 +330,8 @@ def collect_drawing_summary(
         for entity in block:
             primitives.append(DXFAnalyzer.get_entity_data(entity, block=block))
 
-    # primitives.extend(_collect_layout_insert_primitives(drawing))
+    primitives.extend(_collect_layout_insert_primitives(drawing))
+
     if name_tags_extractor is not None:
         primitives_payload = _enrich_primitives_with_name_tags(primitives, name_tags_extractor)
     else:
@@ -667,10 +677,11 @@ async def save_tree_to_db(
                     continue
 
                 if "name" in primitive and isinstance(primitive["name"], str):
-                    name = primitive["name"].strip()
+                    name = primitive.pop("name").strip()
                 else:
                     name = str(primitive.get("type", ""))
-
+                
+                geom = primitive.pop("geom", None)
                 primitive_entity = Entity(
                     parent_id=parent_block_entity_id,
                     file_id=file_entity.id,
@@ -680,7 +691,7 @@ async def save_tree_to_db(
                     entity_text=_build_entity_text(str(primitive.get("text", ""))),
                     entity_type=str(primitive.get("type", "primitive")),
                     data=primitive,
-                    geom=primitive.get("geom", None),
+                    geom=geom,
                     is_primitive=True,
                 )
                 primitive_entities_batch.append(primitive_entity)

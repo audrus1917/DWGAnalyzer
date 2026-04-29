@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import sys
+import time
 
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from .langchain_name_tags import LangChainAgentConfig, LangChainNameTagsExtracto
 
 
 from . import constants
+from .settings import settings
 from .explorer import DXFExplorer
 from .process_tree import run_process_tree
 from .docs_ingest import run_documents_ingest
@@ -46,6 +48,12 @@ def _finish_progress_line(width: int) -> None:
         return
     sys.stdout.write("\n")
     sys.stdout.flush()
+
+
+def _format_duration_seconds(duration_seconds: float) -> str:
+    """Форматирует длительность обработки в секундах."""
+
+    return f"{duration_seconds:.2f} c"
 
 def _save_rows_to_json(output_path: Path, rows: list[ResultRow]) -> None:
     """Сохраняет строки результата в JSON-файл."""
@@ -153,9 +161,9 @@ def handle_process_command(
     project_description: str | None = None,
     created_by: str | None = None,
     ai_name_tags: bool = False,
-    ai_model: str = "llama3.2",
-    ai_base_url: str = "http://localhost:11434/v1",
-    ai_api_key: str = "ollama",
+    ai_model: str = settings.ollama_llm_model,
+    ai_base_url: str = settings.ollama_base_url,
+    ai_api_key: str = ""
 ) -> int:
     """Сканирует DWG/DXF, сохраняет дерево сущностей в БД и привязывает к проекту."""
 
@@ -367,6 +375,105 @@ def handle_extract_token_tags_command(
         return constants.UNBOUND_ERROR
 
 
+def _derive_ollama_chat_url(base_url: str) -> str:
+    """Из OpenAI-compatible base URL строит URL для Ollama /api/chat."""
+    stripped = base_url.rstrip("/")
+    if stripped.endswith("/v1"):
+        stripped = stripped[:-3]
+    return stripped.rstrip("/") + "/api/chat"
+
+
+def _derive_openai_chat_completions_url(base_url: str) -> str:
+    """Из base URL строит URL для OpenAI-compatible v1/chat/completions."""
+    stripped = base_url.rstrip("/")
+    if stripped.endswith("/v1"):
+        return stripped + "/chat/completions"
+    return stripped + "/v1/chat/completions"
+
+
+def handle_extract_name_meaning_command(
+    name: str | None = None,
+    entity_id: str | None = None,
+    extra_context: str = "",
+    ai_model: str = "llama3.1:8b",
+    ai_base_url: str = "http://localhost:11434/v1",
+    ai_api_key: str = "ollama",
+) -> int:
+    """Разбирает название или имя сущности из БД через LLM."""
+    from .db import get_entity_name_by_id
+    from .langchain_name_tags import call_openai_chat_completions_name_meaning
+
+    if bool(name) == bool(entity_id):
+        logger.error("Нужно указать либо name, либо --entity-id.")
+        return constants.UNBOUND_ERROR
+
+    resolved_name = name
+    if entity_id is not None:
+        try:
+            resolved_name = asyncio.run(get_entity_name_by_id(entity_id))
+        except (ValueError, LookupError) as exc:
+            logger.error("Некорректный entity_id: %s", exc)
+            return constants.UNBOUND_ERROR
+        if resolved_name is None:
+            out(f"Сущность не найдена: {entity_id}")
+            return constants.NOT_FOUND
+        out(f"Сущность: {resolved_name}")
+        out("")
+
+    assert resolved_name is not None
+    normalized_name = " ".join(resolved_name.split())
+    normalized_extra_context = " ".join(extra_context.split())
+    completions_url = _derive_openai_chat_completions_url(ai_base_url)
+
+    try:
+        result = call_openai_chat_completions_name_meaning(
+            name=normalized_name,
+            completions_url=completions_url,
+            model=ai_model,
+            extra_context=normalized_extra_context,
+            api_key=ai_api_key,
+        )
+        out(result)
+        return constants.OK
+    except RuntimeError as e:
+        logger.error("Ошибка AI-режима: %s", e)
+        return constants.ERROR
+
+
+def handle_explain_block_command(
+    block_id: str,
+    extra_context: str = "",
+    ai_model: str = "llama3.1:8b",
+    ai_base_url: str = "http://localhost:11434/v1",
+    ai_api_key: str = "ollama",
+) -> int:
+    """Достаёт имя блока из БД по UUID и запускает разбор через LLM."""
+    _ = ai_api_key  # Ollama /api/chat не требует авторизации
+
+    from .db import get_entity_name_by_id
+
+    try:
+        name = asyncio.run(get_entity_name_by_id(block_id))
+    except (ValueError, LookupError) as e:
+        logger.error("Некорректный block_id: %s", e)
+        return constants.UNBOUND_ERROR
+
+    if name is None:
+        out(f"Блок не найден: {block_id}")
+        return constants.NOT_FOUND
+
+    out(f"Блок: {name}")
+    out("")
+    return handle_extract_name_meaning_command(
+        name=name,
+        entity_id=None,
+        extra_context=extra_context,
+        ai_model=ai_model,
+        ai_base_url=ai_base_url,
+        ai_api_key=ai_api_key,
+    )
+
+
 def handle_categorize_entities_command(
     entity_ids: list[str] | None,
     entity_type: str | None,
@@ -545,6 +652,460 @@ def handle_categorize_entities_command(
         return constants.ERROR
     except (LookupError, OSError, ValueError) as e:
         logger.error("Сбой категоризации сущностей: %s", e)
+        return constants.UNBOUND_ERROR
+
+
+def handle_interpret_entities_command(
+    entity_ids: list[str] | None,
+    entity_type: str | None,
+    extra_context: str = "",
+    ai_model: str = "llama3.1:8b",
+    ai_base_url: str = "http://localhost:11434/v1",
+    ai_api_key: str = "ollama",
+    workers: int = 1,
+    dry: bool = False,
+) -> int:
+    """Запрашивает у LLM интерпретацию имени для сущностей по id или по type,
+    сохраняет текст в поле short_interpretation."""
+
+    logger.info("Стартуем")
+
+    from .db import list_entities_for_semantic_categorization, save_short_interpretation
+    from .langchain_name_tags import (
+        build_name_meaning_prompt,
+        call_openai_chat_completions_name_meaning,
+    )
+
+    if bool(entity_ids) == bool(entity_type):
+        logger.error("Нужно указать либо --entity-id, либо --entity-type.")
+        return constants.UNBOUND_ERROR
+    if workers <= 0:
+        logger.error("--workers должен быть больше 0.")
+        return constants.UNBOUND_ERROR
+
+    chat_url = _derive_openai_chat_completions_url(ai_base_url)
+    logger.debug("chat_url: %s", chat_url)
+    normalized_context = " ".join(extra_context.split())
+    llm_timeout_seconds = settings.ollama_timeout_seconds
+
+    async def _run() -> dict[str, object]:
+        entities = await list_entities_for_semantic_categorization(
+            entity_ids=entity_ids,
+            entity_type=entity_type,
+        )
+        if not entities:
+            return {"rows": [], "failures": []}
+        if not dry:
+            out(f"Выбрано сущностей: {len(entities)}")
+
+        semaphore = asyncio.Semaphore(workers)
+
+        async def _process(entity: dict[str, str]) -> dict[str, object]:
+            async with semaphore:
+                prompt = build_name_meaning_prompt(
+                    name=entity["name"],
+                    extra_context=normalized_context,
+                )
+                logger.debug(
+                    "LLM запрос interpret-entities: entity_id=%s entity_name=%s model=%s chat_url=%s\n%s",
+                    entity["id"],
+                    entity["name"],
+                    ai_model,
+                    chat_url,
+                    prompt,
+                )
+                try:
+                    text = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            call_openai_chat_completions_name_meaning,
+                            name=entity["name"],
+                            completions_url=chat_url,
+                            model=ai_model,
+                            extra_context=normalized_context,
+                            timeout_seconds=llm_timeout_seconds,
+                            api_key=ai_api_key,
+                        ),
+                        timeout=llm_timeout_seconds + 5.0,
+                    )
+                except TimeoutError:
+                    return {
+                        "status": "error",
+                        "entity_id": entity["id"],
+                        "entity_name": entity["name"],
+                        "error": (
+                            "Превышен таймаут ожидания ответа LLM для сущности "
+                            f"{entity['id']} ({entity['name']})."
+                        ),
+                    }
+                except (OSError, RuntimeError, ValueError) as exc:
+                    return {
+                        "status": "error",
+                        "entity_id": entity["id"],
+                        "entity_name": entity["name"],
+                        "error": str(exc),
+                    }
+                logger.debug(
+                    "LLM ответ interpret-entities: entity_id=%s entity_name=%s\n%s",
+                    entity["id"],
+                    entity["name"],
+                    text,
+                )
+                return {
+                    "status": "ok",
+                    "entity_id": entity["id"],
+                    "entity_name": entity["name"],
+                    "text": text,
+                }
+
+        rows: list[dict[str, object]] = []
+        failures: list[dict[str, object]] = []
+        total = len(entities)
+        progress_width = 0
+        tasks = [asyncio.create_task(_process(entity)) for entity in entities]
+        try:
+            for task in asyncio.as_completed(tasks):
+                item = await task
+                entity_id = str(item.get("entity_id", ""))
+                entity_name = str(item.get("entity_name", ""))
+                if item.get("status") == "error":
+                    failures.append(
+                        {
+                            "status": "error",
+                            "entity_id": entity_id,
+                            "entity_name": entity_name,
+                            "error": str(item.get("error", "")),
+                        }
+                    )
+                    logger.error(
+                        "Ошибка интерпретации сущности %s (%s): %s",
+                        entity_id or "-",
+                        entity_name or "-",
+                        item.get("error", ""),
+                    )
+                else:
+                    text = str(item["text"])
+                    try:
+                        if dry:
+                            rows.append(
+                                {
+                                    "entity_id": entity_id,
+                                    "entity_name": entity_name,
+                                    "text": text,
+                                    "status": "ok",
+                                }
+                            )
+                        else:
+                            logger.debug(
+                                "Сохраняем интерпретацию для сущности %s (%s): %s",
+                                entity_id,
+                                entity_name,
+                                text,
+                            )
+                            await save_short_interpretation(entity_id, text)
+                            rows.append({"entity_id": entity_id, "entity_name": entity_name})
+                    except (LookupError, OSError, RuntimeError, ValueError) as exc:
+                        failures.append(
+                            {
+                                "status": "error",
+                                "entity_id": entity_id,
+                                "entity_name": entity_name,
+                                "error": str(exc),
+                            }
+                        )
+                        logger.error(
+                            "Ошибка сохранения интерпретации сущности %s (%s): %s",
+                            entity_id or "-",
+                            entity_name or "-",
+                            exc,
+                        )
+
+                processed = len(rows) + len(failures)
+                if not dry:
+                    progress_width = _write_progress_line(
+                        "Обработано {processed}/{total}: успешно {success}, ошибок {errors}".format(
+                            processed=processed,
+                            total=total,
+                            success=len(rows),
+                            errors=len(failures),
+                        ),
+                        previous_width=progress_width,
+                    )
+        finally:
+            if not dry:
+                _finish_progress_line(progress_width)
+
+        return {"rows": rows, "failures": failures}
+
+    try:
+        result = asyncio.run(_run())
+        rows = result.get("rows", [])
+        if not isinstance(rows, list):
+            rows = []
+        failures = result.get("failures", [])
+        if not isinstance(failures, list):
+            failures = []
+        if not rows:
+            if failures:
+                logger.error("Не удалось интерпретировать ни одной сущности. Ошибок: %d", len(failures))
+                return constants.ERROR
+            out("Нет сущностей для интерпретации.")
+            return constants.OK
+        if dry:
+            out(json.dumps(rows + failures, ensure_ascii=False, indent=2))
+            return constants.OK
+        out(f"Интерпретировано: {len(rows)}")
+        if failures:
+            out(f"Ошибок: {len(failures)}")
+        return constants.OK
+    except RuntimeError as e:
+        logger.error("Ошибка AI-режима: %s", e)
+        return constants.ERROR
+    except (LookupError, OSError, ValueError, TimeoutError) as e:
+        logger.error("Сбой интерпретации сущностей: %s", e)
+        return constants.UNBOUND_ERROR
+
+
+def handle_interpret_blocks_command(
+    block_ids: list[str] | None,
+    file_ref: str | None,
+    by_path: bool,
+    extra_context: str = "",
+    ai_model: str = "llama3.1:8b",
+    ai_base_url: str = "http://localhost:11434/v1",
+    ai_api_key: str = "ollama",
+    workers: int = 1,
+    dry: bool = False,
+) -> int:
+    """Интерпретирует блоки и сохраняет short/full interpretation."""
+
+    from .db import get_file_id_by_source, list_blocks_for_interpretation, save_block_interpretations
+    from .langchain_name_tags import call_openai_chat_completions_name_meaning
+
+    if bool(block_ids) == bool(file_ref):
+        logger.error("Нужно указать либо --block-id, либо file_ref.")
+        return constants.UNBOUND_ERROR
+    if workers <= 0:
+        logger.error("--workers должен быть больше 0.")
+        return constants.UNBOUND_ERROR
+
+    resolved_file_id = file_ref
+    if file_ref is not None and by_path:
+        resolved_file_id = asyncio.run(get_file_id_by_source(file_ref))
+        if not resolved_file_id:
+            out("Файл не найден в БД.")
+            return constants.NOT_FOUND
+
+    completions_url = _derive_openai_chat_completions_url(ai_base_url)
+    normalized_context = " ".join(extra_context.split())
+    llm_timeout_seconds = settings.ollama_timeout_seconds
+
+    async def _run() -> dict[str, object]:
+        blocks = await list_blocks_for_interpretation(
+            block_ids=block_ids,
+            file_id=resolved_file_id,
+        )
+        if not blocks:
+            return {"rows": [], "failures": []}
+        if not dry:
+            out(f"Выбрано блоков: {len(blocks)}")
+
+        semaphore = asyncio.Semaphore(workers)
+
+        async def _process(block: dict[str, str]) -> dict[str, object]:
+            async with semaphore:
+                block_id = block["id"]
+                block_name = block["name"]
+                started_at = time.perf_counter()
+                try:
+                    short_interpretation = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            call_openai_chat_completions_name_meaning,
+                            name=block_name,
+                            completions_url=completions_url,
+                            model=ai_model,
+                            extra_context=normalized_context,
+                            timeout_seconds=llm_timeout_seconds,
+                            api_key=ai_api_key,
+                        ),
+                        timeout=llm_timeout_seconds + 5.0,
+                    )
+                    # Полное описание блока также запрашиваем у LLM.
+                    full_description = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            call_openai_chat_completions_name_meaning,
+                            name=block_name,
+                            completions_url=completions_url,
+                            model=ai_model,
+                            extra_context=normalized_context + "\nДай максимально подробное описание назначения и структуры этого блока, с деталями для проектировщика.",
+                            timeout_seconds=llm_timeout_seconds,
+                            api_key=ai_api_key,
+                        ),
+                        timeout=llm_timeout_seconds + 10.0,
+                    )
+                    block_description = full_description
+                    full_interpretation = full_description
+                except TimeoutError:
+                    duration_seconds = round(time.perf_counter() - started_at, 3)
+                    return {
+                        "status": "error",
+                        "block_id": block_id,
+                        "block_name": block_name,
+                        "duration_seconds": duration_seconds,
+                        "error": (
+                            "Превышен таймаут ожидания ответа LLM для блока "
+                            f"{block_id} ({block_name})."
+                        ),
+                    }
+                except (LookupError, OSError, RuntimeError, ValueError) as exc:
+                    duration_seconds = round(time.perf_counter() - started_at, 3)
+                    return {
+                        "status": "error",
+                        "block_id": block_id,
+                        "block_name": block_name,
+                        "duration_seconds": duration_seconds,
+                        "error": str(exc),
+                    }
+                duration_seconds = round(time.perf_counter() - started_at, 3)
+                return {
+                    "status": "ok",
+                    "block_id": block_id,
+                    "block_name": block_name,
+                    "duration_seconds": duration_seconds,
+                    "short_interpretation": short_interpretation,
+                    "description": block_description,
+                    "full_interpretation": full_interpretation,
+                }
+
+        rows: list[dict[str, object]] = []
+        failures: list[dict[str, object]] = []
+        progress_width = 0
+        total = len(blocks)
+        tasks = [asyncio.create_task(_process(block)) for block in blocks]
+        try:
+            for task in asyncio.as_completed(tasks):
+                item = await task
+                block_id = str(item.get("block_id", ""))
+                block_name = str(item.get("block_name", ""))
+                raw_duration_seconds = item.get("duration_seconds", 0.0)
+                duration_seconds = (
+                    float(raw_duration_seconds)
+                    if isinstance(raw_duration_seconds, (int, float))
+                    else 0.0
+                )
+                duration_label = _format_duration_seconds(duration_seconds)
+                if item.get("status") == "error":
+                    failures.append(
+                        {
+                            "status": "error",
+                            "block_id": block_id,
+                            "block_name": block_name,
+                            "duration_seconds": duration_seconds,
+                            "error": str(item.get("error", "")),
+                        }
+                    )
+                    logger.error(
+                        "Ошибка интерпретации блока %s (%s) за %s: %s",
+                        block_id or "-",
+                        block_name or "-",
+                        duration_label,
+                        item.get("error", ""),
+                    )
+                else:
+                    short_interpretation = str(item["short_interpretation"])
+                    block_description = str(item["description"])
+                    full_interpretation = str(item["full_interpretation"])
+                    try:
+                        if dry:
+                            rows.append(
+                                {
+                                    "status": "ok",
+                                    "block_id": block_id,
+                                    "block_name": block_name,
+                                    "duration_seconds": duration_seconds,
+                                    "short_interpretation": short_interpretation,
+                                    "description": block_description,
+                                    "full_interpretation": full_interpretation,
+                                }
+                            )
+                        else:
+                            await save_block_interpretations(
+                                block_id=block_id,
+                                short_interpretation=short_interpretation,
+                                full_interpretation=full_interpretation,
+                                description=block_description,
+                            )
+                            rows.append(
+                                {
+                                    "block_id": block_id,
+                                    "block_name": block_name,
+                                    "duration_seconds": duration_seconds,
+                                }
+                            )
+                    except (LookupError, OSError, RuntimeError, ValueError) as exc:
+                        failures.append(
+                            {
+                                "status": "error",
+                                "block_id": block_id,
+                                "block_name": block_name,
+                                "duration_seconds": duration_seconds,
+                                "error": str(exc),
+                            }
+                        )
+                        logger.error(
+                            "Ошибка сохранения интерпретации блока %s (%s): %s",
+                            block_id or "-",
+                            block_name or "-",
+                            exc,
+                        )
+
+                if not dry:
+                    out(
+                        f"\nБлок {block_name or block_id or '-'} обработан за {duration_label}"
+                    )
+
+                processed = len(rows) + len(failures)
+                if not dry:
+                    progress_width = _write_progress_line(
+                        "Обработано {processed}/{total}: успешно {success}, ошибок {errors}".format(
+                            processed=processed,
+                            total=total,
+                            success=len(rows),
+                            errors=len(failures),
+                        ),
+                        previous_width=progress_width,
+                    )
+        finally:
+            if not dry:
+                _finish_progress_line(progress_width)
+
+        return {"rows": rows, "failures": failures}
+
+    try:
+        result = asyncio.run(_run())
+        rows = result.get("rows", [])
+        if not isinstance(rows, list):
+            rows = []
+        failures = result.get("failures", [])
+        if not isinstance(failures, list):
+            failures = []
+        if not rows:
+            if failures:
+                logger.error("Не удалось интерпретировать ни одного блока. Ошибок: %d", len(failures))
+                return constants.ERROR
+            out("Нет блоков для интерпретации.")
+            return constants.OK
+        if dry:
+            out(json.dumps(rows + failures, ensure_ascii=False, indent=2))
+            return constants.OK
+        out(f"Интерпретировано блоков: {len(rows)}")
+        if failures:
+            out(f"Ошибок: {len(failures)}")
+        return constants.OK
+    except RuntimeError as e:
+        logger.error("Ошибка AI-режима: %s", e)
+        return constants.ERROR
+    except (LookupError, OSError, ValueError, TimeoutError) as e:
+        logger.error("Сбой интерпретации блоков: %s", e)
         return constants.UNBOUND_ERROR
 
 
@@ -906,6 +1467,147 @@ def handle_file_stat_from_db_command(
     return constants.OK
 
 
+def handle_export_blocks_xlsx_command(
+    file_ref: str,
+    by_path: bool,
+    output_path: Path | None,
+) -> int:
+    """Экспортирует сводную таблицу по блокам файла из БД в XLSX."""
+
+    import openpyxl
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    block_rows = _collect_block_export_rows(file_ref=file_ref, by_path=by_path, multiline=True)
+    if block_rows is None:
+        return constants.ERROR
+
+    if output_path is None:
+        if by_path:
+            output_path = Path(file_ref).with_suffix(".blocks.xlsx")
+        else:
+            output_path = Path(f"{file_ref}_blocks.xlsx")
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "Блоки"
+
+    headers = [
+        "Название блока",
+        "Названия связанных слоев",
+        "Интерпретация полная",
+        "Полезные атрибуты",
+        "Интерпретация краткая",
+        "Количество вхождений блока в чертеж",
+    ]
+    ws.append(headers)
+
+    fill = PatternFill(fill_type="solid", fgColor="D9D9D9")
+    font = Font(bold=True)
+    for cell in ws[1]:
+        cell.fill = fill
+        cell.font = font
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    for row in block_rows:
+        ws.append([row[column] for column in headers])
+
+    ws.freeze_panes = "A2"
+    for row in ws.iter_rows(min_row=2):
+        for cell in row:
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+    for col_idx, col_cells in enumerate(ws.iter_cols(), start=1):
+        values = [str(cell.value) for cell in col_cells if cell.value is not None]
+        width = max((len(line) for value in values for line in value.splitlines()), default=10)
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(width + 2, 60)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(output_path)
+    out(f"XLSX по блокам сохранён: {output_path}")
+    return constants.OK
+
+
+def _collect_block_export_rows(
+    file_ref: str,
+    by_path: bool,
+    multiline: bool,
+) -> list[ResultRow] | None:
+    from .db import get_file_id_by_source, list_blocks_for_export
+
+    file_id = file_ref
+    if by_path:
+        file_id = asyncio.run(get_file_id_by_source(file_ref)) or ""
+        if not file_id:
+            out("Ошибка: file-сущность не найдена")
+            return None
+
+    try:
+        blocks = asyncio.run(list_blocks_for_export(file_id))
+    except (LookupError, OSError, ValueError) as exc:
+        logger.error("Не удалось собрать данные блоков для экспорта: %s", exc)
+        return None
+
+    line_separator = "\n" if multiline else "; "
+    text_separator = "\n" if multiline else " "
+    rows: list[ResultRow] = []
+    for block in blocks:
+        raw_layers = block.get("layers", [])
+        layers = raw_layers if isinstance(raw_layers, list) else []
+        layer_names = line_separator.join(
+            str(layer.get("name", ""))
+            for layer in layers
+            if isinstance(layer, dict) and str(layer.get("name", "")).strip()
+        )
+        attributes = block.get("attributes", {})
+        formatted_attributes = (
+            line_separator.join(f"{key}: {attributes[key]}" for key in sorted(attributes))
+            if isinstance(attributes, dict)
+            else ""
+        )
+        full_interpretation = str(block.get("full_interpretation", "") or "")
+        if not multiline:
+            full_interpretation = " ".join(full_interpretation.split())
+        raw_insert_count = block.get("insert_count", 0)
+        insert_count = raw_insert_count if isinstance(raw_insert_count, int) else 0
+
+        rows.append(
+            {
+                "Название блока": str(block.get("name", "") or ""),
+                "Названия связанных слоев": layer_names,
+                "Интерпретация полная": full_interpretation.replace("\n", text_separator),
+                "Полезные атрибуты": formatted_attributes,
+                "Интерпретация краткая": str(block.get("short_interpretation", "") or ""),
+                "Количество вхождений блока в чертеж": insert_count,
+            }
+        )
+    return rows
+
+
+def handle_export_blocks_table_command(
+    file_ref: str,
+    by_path: bool,
+    output_path: Path | None,
+) -> int:
+    """Выводит сводную текстовую таблицу по блокам файла из БД."""
+    block_rows = _collect_block_export_rows(file_ref=file_ref, by_path=by_path, multiline=False)
+    if block_rows is None:
+        return constants.ERROR
+    if not block_rows:
+        out("Нет блоков для экспорта.")
+        return constants.OK
+
+    table_text = as_table(block_rows)
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(table_text + "\n", encoding="utf-8")
+        out(f"Текстовая таблица по блокам сохранена: {output_path}")
+        return constants.OK
+
+    out(table_text)
+    return constants.OK
+
+
 def main(argv: list[str] | None = None) -> int:
     """Точка входа для командной строки."""
 
@@ -949,6 +1651,25 @@ def main(argv: list[str] | None = None) -> int:
                 with_scores=args.with_scores,
             )
 
+        case "extract-name-meaning":
+            return_code = handle_extract_name_meaning_command(
+                name=args.name,
+                entity_id=args.entity_id,
+                extra_context=args.extra_context,
+                ai_model=args.ai_model,
+                ai_base_url=args.ai_base_url,
+                ai_api_key=args.ai_api_key,
+            )
+
+        case "explain-block":
+            return_code = handle_explain_block_command(
+                block_id=args.block_id,
+                extra_context=args.extra_context,
+                ai_model=args.ai_model,
+                ai_base_url=args.ai_base_url,
+                ai_api_key=args.ai_api_key,
+            )
+
         case "categorize-entities":
             return_code = handle_categorize_entities_command(
                 entity_ids=args.entity_ids,
@@ -957,6 +1678,44 @@ def main(argv: list[str] | None = None) -> int:
                 ai_base_url=args.ai_base_url,
                 ai_api_key=args.ai_api_key,
                 workers=args.workers,
+                dry=args.dry,
+            )
+
+        case "interpret-entities":
+            return_code = handle_interpret_entities_command(
+                entity_ids=args.entity_ids,
+                entity_type=args.entity_type,
+                extra_context=args.extra_context,
+                ai_model=args.ai_model,
+                ai_base_url=args.ai_base_url,
+                ai_api_key=args.ai_api_key,
+                workers=args.workers,
+                dry=args.dry,
+            )
+
+        case "interpret-blocks":
+            return_code = handle_interpret_blocks_command(
+                block_ids=args.block_ids,
+                file_ref=args.file_ref,
+                by_path=args.by_path,
+                extra_context=args.extra_context,
+                ai_model=args.ai_model,
+                ai_base_url=args.ai_base_url,
+                ai_api_key=args.ai_api_key,
+                workers=args.workers,
+                dry=args.dry,
+            )
+
+        case "interpret-block":
+            return_code = handle_interpret_blocks_command(
+                block_ids=[args.entity_id],
+                file_ref=None,
+                by_path=False,
+                extra_context=args.extra_context,
+                ai_model=args.ai_model,
+                ai_base_url=args.ai_base_url,
+                ai_api_key=args.ai_api_key,
+                workers=1,
                 dry=args.dry,
             )
 
@@ -1094,6 +1853,20 @@ def main(argv: list[str] | None = None) -> int:
 
         case "file-stat-from-db":
             return_code = handle_file_stat_from_db_command(
+                file_ref=args.file_ref,
+                by_path=args.by_path,
+                output_path=Path(args.output) if args.output else None,
+            )
+
+        case "export-blocks-xlsx":
+            return_code = handle_export_blocks_xlsx_command(
+                file_ref=args.file_ref,
+                by_path=args.by_path,
+                output_path=Path(args.output) if args.output else None,
+            )
+
+        case "export-blocks-table":
+            return_code = handle_export_blocks_table_command(
                 file_ref=args.file_ref,
                 by_path=args.by_path,
                 output_path=Path(args.output) if args.output else None,

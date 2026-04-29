@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import importlib
 import json
 import logging
+import re
 
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,8 @@ _TEXT_TAGS_SCORED_HUMAN_PROMPT = (
     "Наименование сущности: {text}\n"
     "Дополнительный контекст: {context}\n"
     "Определи 0..3 коротких инженерных смыслов на русском и верни JSON-объект вида "
+    "Если в названии есть важные числа или отметки, сохраняй их в смысле, "
+    "например: 4-й этаж, отметка +2 м. "
     "{{\"tags\": [{{\"meaning\": \"смысл1\", \"score\": score}}, "
     "{{\"meaning\": \"смысл2\", \"score\": score}}]}}."
 )
@@ -201,6 +204,24 @@ class LangChainNameTagsExtractor:
     ) -> str:
         return json.dumps(
             self.extract_scored_tags(text, extra_context=extra_context),
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    def extract_name_meanings(
+        self,
+        name: str,
+        extra_context: str = "",
+    ) -> list[dict[str, object]]:
+        return self.extract_scored_tags(name, extra_context=extra_context)
+
+    def extract_name_meanings_json(
+        self,
+        name: str,
+        extra_context: str = "",
+    ) -> str:
+        return json.dumps(
+            self.extract_name_meanings(name, extra_context=extra_context),
             ensure_ascii=False,
             indent=2,
         )
@@ -479,3 +500,236 @@ def _build_scored_text_tags_prompt_template(chat_prompt_template_cls):
             ("human", _TEXT_TAGS_SCORED_HUMAN_PROMPT),
         ]
     )
+
+
+# _NAME_MEANING_SYSTEM_PROMPT = (
+#     "Действуй как лингвистический анализатор технических терминов. "
+#     "Разбери название CAD-сущности по смысловым частям."
+# )
+
+
+# _NAME_MEANING_HUMAN_PROMPT_TEMPLATE = (
+#     "Название сущности: \"{name}\"\n\n"
+#     "Инструкция:\n"
+#     "1. Выдели основную категорию объекта.\n"
+#     "{context_line}"
+#     "Пиши тезисно, строго по делу, без вступлений, не расшифровывай отдельные буквы и числа.\n"
+# )
+
+# _NAME_MEANING_SYSTEM_PROMPT = (
+#     "Ты — технический аналитик CAD-данных. Твоя задача — определять назначение "
+#     "объекта по его имени, игнорируя технические индексы, префиксы и цифры."
+# )
+_NAME_MEANING_SYSTEM_PROMPT = (
+    "Ты — эксперт по обработке данных DXF и BIM. Твоя задача: расшифровать "
+    "смысл объекта, разделяя его геометрический тип и физическое назначение. "
+    "Контекст: Инженерная графика. Примитивы (HATCH, LINE и др.) всегда "
+    "переводи технически (Штриховка, Линия), а не буквально."
+)
+
+_NAME_MEANING_HUMAN_PROMPT_TEMPLATE = (
+    "Название сущности: \"{name}\"\n"
+    "Контекст: {context_line}\n\n"
+    "Инструкция:\n"
+    "1. Раздели название на части, используя символы подчеркивания (_) и дефиса (-).\n"
+    "2. Игнорируй служебную информацию: префиксы (RECOVER, COPY), даты и длинные числовые ID.\n"
+    "3. Сфокусируйся на словах, несущих физический смысл.\n"
+    "4. Выдели только основной тип объекта и его материал/свойство.\n"
+    "5. Игнорируй отдельные буквы (M, X, T) и числа (11, 01, 100).\n"
+    "6. Ответ строго в одну строку, без вступлений и маркированных списков.\n\n"
+    "Образец ответа: Категория: [тип]. Описание: [суть].\n"
+    "Ответ:"
+)
+
+# def clean_cad_name(name):
+#     # 1. Убираем служебные слова в начале (RECOVER, COPY, и т.д.)
+#     name = re.sub(r'^(RECOVER|COPY|TMP|TEMP)_+', '', name, flags=re.IGNORECASE)
+    
+#     # 2. Убираем длинные цифровые последовательности и временные метки (от 6 цифр и более)
+#     # Удаляет такие части как 171212140632-1
+#     name = re.sub(r'[_\-]?\d{6,}[_\-]?\d*', '', name)
+    
+#     # 3. Убираем висящие в начале или конце разделители, которые остались после чистки
+#     name = name.strip('_ -')
+    
+#     return name
+
+def clean_cad_name(name):
+    # 1. Убираем служебные слова (RECOVER, COPY, и т.д.)
+    name = re.sub(r'^(RECOVER|COPY|TMP|TEMP)_+', '', name, flags=re.IGNORECASE)
+    
+    # 2. Убираем спецсимволы: $, #, @, %, &, *
+    # Оставляем только буквы, цифры, пробелы, подчеркивания и дефисы
+    name = re.sub(r'[$\#@%&*]', '', name)
+    
+    # 3. Убираем длинные ID и временные метки (6+ цифр)
+    name = re.sub(r'[_\-]?\d{6,}[_\-]?\d*', '', name)
+    
+    # 4. Убираем лишние подчеркивания/пробелы, которые могли возникнуть (например, "Wall__Hatch")
+    name = re.sub(r'[_\-\s]{2,}', '_', name)
+    
+    # 5. Финальная обрезка краев
+    cleaned_name = name.strip('_ -')
+    # logger.debug(f"Cleaned CAD name: '{cleaned_name}' from original '{name}'")
+    return cleaned_name
+
+
+def clean_cad_name(name):
+    # 1. Попытка исправить типичную проблему кодировки (cp1251 -> utf-8)
+    # Если в названии "РЎС‚РµРЅР°" (Стена), этот блок может помочь.
+    # Если данные уже в UTF-8, просто пропускаем.
+    try:
+        # Проверяем, нет ли там специфических символов "битой" кодировки
+        if any(c in name for c in "РЎР"): 
+            name = name.encode('cp1252').decode('cp1251')
+    except:
+        pass
+
+    # 2. Убираем служебный мусор (RECOVER, COPY, и спецсимволы $, #, @, %)
+    name = re.sub(r'^(RECOVER|COPY|TMP|TEMP)_+', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'[$\#@%&*^!]', '', name)
+
+    # 3. Убираем временные метки и длинные ID (6+ цифр)
+    name = re.sub(r'[_\-]?\d{6,}[_\-]?\d*', '', name)
+
+    # 4. Заменяем все разделители на один пробел для удобства LLM
+    # Это превращает "Wall_Gasconcrete-Hatch" в "Wall Gasconcrete Hatch"
+    name = re.sub(r'[_\-\s]+', ' ', name).strip()
+
+    # 5. Опционально: переводим в нижний регистр для единообразия
+    # Но для 8B лучше оставить как есть, так как Case может указывать на начало нового слова
+    cleaned_name = name
+    # logger.debug(f"Cleaned CAD name: '{cleaned_name}' from original '{name}'")
+    return cleaned_name
+
+
+
+def build_name_meaning_system_prompt() -> str:
+    return _NAME_MEANING_SYSTEM_PROMPT
+
+
+def build_name_meaning_human_prompt(
+    name: str,
+    extra_context: str = "",
+) -> str:
+    """Собирает user prompt для разбора имени сущности."""
+    context_line = (
+        f"Дополнительный контекст: {extra_context.strip()}\n"
+        if extra_context.strip()
+        else ""
+    )
+    name  = clean_cad_name(name)
+    return _NAME_MEANING_HUMAN_PROMPT_TEMPLATE.format(
+        name=name,
+        context_line=context_line,
+    )
+
+
+def build_name_meaning_prompt(
+    name: str,
+    extra_context: str = "",
+) -> str:
+    """Собирает полный текст промпта для обратной совместимости."""
+    return (
+        f"{build_name_meaning_system_prompt()}\n\n"
+        f"{build_name_meaning_human_prompt(name=name, extra_context=extra_context)}"
+    )
+
+
+def call_ollama_name_meaning(
+    name: str,
+    chat_url: str,
+    model: str,
+    extra_context: str = "",
+    timeout_seconds: float = 60.0,
+) -> str:
+    """Запрашивает Ollama /api/chat и возвращает свободный текстовый разбор названия."""
+    import urllib.error
+    import urllib.request
+
+    content = build_name_meaning_prompt(name=name, extra_context=extra_context)
+    payload = json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": content}],
+        "stream": False,
+    }).encode()
+
+    req = urllib.request.Request(
+        chat_url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+            body = json.loads(response.read().decode())
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Ошибка соединения с LLM ({chat_url}): {exc}") from exc
+
+    message = body.get("message", {})
+    if not isinstance(message, dict):
+        raise RuntimeError(f"Неожиданный формат ответа от LLM: {body}")
+    text = message.get("content", "")
+    if not isinstance(text, str) or not text.strip():
+        raise RuntimeError(f"LLM вернул пустой ответ: {body}")
+    return text.strip()
+
+
+def call_openai_chat_completions_name_meaning(
+    name: str,
+    completions_url: str,
+    model: str,
+    extra_context: str = "",
+    timeout_seconds: float = 60.0,
+    api_key: str = "",
+) -> str:
+    """Запрашивает OpenAI-compatible v1/chat/completions и возвращает текстовый разбор."""
+    import urllib.error
+    import urllib.request
+
+    system_prompt = build_name_meaning_system_prompt()
+    human_prompt = build_name_meaning_human_prompt(name=name, extra_context=extra_context)
+    # logger.debug(
+    #     "Prompts for OpenAI chat completions: system=%s human=%s",
+    #     system_prompt,
+    #     human_prompt,
+    # )
+    
+    payload = json.dumps({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": human_prompt},
+        ],
+        "stream": False,
+    }).encode()
+
+    headers = {"Content-Type": "application/json"}
+    if api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+
+    req = urllib.request.Request(
+        completions_url,
+        data=payload,
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
+            body = json.loads(response.read().decode())
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Ошибка соединения с LLM ({completions_url}): {exc}") from exc
+
+    choices = body.get("choices", [])
+    if not isinstance(choices, list) or not choices:
+        raise RuntimeError(f"Неожиданный формат ответа от LLM: {body}")
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        raise RuntimeError(f"Неожиданный формат ответа от LLM: {body}")
+    message = first_choice.get("message", {})
+    if not isinstance(message, dict):
+        raise RuntimeError(f"Неожиданный формат ответа от LLM: {body}")
+    text = message.get("content", "")
+    if not isinstance(text, str) or not text.strip():
+        raise RuntimeError(f"LLM вернул пустой ответ: {body}")
+    return text.strip()

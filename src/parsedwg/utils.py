@@ -134,6 +134,46 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="Искать file-сущность по пути, а не по UUID.",
     )
 
+    export_blocks_xlsx_parser = subparsers.add_parser(
+        "export-blocks-xlsx",
+        help="Экспортировать сводную таблицу по блокам из БД в XLSX.",
+    )
+    export_blocks_xlsx_parser.add_argument(
+        "file_ref",
+        help="UUID file-сущности или путь к файлу (если --by-path).",
+    )
+    export_blocks_xlsx_parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Путь к XLSX-файлу результата.",
+    )
+    export_blocks_xlsx_parser.add_argument(
+        "--by-path",
+        action="store_true",
+        help="Искать file-сущность по пути, а не по UUID.",
+    )
+
+    export_blocks_table_parser = subparsers.add_parser(
+        "export-blocks-table",
+        help="Вывести сводную таблицу по блокам из БД в текстовом виде.",
+    )
+    export_blocks_table_parser.add_argument(
+        "file_ref",
+        help="UUID file-сущности или путь к файлу (если --by-path).",
+    )
+    export_blocks_table_parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Путь к TXT-файлу результата. Если не указан, вывод в stdout.",
+    )
+    export_blocks_table_parser.add_argument(
+        "--by-path",
+        action="store_true",
+        help="Искать file-сущность по пути, а не по UUID.",
+    )
+
     process_tree_parser = subparsers.add_parser(
         "process",
         help=(
@@ -260,6 +300,72 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="Вернуть для каждого смысла объект с полем meaning и score от 0 до 1.",
     )
 
+    extract_name_meaning_parser = subparsers.add_parser(
+        "extract-name-meaning",
+        help="Извлечь через LLM короткие инженерные смыслы для одного названия.",
+    )
+    extract_name_meaning_parser.add_argument(
+        "name",
+        nargs="?",
+        default=None,
+        help="Название или короткий текст, смысл которого нужно определить.",
+    )
+    extract_name_meaning_parser.add_argument(
+        "--entity-id",
+        dest="entity_id",
+        default=None,
+        help="UUID сущности в БД. Если указан, имя будет взято из БД.",
+    )
+    extract_name_meaning_parser.add_argument(
+        "--extra-context",
+        default="",
+        help="Дополнительный контекст для LLM, например тип проекта или раздел.",
+    )
+    extract_name_meaning_parser.add_argument(
+        "--ai-model",
+        default="llama3.1:8b",
+        help="Имя модели для AI-режима (по умолчанию: llama3.1:8b).",
+    )
+    extract_name_meaning_parser.add_argument(
+        "--ai-base-url",
+        default="http://localhost:11434/v1",
+        help="Ollama base URL, например http://localhost:11434/v1 или http://localhost:11434.",
+    )
+    extract_name_meaning_parser.add_argument(
+        "--ai-api-key",
+        default="ollama",
+        help="API ключ для AI провайдера (для Ollama можно оставить по умолчанию).",
+    )
+
+    explain_block_parser = subparsers.add_parser(
+        "explain-block",
+        help="Разобрать смысл имени блока из БД по его UUID.",
+    )
+    explain_block_parser.add_argument(
+        "block_id",
+        help="UUID сущности блока в БД.",
+    )
+    explain_block_parser.add_argument(
+        "--extra-context",
+        default="",
+        help="Дополнительный контекст для LLM, например тип проекта или раздел.",
+    )
+    explain_block_parser.add_argument(
+        "--ai-model",
+        default="llama3.1:8b",
+        help="Имя модели для AI-режима (по умолчанию: llama3.1:8b).",
+    )
+    explain_block_parser.add_argument(
+        "--ai-base-url",
+        default="http://localhost:11434/v1",
+        help="Ollama base URL, например http://localhost:11434/v1 или http://localhost:11434.",
+    )
+    explain_block_parser.add_argument(
+        "--ai-api-key",
+        default="ollama",
+        help="API ключ для AI провайдера (для Ollama можно оставить по умолчанию).",
+    )
+
     categorize_entities_parser = subparsers.add_parser(
         "categorize-entities",
         help="Извлечь AI-категорию для сущностей и привязать её в БД.",
@@ -302,6 +408,154 @@ def build_args_parser() -> argparse.ArgumentParser:
         "--dry",
         action="store_true",
         help="Не записывать результат в БД, а вывести JSON-предпросмотр категоризации.",
+    )
+
+    interpret_entities_parser = subparsers.add_parser(
+        "interpret-entities",
+        help="Запросить LLM-интерпретацию имён для всех сущностей типа и сохранить в short_interpretation.",
+    )
+    interpret_entities_parser.add_argument(
+        "--entity-id",
+        dest="entity_ids",
+        action="append",
+        default=None,
+        help="UUID сущности. Можно указывать несколько раз.",
+    )
+    interpret_entities_parser.add_argument(
+        "--entity-type",
+        dest="entity_type",
+        default=None,
+        help="Тип сущности из поля entity_type, например BLOCK.",
+    )
+    interpret_entities_parser.add_argument(
+        "--extra-context",
+        dest="extra_context",
+        default="",
+        help="Дополнительный контекст для LLM (например, раздел проекта).",
+    )
+    interpret_entities_parser.add_argument(
+        "--ai-model",
+        default="llama3.1:8b",
+        help="Имя модели (по умолчанию: llama3.1:8b).",
+    )
+    interpret_entities_parser.add_argument(
+        "--ai-base-url",
+        default="http://localhost:11434/v1",
+        help="OpenAI-совместимый base URL для модели (по умолчанию: Ollama).",
+    )
+    interpret_entities_parser.add_argument(
+        "--ai-api-key",
+        default="ollama",
+        help="API ключ для AI провайдера.",
+    )
+    interpret_entities_parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Число параллельных AI-запросов (по умолчанию: 1).",
+    )
+    interpret_entities_parser.add_argument(
+        "--dry",
+        action="store_true",
+        help="Не сохранять в БД, вывести JSON-предпросмотр.",
+    )
+
+    interpret_blocks_parser = subparsers.add_parser(
+        "interpret-blocks",
+        help=(
+            "Распознать смысл имени блока и сохранить его в short_interpretation, "
+            "а полное описание блока сохранить в full_interpretation."
+        ),
+    )
+    interpret_blocks_parser.add_argument(
+        "--block-id",
+        dest="block_ids",
+        action="append",
+        default=None,
+        help="UUID блока. Можно указывать несколько раз.",
+    )
+    interpret_blocks_parser.add_argument(
+        "file_ref",
+        nargs="?",
+        default=None,
+        help="UUID file-сущности или путь к файлу (если --by-path).",
+    )
+    interpret_blocks_parser.add_argument(
+        "--by-path",
+        action="store_true",
+        help="Искать file-сущность по пути, а не по UUID.",
+    )
+    interpret_blocks_parser.add_argument(
+        "--extra-context",
+        dest="extra_context",
+        default="",
+        help="Дополнительный контекст для LLM (например, раздел проекта).",
+    )
+    interpret_blocks_parser.add_argument(
+        "--ai-model",
+        default="llama3.1:8b",
+        help="Имя модели (по умолчанию: llama3.1:8b).",
+    )
+    interpret_blocks_parser.add_argument(
+        "--ai-base-url",
+        default="http://localhost:11434/v1",
+        help="OpenAI-совместимый base URL для модели (по умолчанию: Ollama).",
+    )
+    interpret_blocks_parser.add_argument(
+        "--ai-api-key",
+        default="ollama",
+        help="API ключ для AI провайдера.",
+    )
+    interpret_blocks_parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Число параллельных AI-запросов (по умолчанию: 1).",
+    )
+    interpret_blocks_parser.add_argument(
+        "--dry",
+        action="store_true",
+        help="Не сохранять в БД, вывести JSON-предпросмотр.",
+    )
+
+    interpret_block_parser = subparsers.add_parser(
+        "interpret-block",
+        help=(
+            "Распознать смысл имени одного блока и сохранить его в short_interpretation, "
+            "а полное описание блока сохранить в full_interpretation."
+        ),
+    )
+    interpret_block_parser.add_argument(
+        "--entity-id",
+        dest="entity_id",
+        required=True,
+        help="UUID блока в БД.",
+    )
+    interpret_block_parser.add_argument(
+        "--extra-context",
+        dest="extra_context",
+        default="",
+        help="Дополнительный контекст для LLM (например, раздел проекта).",
+    )
+    interpret_block_parser.add_argument(
+        "--ai-model",
+        default="llama3.1:8b",
+        help="Имя модели (по умолчанию: llama3.1:8b).",
+    )
+    interpret_block_parser.add_argument(
+        "--ai-base-url",
+        default="http://localhost:11434/v1",
+        help="OpenAI-совместимый base URL для модели (по умолчанию: Ollama).",
+    )
+    interpret_block_parser.add_argument(
+        "--ai-api-key",
+        default="ollama",
+        help="API ключ для AI провайдера.",
+    )
+    interpret_block_parser.add_argument(
+        "--dry",
+        action="store_true",
+        help="Не сохранять в БД, вывести JSON-предпросмотр.",
     )
 
     verify_extraction_parser = subparsers.add_parser(

@@ -69,6 +69,7 @@ class Category(Base):
     name: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     aliases: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True) 
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     parent: Mapped[Category | None] = relationship(
         "Category",
@@ -112,6 +113,8 @@ class Entity(Base):
     entity_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    full_interpretation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    short_interpretation: Mapped[str | None] = mapped_column(Text, nullable=True)
     data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     is_table: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     is_primitive: Mapped[bool | None] = mapped_column(Boolean, default=True, index=True)

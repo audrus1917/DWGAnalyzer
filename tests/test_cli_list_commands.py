@@ -417,6 +417,613 @@ def test_main_extract_token_tags_with_scores_prints_weighted_json(monkeypatch, c
     }
 
 
+def test_main_extract_name_meaning_prints_freeform_text(monkeypatch, capsys) -> None:
+    def stub_call(name, completions_url, model, extra_context="", **kwargs):
+        assert name == "Насос пожаротушения"
+        assert extra_context == "секция А, пожаротушение"
+        assert "chat/completions" in completions_url
+        assert model == "llama3.1:8b"
+        return "1. Насос — оборудование системы пожаротушения.\n2. Числовые идентификаторы отсутствуют."
+
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        stub_call,
+    )
+
+    exit_code = main([
+        "extract-name-meaning",
+        "Насос пожаротушения",
+        "--extra-context",
+        "секция А, пожаротушение",
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Насос" in captured.out
+    assert "пожаротушения" in captured.out
+
+
+def test_main_extract_name_meaning_includes_floor_and_elevation(monkeypatch, capsys) -> None:
+    def stub_call(name, completions_url, model, extra_context="", **kwargs):
+        assert name == "План 4й этаж отметка +2метра"
+        assert "chat/completions" in completions_url
+        return "1. Архитектурный план.\n2. 4-й этаж; отметка +2 м."
+
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        stub_call,
+    )
+
+    exit_code = main(["extract-name-meaning", "План 4й этаж отметка +2метра"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "4-й этаж" in captured.out
+    assert "+2 м" in captured.out
+
+
+def test_main_extract_name_meaning_handles_ai_runtime_error(monkeypatch) -> None:
+    def stub_call(name, completions_url, model, extra_context="", **kwargs):
+        raise RuntimeError("model not found")
+
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        stub_call,
+    )
+
+    exit_code = main(["extract-name-meaning", "Насос пожаротушения"])
+
+    assert exit_code == 1
+
+
+def test_main_extract_name_meaning_loads_name_from_db_by_entity_id(monkeypatch, capsys) -> None:
+    async def fake_get_entity_name_by_id(entity_id: str) -> str | None:
+        assert entity_id == "11111111-1111-1111-1111-111111111111"
+        return "Клапан дымоудаления"
+
+    def stub_call(name, completions_url, model, extra_context="", **kwargs):
+        assert name == "Клапан дымоудаления"
+        assert extra_context == "раздел ДУ"
+        assert "chat/completions" in completions_url
+        return "1. Клапан системы дымоудаления."
+
+    monkeypatch.setattr("parsedwg.db.get_entity_name_by_id", fake_get_entity_name_by_id)
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        stub_call,
+    )
+
+    exit_code = main([
+        "extract-name-meaning",
+        "--entity-id",
+        "11111111-1111-1111-1111-111111111111",
+        "--extra-context",
+        "раздел ДУ",
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Клапан дымоудаления" in captured.out
+    assert "Клапан системы дымоудаления" in captured.out
+
+
+def test_main_extract_name_meaning_returns_not_found_for_missing_entity_id(monkeypatch, capsys) -> None:
+    async def fake_get_entity_name_by_id(_entity_id: str) -> str | None:
+        return None
+
+    monkeypatch.setattr("parsedwg.db.get_entity_name_by_id", fake_get_entity_name_by_id)
+
+    exit_code = main([
+        "extract-name-meaning",
+        "--entity-id",
+        "22222222-2222-2222-2222-222222222222",
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "Сущность не найдена" in captured.out
+
+
+def test_main_extract_name_meaning_requires_exactly_one_input() -> None:
+    exit_code = main(["extract-name-meaning"])
+    assert exit_code == 3
+
+    exit_code = main([
+        "extract-name-meaning",
+        "Насос",
+        "--entity-id",
+        "33333333-3333-3333-3333-333333333333",
+    ])
+    assert exit_code == 3
+
+
+def test_derive_ollama_chat_url_strips_v1_suffix() -> None:
+    from parsedwg.cli import _derive_ollama_chat_url
+
+    assert _derive_ollama_chat_url("http://localhost:11434/v1") == "http://localhost:11434/api/chat"
+    assert _derive_ollama_chat_url("http://localhost:11434") == "http://localhost:11434/api/chat"
+    assert _derive_ollama_chat_url("http://localhost:11434/v1/") == "http://localhost:11434/api/chat"
+
+
+def test_main_explain_block_fetches_name_and_calls_llm(monkeypatch, capsys) -> None:
+    async def fake_get_entity_name_by_id(entity_id: str) -> str | None:
+        assert entity_id == "11111111-1111-1111-1111-111111111111"
+        return "Насос-пожарный-4этаж"
+
+    def stub_call(name, completions_url, model, extra_context="", **_kwargs):
+        assert name == "Насос-пожарный-4этаж"
+        assert extra_context == "раздел ВК"
+        assert "chat/completions" in completions_url
+        return "1. Пожарный насос.\n2. 4-й этаж."
+
+    monkeypatch.setattr("parsedwg.db.get_entity_name_by_id", fake_get_entity_name_by_id)
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        stub_call,
+    )
+
+    exit_code = main([
+        "explain-block",
+        "11111111-1111-1111-1111-111111111111",
+        "--extra-context", "раздел ВК",
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Насос-пожарный-4этаж" in captured.out
+    assert "Пожарный насос" in captured.out
+    assert "4-й этаж" in captured.out
+
+
+def test_main_explain_block_returns_not_found_when_missing(monkeypatch, capsys) -> None:
+    async def fake_get_entity_name_by_id(entity_id: str) -> str | None:
+        return None
+
+    monkeypatch.setattr("parsedwg.db.get_entity_name_by_id", fake_get_entity_name_by_id)
+
+    exit_code = main(["explain-block", "22222222-2222-2222-2222-222222222222"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "не найден" in captured.out
+
+
+def test_main_explain_block_propagates_llm_error(monkeypatch) -> None:
+    async def fake_get_entity_name_by_id(_entity_id: str) -> str | None:
+        return "Клапан-дымоудаления"
+
+    def stub_call(*_args, **_kwargs):
+        raise RuntimeError("timeout")
+
+    monkeypatch.setattr("parsedwg.db.get_entity_name_by_id", fake_get_entity_name_by_id)
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        stub_call,
+    )
+
+    exit_code = main(["explain-block", "33333333-3333-3333-3333-333333333333"])
+
+    assert exit_code == 1
+
+
+def test_main_interpret_entities_dry_mode(monkeypatch, capsys) -> None:
+    saved_ids: list[str] = []
+
+    async def fake_list_entities(
+        entity_ids: list[str] | None = None, entity_type: str | None = None
+    ):
+        assert entity_type == "BLOCK"
+        return [
+            {"id": "aaa-001", "name": "Насос-пожарный", "description": "", "entity_type": "BLOCK"},
+            {"id": "aaa-002", "name": "Клапан-ДУ", "description": "", "entity_type": "BLOCK"},
+        ]
+
+    def stub_call(*_args, **_kwargs):
+        return "1. Инженерное оборудование."
+
+    async def fake_save(entity_id: str, text: str) -> None:
+        saved_ids.append(entity_id)
+
+    monkeypatch.setattr(
+        "parsedwg.db.list_entities_for_semantic_categorization", fake_list_entities
+    )
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        stub_call,
+    )
+    monkeypatch.setattr("parsedwg.db.save_short_interpretation", fake_save)
+
+    exit_code = main(["interpret-entities", "--entity-type", "BLOCK", "--dry"])
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload == [
+        {
+            "entity_id": "aaa-001",
+            "entity_name": "Насос-пожарный",
+            "text": "1. Инженерное оборудование.",
+            "status": "ok",
+        },
+        {
+            "entity_id": "aaa-002",
+            "entity_name": "Клапан-ДУ",
+            "text": "1. Инженерное оборудование.",
+            "status": "ok",
+        },
+    ]
+    assert not saved_ids  # --dry: ничего не сохраняется
+
+
+def test_main_interpret_entities_saves_to_db(monkeypatch) -> None:
+    saved: dict[str, str] = {}
+
+    async def fake_list_entities(
+        entity_ids: list[str] | None = None, entity_type: str | None = None
+    ):
+        return [
+            {"id": "bbb-001", "name": "Вентилятор-ДУ-1", "description": "", "entity_type": "BLOCK"}
+        ]
+
+    def stub_call(*_args, **_kwargs):
+        return "1. Вентилятор дымоудаления.\n2. Первый."
+
+    async def fake_save(entity_id: str, text: str) -> None:
+        saved[entity_id] = text
+
+    monkeypatch.setattr(
+        "parsedwg.db.list_entities_for_semantic_categorization", fake_list_entities
+    )
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        stub_call,
+    )
+    monkeypatch.setattr("parsedwg.db.save_short_interpretation", fake_save)
+
+    exit_code = main(["interpret-entities", "--entity-type", "BLOCK"])
+
+    assert exit_code == 0
+    assert saved == {"bbb-001": "1. Вентилятор дымоудаления.\n2. Первый."}
+
+
+def test_main_interpret_entities_no_entities(monkeypatch, capsys) -> None:
+    async def fake_list_entities(
+        entity_ids: list[str] | None = None, entity_type: str | None = None
+    ):
+        return []
+
+    monkeypatch.setattr(
+        "parsedwg.db.list_entities_for_semantic_categorization", fake_list_entities
+    )
+
+    exit_code = main(["interpret-entities", "--entity-type", "UNKNOWN"])
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "Нет сущностей" in captured.out
+
+
+def test_main_interpret_entities_continues_after_entity_error(monkeypatch, capsys) -> None:
+    saved: dict[str, str] = {}
+
+    async def fake_list_entities(
+        entity_ids: list[str] | None = None, entity_type: str | None = None
+    ):
+        return [
+            {"id": "ccc-001", "name": "Вентилятор-ДУ-1", "description": "", "entity_type": "BLOCK"},
+            {"id": "ccc-002", "name": "Клапан-ДУ-2", "description": "", "entity_type": "BLOCK"},
+        ]
+
+    def stub_call(*_args, **kwargs):
+        if kwargs.get("name") == "Клапан-ДУ-2":
+            raise RuntimeError("timeout")
+        return "1. Оборудование дымоудаления."
+
+    async def fake_save(entity_id: str, text: str) -> None:
+        saved[entity_id] = text
+
+    monkeypatch.setattr(
+        "parsedwg.db.list_entities_for_semantic_categorization", fake_list_entities
+    )
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        stub_call,
+    )
+    monkeypatch.setattr("parsedwg.db.save_short_interpretation", fake_save)
+
+    exit_code = main(["interpret-entities", "--entity-type", "BLOCK", "--workers", "2"])
+
+    assert exit_code == 0
+    assert saved == {"ccc-001": "1. Оборудование дымоудаления."}
+    captured = capsys.readouterr()
+    assert "Интерпретировано: 1" in captured.out
+    assert "Ошибок: 1" in captured.out
+
+
+def test_main_interpret_entities_dry_mode_shows_entity_errors(monkeypatch, capsys) -> None:
+    async def fake_list_entities(
+        entity_ids: list[str] | None = None, entity_type: str | None = None
+    ):
+        return [
+            {"id": "ddd-001", "name": "Насос-1", "description": "", "entity_type": "BLOCK"},
+            {"id": "ddd-002", "name": "Клапан-2", "description": "", "entity_type": "BLOCK"},
+        ]
+
+    def stub_call(*_args, **kwargs):
+        if kwargs.get("name") == "Клапан-2":
+            raise RuntimeError("timeout")
+        return "1. Насосное оборудование."
+
+    async def fake_save(_entity_id: str, _text: str) -> None:
+        raise AssertionError("В dry-режиме сохранение не должно вызываться")
+
+    monkeypatch.setattr(
+        "parsedwg.db.list_entities_for_semantic_categorization", fake_list_entities
+    )
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        stub_call,
+    )
+    monkeypatch.setattr("parsedwg.db.save_short_interpretation", fake_save)
+
+    exit_code = main(["interpret-entities", "--entity-type", "BLOCK", "--workers", "2", "--dry"])
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert any(
+        item == {
+            "entity_id": "ddd-001",
+            "entity_name": "Насос-1",
+            "text": "1. Насосное оборудование.",
+            "status": "ok",
+        }
+        for item in payload
+    )
+    assert any(
+        item == {
+            "status": "error",
+            "entity_id": "ddd-002",
+            "entity_name": "Клапан-2",
+            "error": "timeout",
+        }
+        for item in payload
+    )
+
+
+def test_main_interpret_blocks_dry_mode(monkeypatch, capsys) -> None:
+    async def fake_list_blocks_for_interpretation(
+        block_ids: list[str] | None = None,
+        file_id: str | None = None,
+    ):
+        assert block_ids is None
+        assert file_id == "file-001"
+        return [
+            {"id": "blk-001", "name": "Насос-ДУ", "description": "", "file_id": "file-001"},
+            {"id": "blk-002", "name": "Клапан-ДУ", "description": "", "file_id": "file-001"},
+        ]
+
+    def stub_call(*_args, **kwargs):
+        extra_context = kwargs.get("extra_context", "")
+        if "максимально подробное описание" in extra_context:
+            return f"FULL::{kwargs['name']}"
+        return f"SHORT::{kwargs['name']}"
+
+    monkeypatch.setattr(
+        "parsedwg.db.list_blocks_for_interpretation",
+        fake_list_blocks_for_interpretation,
+    )
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        stub_call,
+    )
+
+    exit_code = main(["interpret-blocks", "file-001", "--dry"])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == [
+        {
+            "status": "ok",
+            "block_id": "blk-001",
+            "block_name": "Насос-ДУ",
+            "duration_seconds": payload[0]["duration_seconds"],
+            "short_interpretation": "SHORT::Насос-ДУ",
+            "description": "FULL::Насос-ДУ",
+            "full_interpretation": "FULL::Насос-ДУ",
+        },
+        {
+            "status": "ok",
+            "block_id": "blk-002",
+            "block_name": "Клапан-ДУ",
+            "duration_seconds": payload[1]["duration_seconds"],
+            "short_interpretation": "SHORT::Клапан-ДУ",
+            "description": "FULL::Клапан-ДУ",
+            "full_interpretation": "FULL::Клапан-ДУ",
+        },
+    ]
+    assert all(isinstance(item["duration_seconds"], (int, float)) for item in payload)
+
+
+def test_main_interpret_blocks_saves_both_interpretations(monkeypatch, capsys) -> None:
+    saved: dict[str, dict[str, str]] = {}
+
+    async def fake_list_blocks_for_interpretation(
+        block_ids: list[str] | None = None,
+        file_id: str | None = None,
+    ):
+        assert block_ids == ["11111111-1111-1111-1111-111111111111"]
+        assert file_id is None
+        return [
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "name": "Вентилятор-ДУ-1",
+                "description": "",
+                "file_id": "",
+            }
+        ]
+
+    async def fake_save_block_interpretations(
+        block_id: str,
+        short_interpretation: str,
+        full_interpretation: str,
+        description: str,
+    ) -> None:
+        saved[block_id] = {
+            "description": description,
+            "short": short_interpretation,
+            "full": full_interpretation,
+        }
+
+    monkeypatch.setattr(
+        "parsedwg.db.list_blocks_for_interpretation",
+        fake_list_blocks_for_interpretation,
+    )
+    monkeypatch.setattr(
+        "parsedwg.db.save_block_interpretations",
+        fake_save_block_interpretations,
+    )
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        lambda *_args, **kwargs: (
+            f"FULL::{kwargs['name']}"
+            if "максимально подробное описание" in kwargs.get("extra_context", "")
+            else f"SHORT::{kwargs['name']}"
+        ),
+    )
+
+    exit_code = main([
+        "interpret-blocks",
+        "--block-id",
+        "11111111-1111-1111-1111-111111111111",
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert saved == {
+        "11111111-1111-1111-1111-111111111111": {
+            "description": "FULL::Вентилятор-ДУ-1",
+            "short": "SHORT::Вентилятор-ДУ-1",
+            "full": "FULL::Вентилятор-ДУ-1",
+        }
+    }
+    assert "обработан за" in captured.out
+    assert "Интерпретировано блоков: 1" in captured.out
+
+
+def test_main_interpret_blocks_reports_failures(monkeypatch, capsys) -> None:
+    async def fake_list_blocks_for_interpretation(
+        block_ids: list[str] | None = None,
+        file_id: str | None = None,
+    ):
+        _ = (block_ids, file_id)
+        return [
+            {"id": "blk-001", "name": "Насос-1", "description": "", "file_id": ""},
+            {"id": "blk-002", "name": "Клапан-2", "description": "", "file_id": ""},
+        ]
+
+    async def fake_save_block_interpretations(
+        block_id: str,
+        short_interpretation: str,
+        full_interpretation: str,
+        description: str,
+    ) -> None:
+        _ = (block_id, short_interpretation, full_interpretation, description)
+
+    def stub_call(*_args, **kwargs):
+        if kwargs["name"] == "Клапан-2":
+            raise RuntimeError("timeout")
+        if "максимально подробное описание" in kwargs.get("extra_context", ""):
+            return "FULL"
+        return "SHORT"
+
+    monkeypatch.setattr(
+        "parsedwg.db.list_blocks_for_interpretation",
+        fake_list_blocks_for_interpretation,
+    )
+    monkeypatch.setattr(
+        "parsedwg.db.save_block_interpretations",
+        fake_save_block_interpretations,
+    )
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        stub_call,
+    )
+
+    exit_code = main(["interpret-blocks", "--block-id", "blk-001", "--block-id", "blk-002"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "обработан за" in captured.out
+    assert "Интерпретировано блоков: 1" in captured.out
+    assert "Ошибок: 1" in captured.out
+
+
+def test_main_interpret_block_by_entity_id(monkeypatch, capsys) -> None:
+    captured_args: dict[str, object] = {}
+
+    async def fake_list_blocks_for_interpretation(
+        block_ids: list[str] | None = None,
+        file_id: str | None = None,
+    ):
+        captured_args["block_ids"] = block_ids
+        captured_args["file_id"] = file_id
+        return [
+            {
+                "id": "blk-entity-001",
+                "name": "Щит-АВР",
+                "description": "",
+                "file_id": "",
+            }
+        ]
+
+    async def fake_save_block_interpretations(
+        block_id: str,
+        short_interpretation: str,
+        full_interpretation: str,
+        description: str,
+    ) -> None:
+        captured_args["saved"] = {
+            "block_id": block_id,
+            "short": short_interpretation,
+            "full": full_interpretation,
+            "description": description,
+        }
+
+    def stub_call(*_args, **kwargs):
+        extra_context = kwargs.get("extra_context", "")
+        if "максимально подробное описание" in extra_context:
+            return f"FULL::{kwargs['name']}"
+        return f"SHORT::{kwargs['name']}"
+
+    monkeypatch.setattr(
+        "parsedwg.db.list_blocks_for_interpretation",
+        fake_list_blocks_for_interpretation,
+    )
+    monkeypatch.setattr(
+        "parsedwg.db.save_block_interpretations",
+        fake_save_block_interpretations,
+    )
+    monkeypatch.setattr(
+        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        stub_call,
+    )
+
+    exit_code = main(["interpret-block", "--entity-id", "blk-entity-001"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_args["block_ids"] == ["blk-entity-001"]
+    assert captured_args["file_id"] is None
+    assert captured_args["saved"] == {
+        "block_id": "blk-entity-001",
+        "short": "SHORT::Щит-АВР",
+        "full": "FULL::Щит-АВР",
+        "description": "FULL::Щит-АВР",
+    }
+    assert "Интерпретировано блоков: 1" in captured.out
+
+
 def test_main_extract_token_tags_requires_tokens_or_drawing(capsys) -> None:
     exit_code = main(["extract-token-tags"])
 

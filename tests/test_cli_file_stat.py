@@ -171,3 +171,100 @@ def test_file_stat_exports_db_tables_by_id(tmp_path, monkeypatch) -> None:
     assert output_path.exists()
     db_table_xlsx = tmp_path / "DB_TABLE_TITLE_ID.xlsx"
     assert db_table_xlsx.exists()
+
+
+def test_export_blocks_xlsx_by_path_creates_expected_sheet(tmp_path, monkeypatch) -> None:
+    source_path = _make_dxf(tmp_path)
+    output_path = tmp_path / "blocks.xlsx"
+
+    async def fake_get_file_id_by_source(_source_ref: str):
+        return "123e4567-e89b-12d3-a456-426614174000"
+
+    async def fake_list_blocks_for_export(_file_id: str):
+        return [
+            {
+                "name": "SOCKET_220V",
+                "layers": [
+                    {"name": "Electrical", "short_interpretation": "Электрика"},
+                    {"name": "Sockets", "short_interpretation": None},
+                ],
+                "full_interpretation": "Розетка для подключения\nэлектроприборов",
+                "attributes": {"power": "220V", "phase": "1"},
+                "short_interpretation": "Розетка 220V",
+                "insert_count": 50,
+            }
+        ]
+
+    monkeypatch.setattr("parsedwg.db.get_file_id_by_source", fake_get_file_id_by_source)
+    monkeypatch.setattr("parsedwg.db.list_blocks_for_export", fake_list_blocks_for_export)
+
+    exit_code = main([
+        "export-blocks-xlsx",
+        str(source_path),
+        "--by-path",
+        "-o",
+        str(output_path),
+    ])
+
+    assert exit_code == 0
+    assert output_path.exists()
+
+    wb = openpyxl.load_workbook(output_path)
+    ws = wb["Блоки"]
+    headers = [cell.value for cell in ws[1]]
+    assert headers == [
+        "Название блока",
+        "Названия связанных слоев",
+        "Интерпретация полная",
+        "Полезные атрибуты",
+        "Интерпретация краткая",
+        "Количество вхождений блока в чертеж",
+    ]
+
+    row = [cell.value for cell in ws[2]]
+    assert row[0] == "SOCKET_220V"
+    assert row[1] == "Electrical\nSockets"
+    assert row[2] == "Розетка для подключения\nэлектроприборов"
+    assert row[3] == "phase: 1\npower: 220V"
+    assert row[4] == "Розетка 220V"
+    assert row[5] == 50
+
+
+def test_export_blocks_table_by_path_prints_expected_ascii(tmp_path, monkeypatch, capsys) -> None:
+    source_path = _make_dxf(tmp_path)
+
+    async def fake_get_file_id_by_source(_source_ref: str):
+        return "123e4567-e89b-12d3-a456-426614174000"
+
+    async def fake_list_blocks_for_export(_file_id: str):
+        return [
+            {
+                "name": "SOCKET_220V",
+                "layers": [
+                    {"name": "Electrical", "short_interpretation": "Электрика"},
+                    {"name": "Sockets", "short_interpretation": None},
+                ],
+                "full_interpretation": "Розетка для подключения\nэлектроприборов",
+                "attributes": {"power": "220V", "phase": "1"},
+                "short_interpretation": "Розетка 220V",
+                "insert_count": 50,
+            }
+        ]
+
+    monkeypatch.setattr("parsedwg.db.get_file_id_by_source", fake_get_file_id_by_source)
+    monkeypatch.setattr("parsedwg.db.list_blocks_for_export", fake_list_blocks_for_export)
+
+    exit_code = main([
+        "export-blocks-table",
+        str(source_path),
+        "--by-path",
+    ])
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "Название блока" in captured.out
+    assert "SOCKET_220V" in captured.out
+    assert "Electrical; Sockets" in captured.out
+    assert "phase: 1; power: 220V" in captured.out
+    assert "Розетка 220V" in captured.out
+    assert "50" in captured.out

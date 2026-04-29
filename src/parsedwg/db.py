@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import selectinload
 
 from .settings import settings
-from .orm import Category, Entity, EntityType, Project
+from .orm import Category, Entity, EntityToEntity, EntityType, Project
 
 engine = create_async_engine(settings.database_url, echo=settings.database_echo)
 
@@ -33,6 +33,203 @@ async def get_file_id_by_source(source_ref: str) -> str | None:
         result = await session.execute(stmt)
         row = result.first()
     return str(row[0]) if row else None
+
+
+async def get_entity_name_by_id(entity_id: str) -> str | None:
+    """Возвращает name сущности по UUID, или None если не найдена."""
+    async with async_session_factory() as session:
+        entity = await session.get(Entity, _uuid.UUID(entity_id))
+    return entity.name if entity is not None else None
+
+
+async def save_short_interpretation(entity_id: str, text: str) -> None:
+    """Записывает short_interpretation для сущности по UUID."""
+    async with async_session_factory() as session:
+        entity = await session.get(Entity, _uuid.UUID(entity_id))
+        if entity is None:
+            raise LookupError(f"Сущность {entity_id} не найдена.")
+        entity.short_interpretation = text
+        await session.commit()
+
+
+async def save_block_interpretations(
+    block_id: str,
+    short_interpretation: str,
+    full_interpretation: str,
+    description: str,
+) -> None:
+    """Записывает интерпретации блока по UUID."""
+    async with async_session_factory() as session:
+        entity = await session.get(Entity, _uuid.UUID(block_id))
+        if entity is None:
+            raise LookupError(f"Блок {block_id} не найден.")
+        entity.description = description
+        entity.short_interpretation = short_interpretation
+        entity.full_interpretation = full_interpretation
+        await session.commit()
+
+
+async def list_blocks_for_interpretation(
+    block_ids: list[str] | None = None,
+    file_id: str | None = None,
+) -> list[dict[str, str]]:
+    """Возвращает блоки для пакетной интерпретации."""
+
+    if bool(block_ids) == bool(file_id):
+        raise ValueError("Нужно указать либо block_ids, либо file_id.")
+
+    stmt = (
+        select(Entity.id, Entity.name, Entity.description, Entity.file_id)
+        .where(Entity.entity_type == EntityType.block)
+    )
+    uuid_order: dict[_uuid.UUID, int] = {}
+
+    if block_ids:
+        parsed_ids = [_uuid.UUID(block_id) for block_id in block_ids]
+        uuid_order = {block_id: index for index, block_id in enumerate(parsed_ids)}
+        stmt = stmt.where(Entity.id.in_(parsed_ids))
+    else:
+        file_uuid = _uuid.UUID(file_id)
+        stmt = stmt.where(Entity.parent_id == file_uuid).order_by(Entity.name.asc(), Entity.id.asc())
+
+    async with async_session_factory() as session:
+        result = await session.execute(stmt)
+        rows = result.mappings().all()
+
+    payload = [
+        {
+            "id": str(row["id"]),
+            "name": row["name"],
+            "description": row["description"] or "",
+            "file_id": str(row["file_id"]) if row["file_id"] is not None else "",
+        }
+        for row in rows
+    ]
+    if uuid_order:
+        payload.sort(key=lambda item: uuid_order[_uuid.UUID(item["id"])])
+    return payload
+
+
+async def get_full_description(
+    block_name: str,
+    file_id: str | None = None,
+) -> dict[str, object] | None:
+    """Возвращает полное описание BLOCK-сущности:
+    имя, слои (name + short_interpretation), атрибуты INSERT-примитивов,
+    список INSERT-сущностей, где name совпадает с именем блока."""
+    async with async_session_factory() as session:
+        block_stmt = (
+            select(Entity)
+            .where(Entity.entity_type == EntityType.block)
+            .where(Entity.name == block_name)
+        )
+        if file_id is not None:
+            block_stmt = block_stmt.where(Entity.file_id == _uuid.UUID(file_id))
+        block_stmt = block_stmt.limit(1)
+        block_result = await session.execute(block_stmt)
+        block = block_result.scalar_one_or_none()
+        if block is None:
+            return None
+        block_file_id = getattr(block, "file_id", None)
+        resolved_file_id = block_file_id or (_uuid.UUID(file_id) if file_id is not None else None)
+
+        # Слои: через EntityToEntity (on_layer) от дочерних примитивов
+        child_ids_subq = (
+            select(Entity.id)
+            .where(Entity.parent_id == block.id)
+            .scalar_subquery()
+        )
+        layer_ids_subq = (
+            select(EntityToEntity.dst_id)
+            .where(EntityToEntity.src_id.in_(child_ids_subq))
+            .where(EntityToEntity.link == "on_layer")
+            .scalar_subquery()
+        )
+        layers_result = await session.execute(
+            select(Entity.name, Entity.short_interpretation)
+            .where(Entity.id.in_(layer_ids_subq))
+            .where(Entity.entity_type == EntityType.layer)
+            .distinct()
+            .order_by(Entity.name.asc())
+        )
+        layers = [
+            {"name": row.name, "short_interpretation": row.short_interpretation}
+            for row in layers_result
+        ]
+
+        # Атрибуты: из data["attribs"] всех INSERT-потомков блока
+        attribs_result = await session.execute(
+            select(Entity.data)
+            .where(Entity.parent_id == block.id)
+            .where(Entity.entity_type == "INSERT")
+            .where(Entity.data.is_not(None))
+        )
+        merged_attribs: dict[str, object] = {}
+        for (row_data,) in attribs_result:
+            if isinstance(row_data, dict) and isinstance(row_data.get("attribs"), dict):
+                merged_attribs.update(row_data["attribs"])
+
+        # INSERT-сущности, вставляющие этот блок (name == block_name)
+        inserts_result = await session.execute(
+            select(Entity.id, Entity.parent_id, Entity.file_id, Entity.data)
+            .where(Entity.entity_type == "INSERT")
+            .where(Entity.name == block_name)
+            .where(Entity.file_id == resolved_file_id if resolved_file_id is not None else True)
+            .order_by(Entity.id.asc())
+        )
+        inserts = [
+            {
+                "id": str(row.id),
+                "parent_id": str(row.parent_id) if row.parent_id else None,
+                "file_id": str(row.file_id) if row.file_id else None,
+                "data": row.data or {},
+            }
+            for row in inserts_result
+        ]
+
+    return {
+        "id": str(block.id),
+        "name": block.name,
+        "description": block.description,
+        "full_interpretation": getattr(block, "full_interpretation", None),
+        "short_interpretation": getattr(block, "short_interpretation", None),
+        "layers": layers,
+        "attributes": merged_attribs,
+        "inserts": inserts,
+        "insert_count": len(inserts),
+    }
+
+
+async def get_full_description_by_id(block_id: str) -> dict[str, object] | None:
+    """Возвращает полное описание блока по UUID."""
+
+    async with async_session_factory() as session:
+        block = await session.get(Entity, _uuid.UUID(block_id))
+        if block is None:
+            return None
+    return await get_full_description(block.name, file_id=str(block.file_id) if block.file_id else None)
+
+
+async def list_blocks_for_export(file_id: str) -> list[dict[str, object]]:
+    """Возвращает данные BLOCK-сущностей файла для XLSX-экспорта."""
+    file_uuid = _uuid.UUID(file_id)
+    stmt = (
+        select(Entity.name)
+        .where(Entity.entity_type == EntityType.block)
+        .where(Entity.parent_id == file_uuid)
+        .order_by(Entity.name.asc())
+    )
+
+    async with async_session_factory() as session:
+        result = await session.execute(stmt)
+        block_names = [str(row[0]) for row in result.all()]
+
+    payload: list[dict[str, object]] = []
+    for block_name in block_names:
+        block_data = await get_full_description(block_name, file_id=file_id)
+        if block_data is not None:
+            payload.append(block_data)
+    return payload
 
 
 async def get_table_blocks_by_file_id(file_id: str) -> list[dict[str, object]]:
@@ -556,3 +753,70 @@ async def get_table_blocks_for_source(source_ref: str) -> list[dict[str, object]
             }
         )
     return payload
+
+
+def get_block_full_description(block: dict[str, object]) -> str:
+    """Генерирует текстовое описание блока для AI на основе его данных."""
+
+    name = str(block.get("name", "") or "")
+    description = str(block.get("description", "") or "")
+    layers = block.get("layers", [])
+    attributes = block.get("attributes", {})
+    inserts = block.get("inserts", [])
+    insert_count = block.get("insert_count", 0)
+
+    lines: list[str] = []
+    if name:
+        lines.append(f"Имя блока: {name}")
+    if description:
+        lines.append(f"Описание: {description}")
+
+    if isinstance(layers, list) and layers:
+        layer_parts: list[str] = []
+        for layer in layers:
+            if not isinstance(layer, dict):
+                continue
+            layer_name = str(layer.get("name", "") or "").strip()
+            if not layer_name:
+                continue
+            layer_meaning = str(layer.get("short_interpretation", "") or "").strip()
+            if layer_meaning:
+                layer_parts.append(f"{layer_name} ({layer_meaning})")
+            else:
+                layer_parts.append(layer_name)
+        if layer_parts:
+            lines.append("Связанные слои: " + "; ".join(layer_parts))
+
+    if isinstance(attributes, dict) and attributes:
+        attribute_parts = [f"{key}={attributes[key]}" for key in sorted(attributes)]
+        lines.append("Атрибуты: " + "; ".join(attribute_parts))
+
+    if isinstance(insert_count, int):
+        lines.append(f"Количество вставок: {insert_count}")
+
+    if isinstance(inserts, list) and inserts:
+        insert_parts: list[str] = []
+        for insert in inserts[:5]:
+            if not isinstance(insert, dict):
+                continue
+            insert_data = insert.get("data", {})
+            if not isinstance(insert_data, dict):
+                insert_data = {}
+            fragment: list[str] = []
+            block_name = str(insert_data.get("block", "") or "").strip()
+            if block_name:
+                fragment.append(f"block={block_name}")
+            layer_name = str(insert_data.get("layer", "") or "").strip()
+            if layer_name:
+                fragment.append(f"layer={layer_name}")
+            attribs = insert_data.get("attribs", {})
+            if isinstance(attribs, dict) and attribs:
+                fragment.append(
+                    "attribs=" + ", ".join(f"{key}={attribs[key]}" for key in sorted(attribs))
+                )
+            if fragment:
+                insert_parts.append("{" + "; ".join(fragment) + "}")
+        if insert_parts:
+            lines.append("Примеры вставок: " + "; ".join(insert_parts))
+
+    return "\n".join(lines).strip()

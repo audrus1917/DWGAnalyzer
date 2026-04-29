@@ -81,7 +81,7 @@ class DXFAnalyzer:
         if text_value := cls.get_text(entity):
             entity_data["text"] = re.sub(r"\s+", " ", text_value).strip()
 
-        attribs = {}
+        attribs: dict[str, Any] = {}
         for attr_name, value in entity.dxf.all_existing_dxf_attribs().items():
             if cls.is_point_like(value):
                 attribs[attr_name] = cls.format_point(value)
@@ -89,14 +89,29 @@ class DXFAnalyzer:
                 attribs[attr_name] = value
         if attribs:
             entity_data["attribs"] = attribs
+
             
         match dxftype:
             case "INSERT":
                 entity_data["block"] = entity.dxf.name
+                entity_data["name"] = entity.dxf.name
+                entity_data["target_block"] = entity.dxf.name
                 entity_data["geom"] = "SRID=4326;POINT({} {})".format(
                     entity.dxf.insert.x, entity.dxf.insert.y
                 )
                 entity_data["parent_block"] = getattr(block, "name", None) if block is not None else None
+                insert_attribs = dict(entity_data.get("attribs", {}))
+                for attr in entity.attribs:
+                    attr_name = attr.dxf.tag
+                    value = attr.dxf.text
+
+                    if cls.is_point_like(value):
+                        insert_attribs[attr_name] = cls.format_point(value)
+                    else:
+                        insert_attribs[attr_name] = value
+                if insert_attribs:
+                    entity_data["attribs"] = insert_attribs
+
             case "LWPOLYLINE":
                 points = entity.get_points("xy")
                 entity_data["points"] = [cls.format_point(point) for point in points]
