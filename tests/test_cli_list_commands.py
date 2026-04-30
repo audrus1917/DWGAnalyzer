@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from parsedwg.cli import main
+from parsedwg.utils import get_mleader_annotation_text
 
 
 def test_main_process_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
@@ -792,6 +793,11 @@ def test_main_interpret_entities_dry_mode_shows_entity_errors(monkeypatch, capsy
 
 
 def test_main_interpret_blocks_dry_mode(monkeypatch, capsys) -> None:
+    descriptions = {
+        "Насос-ДУ": {"name": "Насос-ДУ", "layers": [{"name": "M-NASOS"}]},
+        "Клапан-ДУ": {"name": "Клапан-ДУ", "layers": [{"name": "M-KLAPAN"}]},
+    }
+
     async def fake_list_blocks_for_interpretation(
         block_ids: list[str] | None = None,
         file_id: str | None = None,
@@ -802,6 +808,10 @@ def test_main_interpret_blocks_dry_mode(monkeypatch, capsys) -> None:
             {"id": "blk-001", "name": "Насос-ДУ", "description": "", "file_id": "file-001"},
             {"id": "blk-002", "name": "Клапан-ДУ", "description": "", "file_id": "file-001"},
         ]
+
+    async def fake_get_full_description(block_name: str, file_id: str | None = None):
+        assert file_id == "file-001"
+        return descriptions[block_name]
 
     def stub_call(*_args, **kwargs):
         extra_context = kwargs.get("extra_context", "")
@@ -814,6 +824,10 @@ def test_main_interpret_blocks_dry_mode(monkeypatch, capsys) -> None:
         fake_list_blocks_for_interpretation,
     )
     monkeypatch.setattr(
+        "parsedwg.db.get_full_description",
+        fake_get_full_description,
+    )
+    monkeypatch.setattr(
         "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
         stub_call,
     )
@@ -822,24 +836,26 @@ def test_main_interpret_blocks_dry_mode(monkeypatch, capsys) -> None:
 
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
+    first_text = json.dumps(descriptions["Насос-ДУ"], ensure_ascii=False, sort_keys=True)
+    second_text = json.dumps(descriptions["Клапан-ДУ"], ensure_ascii=False, sort_keys=True)
     assert payload == [
         {
             "status": "ok",
             "block_id": "blk-001",
             "block_name": "Насос-ДУ",
             "duration_seconds": payload[0]["duration_seconds"],
-            "short_interpretation": "SHORT::Насос-ДУ",
-            "description": "FULL::Насос-ДУ",
-            "full_interpretation": "FULL::Насос-ДУ",
+            "short_interpretation": f"SHORT::{first_text}",
+            "description": first_text,
+            "full_interpretation": f"FULL::{first_text}",
         },
         {
             "status": "ok",
             "block_id": "blk-002",
             "block_name": "Клапан-ДУ",
             "duration_seconds": payload[1]["duration_seconds"],
-            "short_interpretation": "SHORT::Клапан-ДУ",
-            "description": "FULL::Клапан-ДУ",
-            "full_interpretation": "FULL::Клапан-ДУ",
+            "short_interpretation": f"SHORT::{second_text}",
+            "description": second_text,
+            "full_interpretation": f"FULL::{second_text}",
         },
     ]
     assert all(isinstance(item["duration_seconds"], (int, float)) for item in payload)
@@ -847,6 +863,11 @@ def test_main_interpret_blocks_dry_mode(monkeypatch, capsys) -> None:
 
 def test_main_interpret_blocks_saves_both_interpretations(monkeypatch, capsys) -> None:
     saved: dict[str, dict[str, str]] = {}
+    saved_descriptions: dict[str, str] = {}
+    full_description_payload = {
+        "name": "Вентилятор-ДУ-1",
+        "layers": [{"name": "M-VENT", "short_interpretation": "вентиляция"}],
+    }
 
     async def fake_list_blocks_for_interpretation(
         block_ids: list[str] | None = None,
@@ -862,6 +883,14 @@ def test_main_interpret_blocks_saves_both_interpretations(monkeypatch, capsys) -
                 "file_id": "",
             }
         ]
+
+    async def fake_get_full_description(block_name: str, file_id: str | None = None):
+        assert block_name == "Вентилятор-ДУ-1"
+        assert file_id is None
+        return full_description_payload
+
+    async def fake_save_block_description(block_id: str, description: str) -> None:
+        saved_descriptions[block_id] = description
 
     async def fake_save_block_interpretations(
         block_id: str,
@@ -880,9 +909,18 @@ def test_main_interpret_blocks_saves_both_interpretations(monkeypatch, capsys) -
         fake_list_blocks_for_interpretation,
     )
     monkeypatch.setattr(
+        "parsedwg.db.get_full_description",
+        fake_get_full_description,
+    )
+    monkeypatch.setattr(
+        "parsedwg.db.save_block_description",
+        fake_save_block_description,
+    )
+    monkeypatch.setattr(
         "parsedwg.db.save_block_interpretations",
         fake_save_block_interpretations,
     )
+    full_description_text = json.dumps(full_description_payload, ensure_ascii=False, sort_keys=True)
     monkeypatch.setattr(
         "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
         lambda *_args, **kwargs: (
@@ -900,11 +938,14 @@ def test_main_interpret_blocks_saves_both_interpretations(monkeypatch, capsys) -
 
     captured = capsys.readouterr()
     assert exit_code == 0
+    assert saved_descriptions == {
+        "11111111-1111-1111-1111-111111111111": full_description_text,
+    }
     assert saved == {
         "11111111-1111-1111-1111-111111111111": {
-            "description": "FULL::Вентилятор-ДУ-1",
-            "short": "SHORT::Вентилятор-ДУ-1",
-            "full": "FULL::Вентилятор-ДУ-1",
+            "description": full_description_text,
+            "short": f"SHORT::{full_description_text}",
+            "full": f"FULL::{full_description_text}",
         }
     }
     assert "обработан за" in captured.out
@@ -912,6 +953,11 @@ def test_main_interpret_blocks_saves_both_interpretations(monkeypatch, capsys) -
 
 
 def test_main_interpret_blocks_reports_failures(monkeypatch, capsys) -> None:
+    descriptions = {
+        "Насос-1": {"name": "Насос-1", "layers": []},
+        "Клапан-2": {"name": "Клапан-2", "layers": []},
+    }
+
     async def fake_list_blocks_for_interpretation(
         block_ids: list[str] | None = None,
         file_id: str | None = None,
@@ -922,6 +968,13 @@ def test_main_interpret_blocks_reports_failures(monkeypatch, capsys) -> None:
             {"id": "blk-002", "name": "Клапан-2", "description": "", "file_id": ""},
         ]
 
+    async def fake_get_full_description(block_name: str, file_id: str | None = None):
+        _ = file_id
+        return descriptions[block_name]
+
+    async def fake_save_block_description(block_id: str, description: str) -> None:
+        _ = (block_id, description)
+
     async def fake_save_block_interpretations(
         block_id: str,
         short_interpretation: str,
@@ -930,8 +983,10 @@ def test_main_interpret_blocks_reports_failures(monkeypatch, capsys) -> None:
     ) -> None:
         _ = (block_id, short_interpretation, full_interpretation, description)
 
+    failing_text = json.dumps(descriptions["Клапан-2"], ensure_ascii=False, sort_keys=True)
+
     def stub_call(*_args, **kwargs):
-        if kwargs["name"] == "Клапан-2":
+        if kwargs["name"] == failing_text:
             raise RuntimeError("timeout")
         if "максимально подробное описание" in kwargs.get("extra_context", ""):
             return "FULL"
@@ -940,6 +995,14 @@ def test_main_interpret_blocks_reports_failures(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         "parsedwg.db.list_blocks_for_interpretation",
         fake_list_blocks_for_interpretation,
+    )
+    monkeypatch.setattr(
+        "parsedwg.db.get_full_description",
+        fake_get_full_description,
+    )
+    monkeypatch.setattr(
+        "parsedwg.db.save_block_description",
+        fake_save_block_description,
     )
     monkeypatch.setattr(
         "parsedwg.db.save_block_interpretations",
@@ -961,6 +1024,10 @@ def test_main_interpret_blocks_reports_failures(monkeypatch, capsys) -> None:
 
 def test_main_interpret_block_by_entity_id(monkeypatch, capsys) -> None:
     captured_args: dict[str, object] = {}
+    full_description_payload = {
+        "name": "Щит-АВР",
+        "attributes": {"PANEL": "AВР"},
+    }
 
     async def fake_list_blocks_for_interpretation(
         block_ids: list[str] | None = None,
@@ -976,6 +1043,19 @@ def test_main_interpret_block_by_entity_id(monkeypatch, capsys) -> None:
                 "file_id": "",
             }
         ]
+
+    async def fake_get_full_description(block_name: str, file_id: str | None = None):
+        captured_args["description_request"] = {
+            "block_name": block_name,
+            "file_id": file_id,
+        }
+        return full_description_payload
+
+    async def fake_save_block_description(block_id: str, description: str) -> None:
+        captured_args["saved_description"] = {
+            "block_id": block_id,
+            "description": description,
+        }
 
     async def fake_save_block_interpretations(
         block_id: str,
@@ -1001,6 +1081,14 @@ def test_main_interpret_block_by_entity_id(monkeypatch, capsys) -> None:
         fake_list_blocks_for_interpretation,
     )
     monkeypatch.setattr(
+        "parsedwg.db.get_full_description",
+        fake_get_full_description,
+    )
+    monkeypatch.setattr(
+        "parsedwg.db.save_block_description",
+        fake_save_block_description,
+    )
+    monkeypatch.setattr(
         "parsedwg.db.save_block_interpretations",
         fake_save_block_interpretations,
     )
@@ -1010,6 +1098,7 @@ def test_main_interpret_block_by_entity_id(monkeypatch, capsys) -> None:
     )
 
     exit_code = main(["interpret-block", "--entity-id", "blk-entity-001"])
+    full_description_text = json.dumps(full_description_payload, ensure_ascii=False, sort_keys=True)
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -1017,11 +1106,250 @@ def test_main_interpret_block_by_entity_id(monkeypatch, capsys) -> None:
     assert captured_args["file_id"] is None
     assert captured_args["saved"] == {
         "block_id": "blk-entity-001",
-        "short": "SHORT::Щит-АВР",
-        "full": "FULL::Щит-АВР",
-        "description": "FULL::Щит-АВР",
+        "short": f"SHORT::{full_description_text}",
+        "full": f"FULL::{full_description_text}",
+        "description": full_description_text,
     }
     assert "Интерпретировано блоков: 1" in captured.out
+
+
+def test_main_find_mleader_nearest_outputs_json(monkeypatch, capsys) -> None:
+    captured_args: dict[str, object] = {}
+
+    async def fake_list_multileaders_for_nearest_lookup(file_id: str | None = None):
+        captured_args["file_id"] = file_id
+        return [
+            {
+                "id": "ml-001",
+                "file_id": "file-001",
+                "name": "MULTILEADER",
+                "source_ref": "/tmp/test.dxf",
+                "block": "*Model_Space",
+                "layer": "HP_Текст",
+            }
+        ]
+
+    def fake_collect(
+        entities: list[dict[str, str]],
+        search_types: tuple[str, ...] = ("LINE", "CIRCLE", "LWPOLYLINE"),
+    ):
+        captured_args["entities"] = entities
+        captured_args["search_types"] = search_types
+        return [
+            {
+                "status": "ok",
+                "entity_id": "ml-001",
+                "annotation_text": "Поз. 1",
+                "nearest_type": "LINE",
+                "distance": 0.25,
+            }
+        ]
+
+    monkeypatch.setattr(
+        "parsedwg.db.list_multileaders_for_nearest_lookup",
+        fake_list_multileaders_for_nearest_lookup,
+    )
+    monkeypatch.setattr(
+        "parsedwg.cli._collect_mleader_nearest_rows",
+        fake_collect,
+    )
+
+    exit_code = main([
+        "find-mleader-nearest",
+        "--search-type",
+        "LINE",
+        "--search-type",
+        "TEXT",
+    ])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert captured_args["file_id"] is None
+    assert captured_args["search_types"] == ("LINE", "TEXT")
+    assert payload == [
+        {
+            "status": "ok",
+            "entity_id": "ml-001",
+            "annotation_text": "Поз. 1",
+            "nearest_type": "LINE",
+            "distance": 0.25,
+        }
+    ]
+
+
+def test_collect_mleader_nearest_rows_includes_annotation_text(monkeypatch) -> None:
+    import parsedwg.cli as cli_module
+
+    class FakeDxfNamespace:
+        def __init__(self, handle: str = "", layer: str = "L-1"):
+            self.handle = handle
+            self.layer = layer
+
+        def hasattr(self, name: str) -> bool:
+            return hasattr(self, name)
+
+    class FakeNearestEntity:
+        def __init__(self) -> None:
+            self.dxf = FakeDxfNamespace(handle="ABCD", layer="LINE-LAYER")
+
+        def dxftype(self) -> str:
+            return "LINE"
+
+    class FakeMLeader:
+        def dxftype(self) -> str:
+            return "MULTILEADER"
+
+    class FakeLayout:
+        def __iter__(self):
+            return iter([FakeMLeader(), FakeNearestEntity()])
+
+    class FakeDoc:
+        blocks: list[object] = []
+
+        def modelspace(self):
+            return FakeLayout()
+
+    entities = [
+        {
+            "id": "ml-001",
+            "file_id": "file-001",
+            "source_ref": "/tmp/test.dxf",
+            "block": "*Model_Space",
+            "layer": "HP_Текст",
+        }
+    ]
+
+    monkeypatch.setattr(
+        "parsedwg.process_tree.DWGTreeProcessor.read_drawing",
+        lambda _path: FakeDoc(),
+    )
+    monkeypatch.setattr(
+        "parsedwg.cli._resolve_source_ref_to_drawing_path",
+        lambda source_ref, temp_dir: Path(source_ref),
+    )
+    monkeypatch.setattr(
+        "parsedwg.utils.get_mleader_target_point",
+        lambda _mleader: object(),
+    )
+    monkeypatch.setattr(
+        "parsedwg.utils.get_mleader_annotation_text",
+        lambda _mleader: "Помещение 101",
+    )
+    monkeypatch.setattr(
+        "parsedwg.utils.find_closest_entity_in_entities",
+        lambda target_point, layout, search_types: (FakeNearestEntity(), 0.5),
+    )
+
+    rows = cli_module._collect_mleader_nearest_rows(entities, search_types=("LINE",))
+
+    assert rows == [
+        {
+            "entity_id": "ml-001",
+            "file_id": "file-001",
+            "source_ref": "/tmp/test.dxf",
+            "block": "*Model_Space",
+            "layer": "HP_Текст",
+            "matching_strategy": "source_ref+block+ordinal",
+            "match_ordinal": 0,
+            "annotation_text": "Помещение 101",
+            "status": "ok",
+            "target_point": None,
+            "nearest_type": "LINE",
+            "nearest_handle": "ABCD",
+            "nearest_layer": "LINE-LAYER",
+            "nearest_text": "",
+            "distance": 0.5,
+        }
+    ]
+
+
+def test_get_mleader_annotation_text_normalizes_mtext_codes() -> None:
+    class FakeMText:
+        default_content = (
+            r"Ог.1\Pверх.отм. +2{\fISOCPEUR|b0|i0|c162|p34;2}."
+            r"{\fISOCPEUR|b0|i0|c162|p34;250}"
+        )
+
+    class FakeContext:
+        mtext = FakeMText()
+
+    class FakeMLeader:
+        context = FakeContext()
+
+    assert get_mleader_annotation_text(FakeMLeader()) == "Ог.1 верх.отм. +22.250"
+
+
+def test_main_find_mleader_nearest_uses_expanded_default_search_types(monkeypatch, capsys) -> None:
+    captured_args: dict[str, object] = {}
+
+    async def fake_list_multileaders_for_nearest_lookup(file_id: str | None = None):
+        captured_args["file_id"] = file_id
+        return [
+            {
+                "id": "ml-001",
+                "file_id": "file-001",
+                "name": "MULTILEADER",
+                "source_ref": "/tmp/test.dxf",
+                "block": "*Model_Space",
+                "layer": "HP_Текст",
+            }
+        ]
+
+    def fake_collect(entities: list[dict[str, str]], search_types: tuple[str, ...]):
+        captured_args["entities"] = entities
+        captured_args["search_types"] = search_types
+        return []
+
+    monkeypatch.setattr(
+        "parsedwg.db.list_multileaders_for_nearest_lookup",
+        fake_list_multileaders_for_nearest_lookup,
+    )
+    monkeypatch.setattr(
+        "parsedwg.cli._collect_mleader_nearest_rows",
+        fake_collect,
+    )
+
+    exit_code = main(["find-mleader-nearest"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload == []
+    assert captured_args["file_id"] is None
+    assert captured_args["search_types"] == (
+        "LINE",
+        "CIRCLE",
+        "LWPOLYLINE",
+        "POLYLINE",
+        "INSERT",
+        "TEXT",
+        "MTEXT",
+    )
+
+
+def test_main_find_mleader_nearest_by_path_resolves_file_id(monkeypatch, capsys) -> None:
+    captured_args: dict[str, object] = {}
+
+    async def fake_get_file_id_by_source(source_ref: str) -> str | None:
+        captured_args["source_ref"] = source_ref
+        return "file-123"
+
+    async def fake_list_multileaders_for_nearest_lookup(file_id: str | None = None):
+        captured_args["file_id"] = file_id
+        return []
+
+    monkeypatch.setattr("parsedwg.db.get_file_id_by_source", fake_get_file_id_by_source)
+    monkeypatch.setattr(
+        "parsedwg.db.list_multileaders_for_nearest_lookup",
+        fake_list_multileaders_for_nearest_lookup,
+    )
+
+    exit_code = main(["find-mleader-nearest", "/tmp/example.dxf", "--by-path"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_args["source_ref"] == "/tmp/example.dxf"
+    assert captured_args["file_id"] == "file-123"
+    assert "Нет сущностей MULTILEADER для обработки." in captured.out
 
 
 def test_main_extract_token_tags_requires_tokens_or_drawing(capsys) -> None:

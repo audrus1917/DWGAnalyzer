@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import sys
+import tempfile
 import time
 
 from pathlib import Path
@@ -878,7 +879,13 @@ def handle_interpret_blocks_command(
 ) -> int:
     """Интерпретирует блоки и сохраняет short/full interpretation."""
 
-    from .db import get_file_id_by_source, list_blocks_for_interpretation, save_block_interpretations
+    from .db import (
+        get_file_id_by_source,
+        get_full_description,
+        list_blocks_for_interpretation,
+        save_block_description,
+        save_block_interpretations,
+    )
     from .langchain_name_tags import call_openai_chat_completions_name_meaning
 
     if bool(block_ids) == bool(file_ref):
@@ -915,8 +922,23 @@ def handle_interpret_blocks_command(
             async with semaphore:
                 block_id = block["id"]
                 block_name = block["name"]
+                block_file_id = block.get("file_id") or resolved_file_id
                 started_at = time.perf_counter()
                 try:
+                    block_payload = await get_full_description(
+                        block_name,
+                        file_id=block_file_id,
+                    )
+                    block_text_for_llm = (
+                        json.dumps(block_payload, ensure_ascii=False, sort_keys=True)
+                        if block_payload is not None
+                        else block_name
+                    )
+                    if not dry and block_payload is not None:
+                        await save_block_description(
+                            block_id=block_id,
+                            description=block_text_for_llm,
+                        )
                     short_interpretation = await asyncio.wait_for(
                         asyncio.to_thread(
                             call_openai_chat_completions_name_meaning,
@@ -933,7 +955,7 @@ def handle_interpret_blocks_command(
                     full_description = await asyncio.wait_for(
                         asyncio.to_thread(
                             call_openai_chat_completions_name_meaning,
-                            name=block_name,
+                            name=block_text_for_llm,
                             completions_url=completions_url,
                             model=ai_model,
                             extra_context=normalized_context + "\nДай максимально подробное описание назначения и структуры этого блока, с деталями для проектировщика.",
@@ -942,7 +964,7 @@ def handle_interpret_blocks_command(
                         ),
                         timeout=llm_timeout_seconds + 10.0,
                     )
-                    block_description = full_description
+                    block_description = block_payload
                     full_interpretation = full_description
                 except TimeoutError:
                     duration_seconds = round(time.perf_counter() - started_at, 3)
@@ -1127,6 +1149,237 @@ def handle_verify_extraction_command(
     except (FileNotFoundError, OSError, ValueError) as e:
         logger.error("Ошибка верификации: %s", e)
         return constants.ERROR
+
+
+def _resolve_source_ref_to_drawing_path(source_ref: str, temp_dir: Path) -> Path:
+    from .process_tree import DWGTreeProcessor
+
+    if "::" not in source_ref:
+        return Path(source_ref)
+
+    archive_path_str, member_name = source_ref.split("::", 1)
+    return DWGTreeProcessor.extract_from_zip(Path(archive_path_str), member_name, temp_dir)
+
+
+def _get_block_layout_by_name(doc, block_name: str):
+    for block in doc.blocks:
+        if str(block.name) == block_name:
+            return block
+    if block_name.startswith("*Model_Space"):
+        return doc.modelspace()
+    return None
+
+
+def _format_point_payload(point: object | None) -> list[float] | None:
+    if point is None:
+        return None
+    x = getattr(point, "x", None)
+    y = getattr(point, "y", None)
+    z = getattr(point, "z", 0.0)
+    if x is None or y is None:
+        return None
+    return [float(x), float(y), float(z)]
+
+
+def _collect_mleader_nearest_rows(
+    entities: list[dict[str, str]],
+    search_types: tuple[str, ...] = ("LINE", "CIRCLE", "LWPOLYLINE"),
+) -> list[dict[str, object]]:
+    from .process_tree import DWGTreeProcessor
+    from .utils import (
+        find_closest_entity_in_entities,
+        get_mleader_annotation_text,
+        get_mleader_target_point,
+    )
+
+    by_source: dict[str, list[dict[str, str]]] = {}
+    for entity in entities:
+        source_ref = str(entity.get("source_ref", "")).strip()
+        by_source.setdefault(source_ref, []).append(entity)
+
+    rows: list[dict[str, object]] = []
+    for source_ref, source_entities in by_source.items():
+        if not source_ref:
+            for entity in source_entities:
+                rows.append(
+                    {
+                        "status": "error",
+                        "entity_id": entity["id"],
+                        "file_id": entity.get("file_id", ""),
+                        "source_ref": source_ref,
+                        "block": entity.get("block", ""),
+                        "layer": entity.get("layer", ""),
+                        "matching_strategy": "source_ref+block+ordinal",
+                        "error": "У MULTILEADER отсутствует source_ref исходного файла.",
+                    }
+                )
+            continue
+
+        grouped_by_block: dict[str, list[dict[str, str]]] = {}
+        for entity in source_entities:
+            grouped_by_block.setdefault(str(entity.get("block", "")), []).append(entity)
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="parsedwg-mleader-") as temp_dir_name:
+                temp_dir = Path(temp_dir_name)
+                drawing_path = _resolve_source_ref_to_drawing_path(source_ref, temp_dir)
+                doc = DWGTreeProcessor.read_drawing(drawing_path)
+                for block_name, block_entities in grouped_by_block.items():
+                    layout = _get_block_layout_by_name(doc, block_name)
+                    if layout is None:
+                        for entity in block_entities:
+                            rows.append(
+                                {
+                                    "status": "error",
+                                    "entity_id": entity["id"],
+                                    "file_id": entity.get("file_id", ""),
+                                    "source_ref": source_ref,
+                                    "block": block_name,
+                                    "layer": entity.get("layer", ""),
+                                    "matching_strategy": "source_ref+block+ordinal",
+                                    "error": f"Блок {block_name!r} не найден в исходном чертеже.",
+                                }
+                            )
+                        continue
+
+                    mleader_objects = [
+                        drawing_entity
+                        for drawing_entity in layout
+                        if str(drawing_entity.dxftype()) == "MULTILEADER"
+                    ]
+                    for ordinal, entity in enumerate(block_entities):
+                        base_row = {
+                            "entity_id": entity["id"],
+                            "file_id": entity.get("file_id", ""),
+                            "source_ref": source_ref,
+                            "block": block_name,
+                            "layer": entity.get("layer", ""),
+                            "matching_strategy": "source_ref+block+ordinal",
+                            "match_ordinal": ordinal,
+                        }
+                        if ordinal >= len(mleader_objects):
+                            rows.append(
+                                {
+                                    **base_row,
+                                    "status": "error",
+                                    "error": "В исходном чертеже меньше MULTILEADER, чем в БД для этого блока.",
+                                }
+                            )
+                            continue
+
+                        mleader = mleader_objects[ordinal]
+                        annotation_text = get_mleader_annotation_text(mleader)
+                        target_point = get_mleader_target_point(mleader)
+                        matched_row = {
+                            **base_row,
+                            "annotation_text": annotation_text,
+                        }
+                        if target_point is None:
+                            rows.append(
+                                {
+                                    **matched_row,
+                                    "status": "error",
+                                    "error": "Не удалось извлечь точку стрелки MULTILEADER.",
+                                }
+                            )
+                            continue
+
+                        nearest_entity, distance = find_closest_entity_in_entities(
+                            target_point,
+                            layout,
+                            search_types=search_types,
+                        )
+                        if nearest_entity is None or distance == float("inf"):
+                            rows.append(
+                                {
+                                    **matched_row,
+                                    "status": "error",
+                                    "target_point": _format_point_payload(target_point),
+                                    "error": "Ближайшая сущность не найдена.",
+                                }
+                            )
+                            continue
+
+                        nearest_text = ""
+                        if nearest_entity.dxftype() == "TEXT" and nearest_entity.dxf.hasattr("text"):
+                            nearest_text = str(nearest_entity.dxf.text)
+                        elif nearest_entity.dxftype() == "MTEXT":
+                            plain_text = getattr(nearest_entity, "plain_text", None)
+                            if callable(plain_text):
+                                nearest_text = str(plain_text())
+
+                        rows.append(
+                            {
+                                **matched_row,
+                                "status": "ok",
+                                "target_point": _format_point_payload(target_point),
+                                "nearest_type": str(nearest_entity.dxftype()),
+                                "nearest_handle": (
+                                    str(nearest_entity.dxf.handle)
+                                    if nearest_entity.dxf.hasattr("handle")
+                                    else ""
+                                ),
+                                "nearest_layer": str(getattr(nearest_entity.dxf, "layer", "") or ""),
+                                "nearest_text": nearest_text,
+                                "distance": round(float(distance), 6),
+                            }
+                        )
+        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+            for entity in source_entities:
+                rows.append(
+                    {
+                        "status": "error",
+                        "entity_id": entity["id"],
+                        "file_id": entity.get("file_id", ""),
+                        "source_ref": source_ref,
+                        "block": entity.get("block", ""),
+                        "layer": entity.get("layer", ""),
+                        "matching_strategy": "source_ref+block+ordinal",
+                        "error": str(exc),
+                    }
+                )
+
+    return rows
+
+
+def handle_find_mleader_nearest_command(
+    file_ref: str | None = None,
+    by_path: bool = False,
+    search_types: list[str] | None = None,
+) -> int:
+    """Ищет ближайшие объекты для MULTILEADER-сущностей из БД."""
+
+    from .db import get_file_id_by_source, list_multileaders_for_nearest_lookup
+
+    resolved_file_id = file_ref
+    if file_ref is not None and by_path:
+        resolved_file_id = asyncio.run(get_file_id_by_source(file_ref))
+        if not resolved_file_id:
+            out("Файл не найден в БД.")
+            return constants.NOT_FOUND
+
+    try:
+        entities = asyncio.run(list_multileaders_for_nearest_lookup(file_id=resolved_file_id))
+    except (LookupError, OSError, RuntimeError, ValueError) as e:
+        logger.error("Ошибка чтения MULTILEADER из БД: %s", e)
+        return constants.ERROR
+
+    if not entities:
+        out("Нет сущностей MULTILEADER для обработки.")
+        return constants.OK
+
+    normalized_search_types = tuple(search_types) if search_types else (
+        "LINE",
+        "CIRCLE",
+        "LWPOLYLINE",
+        "POLYLINE",
+        "INSERT",
+        "TEXT",
+        "MTEXT",
+    )
+    rows = _collect_mleader_nearest_rows(entities, search_types=normalized_search_types)
+    out(json.dumps(rows, ensure_ascii=False, indent=2))
+    return constants.OK
 
 
 def handle_project_add_command(
@@ -1717,6 +1970,13 @@ def main(argv: list[str] | None = None) -> int:
                 ai_api_key=args.ai_api_key,
                 workers=1,
                 dry=args.dry,
+            )
+
+        case "find-mleader-nearest":
+            return_code = handle_find_mleader_nearest_command(
+                file_ref=args.file_ref,
+                by_path=args.by_path,
+                search_types=args.search_types,
             )
 
         case "verify-extraction":

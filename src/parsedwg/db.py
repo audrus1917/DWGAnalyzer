@@ -8,7 +8,7 @@ from collections.abc import AsyncGenerator, Sequence
 
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from .settings import settings
 from .orm import Category, Entity, EntityToEntity, EntityType, Project
@@ -49,6 +49,16 @@ async def save_short_interpretation(entity_id: str, text: str) -> None:
         if entity is None:
             raise LookupError(f"Сущность {entity_id} не найдена.")
         entity.short_interpretation = text
+        await session.commit()
+
+
+async def save_block_description(block_id: str, description: str) -> None:
+    """Записывает description блока по UUID."""
+    async with async_session_factory() as session:
+        entity = await session.get(Entity, _uuid.UUID(block_id))
+        if entity is None:
+            raise LookupError(f"Блок {block_id} не найден.")
+        entity.description = description
         await session.commit()
 
 
@@ -110,10 +120,56 @@ async def list_blocks_for_interpretation(
     return payload
 
 
+async def list_multileaders_for_nearest_lookup(
+    file_id: str | None = None,
+) -> list[dict[str, str]]:
+    """Возвращает MULTILEADER-сущности вместе с source_ref исходного файла."""
+
+    file_entity = aliased(Entity)
+    stmt = (
+        select(
+            Entity.id,
+            Entity.file_id,
+            Entity.name,
+            Entity.data,
+            Entity.created_at,
+            file_entity.data["source_ref"].astext.label("source_ref"),
+        )
+        .join(file_entity, Entity.file_id == file_entity.id)
+        .where(Entity.entity_type == "MULTILEADER")
+        .order_by(
+            Entity.file_id.asc(),
+            Entity.created_at.asc(),
+            Entity.id.asc(),
+        )
+    )
+    if file_id is not None:
+        stmt = stmt.where(Entity.file_id == _uuid.UUID(file_id))
+
+    async with async_session_factory() as session:
+        result = await session.execute(stmt)
+        rows = result.mappings().all()
+
+    payload: list[dict[str, str]] = []
+    for row in rows:
+        data = row["data"] if isinstance(row["data"], dict) else {}
+        payload.append(
+            {
+                "id": str(row["id"]),
+                "file_id": str(row["file_id"]) if row["file_id"] is not None else "",
+                "name": str(row["name"] or ""),
+                "source_ref": str(row["source_ref"] or ""),
+                "block": str(data.get("block") or ""),
+                "layer": str(data.get("layer") or ""),
+            }
+        )
+    return payload
+
+
 async def get_full_description(
     block_name: str,
     file_id: str | None = None,
-) -> dict[str, object] | None:
+) -> str: # dict[str, object] | None:
     """Возвращает полное описание BLOCK-сущности:
     имя, слои (name + short_interpretation), атрибуты INSERT-примитивов,
     список INSERT-сущностей, где name совпадает с именем блока."""
@@ -152,10 +208,7 @@ async def get_full_description(
             .distinct()
             .order_by(Entity.name.asc())
         )
-        layers = [
-            {"name": row.name, "short_interpretation": row.short_interpretation}
-            for row in layers_result
-        ]
+        layers = [row.name for row in layers_result]
 
         # Атрибуты: из data["attribs"] всех INSERT-потомков блока
         attribs_result = await session.execute(
@@ -187,17 +240,13 @@ async def get_full_description(
             for row in inserts_result
         ]
 
-    return {
-        "id": str(block.id),
-        "name": block.name,
-        "description": block.description,
-        "full_interpretation": getattr(block, "full_interpretation", None),
-        "short_interpretation": getattr(block, "short_interpretation", None),
-        "layers": layers,
-        "attributes": merged_attribs,
-        "inserts": inserts,
-        "insert_count": len(inserts),
-    }
+    return '. '.join([
+        f"id: {block.id}",
+        f"name: {block.name}",
+        f"layers: {layers}",
+        f"attributes: {merged_attribs}",
+        f"insert_count: {len(inserts)}",
+    ])
 
 
 async def get_full_description_by_id(block_id: str) -> dict[str, object] | None:

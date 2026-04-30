@@ -13,4 +13,5 @@ SELECT
     b.total
 FROM entity AS a 
 INNER JOIN blocks_inserts AS b ON b.parent_id = a.id
+WHERE name not like '*%'
 ORDER BY 3 DESC

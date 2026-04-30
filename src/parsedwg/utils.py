@@ -5,6 +5,7 @@ from typing import Any
 import argparse
 import logging
 import multiprocessing as mp
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -558,6 +559,32 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="Не сохранять в БД, вывести JSON-предпросмотр.",
     )
 
+    find_mleader_nearest_parser = subparsers.add_parser(
+        "find-mleader-nearest",
+        help=(
+            "Найти ближайшие объекты для MULTILEADER-сущностей из БД, "
+            "используя исходные DWG/DXF файлы."
+        ),
+    )
+    find_mleader_nearest_parser.add_argument(
+        "file_ref",
+        nargs="?",
+        default=None,
+        help="UUID file-сущности или путь к файлу (если --by-path).",
+    )
+    find_mleader_nearest_parser.add_argument(
+        "--by-path",
+        action="store_true",
+        help="Искать file-сущность по пути, а не по UUID.",
+    )
+    find_mleader_nearest_parser.add_argument(
+        "--search-type",
+        dest="search_types",
+        action="append",
+        default=None,
+        help="Тип сущности-кандидата для поиска. Можно указывать несколько раз.",
+    )
+
     verify_extraction_parser = subparsers.add_parser(
         "verify-extraction",
         help="Сверить DWG/DXF файл с сущностями, записанными в текущую БД.",
@@ -801,3 +828,116 @@ def safe_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+import ezdxf
+from ezdxf.math import Vec3
+
+def get_mleader_target_point(mleader):
+    """Извлекает точку, в которую указывает первая стрелка выноски."""
+    try:
+        # У MLeader может быть несколько лидеров, берем первый
+        context = mleader.context
+        leader = context.leaders[0]
+        line = leader.lines[0]
+        # Последняя или первая вершина — это острие (зависит от типа)
+        return line.vertices[0] 
+    except (IndexError, AttributeError):
+        return None
+
+
+def get_mleader_annotation_text(mleader) -> str:
+    """Возвращает текст аннотации MULTILEADER, если он есть."""
+    try:
+        context = mleader.context
+        mtext = getattr(context, "mtext", None)
+        content = getattr(mtext, "default_content", "")
+    except AttributeError:
+        return ""
+
+    text = str(content or "").strip()
+    text = re.sub(r"\\P", " ", text)
+    text = re.sub(r"\\[LOKlok]", "", text)
+    text = re.sub(r"\\~", " ", text)
+
+    previous = None
+    while previous != text:
+        previous = text
+        text = re.sub(r"\{\\[^;{}]+;([^{}]*)\}", r"\1", text)
+
+    text = re.sub(r"\\[A-Za-z][^;]*;", "", text)
+    text = text.replace("{", "").replace("}", "")
+    return " ".join(text.split())
+
+def find_closest_entity(
+    target_point,
+    msp,
+    search_types=('LINE', 'CIRCLE', 'LWPOLYLINE', 'POLYLINE', 'INSERT', 'TEXT', 'MTEXT'),
+):
+    """
+    Ищет ближайший объект указанных типов к заданной точке.
+    
+    .. code-block:: python
+
+        # ПРИМЕР ИСПОЛЬЗОВАНИЯ:
+        doc = ezdxf.readfile("your_file.dxf")
+        msp = doc.modelspace()
+
+        for ml in msp.query("MULTILEADER"):
+            tip = get_mleader_target_point(ml)
+            target, distance = find_closest_entity(tip, msp)
+            
+            if target and distance < 1.0: # Порог точности (допуск)
+                print(f"Выноска '{ml.handle}' указывает на {target.dxftype()} ({target.handle})")
+    """
+
+    if not target_point:
+        return None
+    
+    min_dist = float('inf')
+    closest_entity = None
+    
+    for entity in msp.query('|'.join(search_types)):
+        # Получаем расстояние от точки до объекта (упрощенно до центра или вершин)
+        # Для точного поиска по кривым используются методы .bbox() или .dist_to_entity()
+        try:
+            bbox = entity.bounding_box()
+            dist = bbox.center.distance(target_point) # Грубая оценка по центру
+            
+            if dist < min_dist:
+                min_dist = dist
+                closest_entity = entity
+        except Exception:
+            continue
+            
+    return closest_entity, min_dist
+
+
+def find_closest_entity_in_entities(
+    target_point,
+    entities,
+    search_types=('LINE', 'CIRCLE', 'LWPOLYLINE', 'POLYLINE', 'INSERT', 'TEXT', 'MTEXT'),
+):
+    """Ищет ближайшую сущность среди уже итерируемого набора DXF-объектов."""
+
+    if not target_point:
+        return None, float('inf')
+
+    normalized_types = {str(value).upper() for value in search_types}
+    min_dist = float('inf')
+    closest_entity = None
+
+    for entity in entities:
+        try:
+            if str(entity.dxftype()).upper() not in normalized_types:
+                continue
+            bbox = entity.bounding_box()
+            dist = bbox.center.distance(target_point)
+            if dist < min_dist:
+                min_dist = dist
+                closest_entity = entity
+        except Exception:
+            continue
+
+    return closest_entity, min_dist
+
