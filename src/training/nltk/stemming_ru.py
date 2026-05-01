@@ -1,13 +1,13 @@
 """
-Пример стемминга русских слов через NLTK SnowballStemmer.
+Example of Russian stemming with NLTK SnowballStemmer.
 
-Стеммер отсекает окончания по правилам — результат может не быть настоящей
-словарной формой, но достаточен для fuzzy-поиска и кластеризации.
+The stemmer removes endings by heuristic rules, so the result may not be a
+true dictionary form, but it is usually sufficient for fuzzy search and clustering.
 
-Запуск:
+Run:
     PYTHONPATH=src .venv/bin/python src/training/nltk/stemming_ru.py
 
-Зависимости (уже в pyproject.toml):
+Dependencies (already listed in pyproject.toml):
     nltk>=3.9
 """
 from __future__ import annotations
@@ -16,14 +16,14 @@ from nltk.stem import SnowballStemmer
 
 STEMMER = SnowballStemmer("russian")
 
-# Примеры из предметной области: наименования разделов проекта и этажей.
+# Domain examples: project section names and floor-related terms.
 WORDS: list[str] = [
-    # Словоформы одного слова — стеммер должен давать одну основу
+    # Inflected forms of the same word should map to one stem.
     "этаж",
     "этажа",
     "этажей",
     "этажном",
-    # Строительные термины
+    # Construction-related terms.
     "вентиляция",
     "вентиляции",
     "вентиляционный",
@@ -35,7 +35,7 @@ WORDS: list[str] = [
     "пожаротушения",
     "автоматизация",
     "автоматизированный",
-    # Прочие
+    # Miscellaneous examples.
     "кровля",
     "кровле",
     "кровли",

@@ -31,7 +31,7 @@ class TableAnalysis:
 
 
 class TextClusterAnalyzer:
-    """Анализирует текстовые сущности блока и ищет табличную структуру."""
+    """Analyze text entities in a block and detect table-like structure."""
 
     @staticmethod
     def _get_text_content(entity) -> str:

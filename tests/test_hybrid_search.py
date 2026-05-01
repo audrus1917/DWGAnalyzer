@@ -1,4 +1,4 @@
-"""Тесты для гибридного поиска (BM25 + vector)."""
+"""Tests for hybrid search (BM25 + vector)."""
 
 import asyncio
 import uuid
@@ -7,7 +7,7 @@ import pytest
 
 
 def test_hybrid_search_function_exists() -> None:
-    """Проверить, что функция гибридного поиска существует."""
+    """Verify that the hybrid search function exists."""
     from parsedwg.rag import hybrid_search
 
     assert callable(hybrid_search)
@@ -16,9 +16,9 @@ def test_hybrid_search_function_exists() -> None:
 
 
 def test_hybrid_search_alpha_parameter_doc() -> None:
-    """Проверить, что параметр alpha задокументирован.
+    """Verify that the alpha parameter is documented.
 
-    alpha=0.5 → 50% BM25 + 50% вектор
+    alpha=0.5 means 50% BM25 and 50% vector score.
     """
     from parsedwg.rag import hybrid_search
 
@@ -29,7 +29,7 @@ def test_hybrid_search_alpha_parameter_doc() -> None:
 
 
 def test_ask_includes_table_rows_in_context(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Проверить, что ask добавляет в контекст строки таблицы для block-таблиц."""
+    """Verify that ask adds table rows to the context for table-like blocks."""
     from parsedwg.rag import ask
 
     source_id = "11111111-1111-1111-1111-111111111111"
@@ -94,7 +94,7 @@ def test_ask_includes_table_rows_in_context(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_extract_target_term_separates_additional_context() -> None:
-    """Проверить, что из вопроса о термине выделяется сам термин и хвост контекста."""
+    """Verify that a term question is split into the term and trailing context."""
     from parsedwg.rag import _extract_target_term
 
     term, extra_context = _extract_target_term("Что такое BIM для инженера ОВ?")
@@ -104,7 +104,7 @@ def test_extract_target_term_separates_additional_context() -> None:
 
 
 def test_build_generation_prompt_puts_term_into_separate_block() -> None:
-    """Проверить, что prompt отделяет термин от дополнительного контекста."""
+    """Verify that the prompt separates the term from additional context."""
     from parsedwg.rag import _build_generation_prompt
 
     prompt = _build_generation_prompt(

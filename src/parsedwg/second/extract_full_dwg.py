@@ -201,7 +201,7 @@ async def extract(path: Path) -> None:
             )
         print(f"  dwg_layout: {len(layout_rows)}")
 
-        # --- Сбор dwg_entity + dwg_attrib ---
+        # --- Collect dwg_entity + dwg_attrib ---
         entity_rows = []
         attrib_rows = []
 

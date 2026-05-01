@@ -1,4 +1,4 @@
-"""Набор утилит."""
+"""Utility helpers."""
 
 from typing import Any
 
@@ -11,8 +11,10 @@ logger = logging.getLogger(__name__)
 
 
 def get_workers_number(requested_workers: int) -> int:
-    """Возвращает оптимальное количество рабочих процессов для конвертации, учитывая возможности
-    машины и запрошенное значение."""
+    """Return the optimal number of worker processes for conversion.
+
+    The value depends on machine capacity and the requested worker count.
+    """
 
     logical_cpus = max(1, mp.cpu_count())
     max_workers = max(1, logical_cpus - 1)
@@ -39,7 +41,7 @@ def get_workers_number(requested_workers: int) -> int:
 
 
 def build_args_parser() -> argparse.ArgumentParser:
-    """Строит и возвращает парсер аргументов командной строки."""
+    """Build and return the command-line argument parser."""
 
     extract_common = argparse.ArgumentParser(add_help=False)
     extract_common.add_argument("drawing", help="Путь к DWG или DXF файлу")
@@ -800,7 +802,7 @@ def build_args_parser() -> argparse.ArgumentParser:
 
 
 class CustomFormatter(logging.Formatter):
-    """Форматер логов, который меняет структуру сообщения в зависимости от уровня логирования."""
+    """Log formatter that changes the message shape by log level."""
 
     FORMATS = {
         logging.DEBUG: "[DEBUG] %(name)s: %(message)s",
@@ -817,8 +819,10 @@ class CustomFormatter(logging.Formatter):
     
 
 def out(value: Any) -> None:
-    """Выводит на стандартный вывод значение. Алиас для :func:`print`, чтобы 
-    не путаться к ненужнйо отладкой."""
+    """Write a value to stdout.
+
+    Alias for :func:`print` to keep call sites distinct from temporary debugging.
+    """
 
     print(value)
 
@@ -834,20 +838,20 @@ import ezdxf
 from ezdxf.math import Vec3
 
 def get_mleader_target_point(mleader):
-    """Извлекает точку, в которую указывает первая стрелка выноски."""
+    """Extract the point targeted by the first leader arrow."""
     try:
-        # У MLeader может быть несколько лидеров, берем первый
+        # MLeader may have multiple leaders; use the first one.
         context = mleader.context
         leader = context.leaders[0]
         line = leader.lines[0]
-        # Последняя или первая вершина — это острие (зависит от типа)
+        # The arrow tip is the first or last vertex, depending on the type.
         return line.vertices[0] 
     except (IndexError, AttributeError):
         return None
 
 
 def get_mleader_annotation_text(mleader) -> str:
-    """Возвращает текст аннотации MULTILEADER, если он есть."""
+    """Return MULTILEADER annotation text, if present."""
     try:
         context = mleader.context
         mtext = getattr(context, "mtext", None)
@@ -875,11 +879,11 @@ def find_closest_entity(
     search_types=('LINE', 'CIRCLE', 'LWPOLYLINE', 'POLYLINE', 'INSERT', 'TEXT', 'MTEXT'),
 ):
     """
-    Ищет ближайший объект указанных типов к заданной точке.
+    Find the nearest object of the requested types to the given point.
     
     .. code-block:: python
 
-        # ПРИМЕР ИСПОЛЬЗОВАНИЯ:
+        # USAGE EXAMPLE:
         doc = ezdxf.readfile("your_file.dxf")
         msp = doc.modelspace()
 
@@ -887,8 +891,8 @@ def find_closest_entity(
             tip = get_mleader_target_point(ml)
             target, distance = find_closest_entity(tip, msp)
             
-            if target and distance < 1.0: # Порог точности (допуск)
-                print(f"Выноска '{ml.handle}' указывает на {target.dxftype()} ({target.handle})")
+            if target and distance < 1.0: # Tolerance threshold.
+                print(f"Leader '{ml.handle}' points to {target.dxftype()} ({target.handle})")
     """
 
     if not target_point:
@@ -898,11 +902,11 @@ def find_closest_entity(
     closest_entity = None
     
     for entity in msp.query('|'.join(search_types)):
-        # Получаем расстояние от точки до объекта (упрощенно до центра или вершин)
-        # Для точного поиска по кривым используются методы .bbox() или .dist_to_entity()
+        # Compute the distance from the point to the entity in a simplified way.
+        # For exact curve distance, use .bbox() or .dist_to_entity() style methods.
         try:
             bbox = entity.bounding_box()
-            dist = bbox.center.distance(target_point) # Грубая оценка по центру
+            dist = bbox.center.distance(target_point) # Rough estimate via center point.
             
             if dist < min_dist:
                 min_dist = dist
@@ -918,7 +922,7 @@ def find_closest_entity_in_entities(
     entities,
     search_types=('LINE', 'CIRCLE', 'LWPOLYLINE', 'POLYLINE', 'INSERT', 'TEXT', 'MTEXT'),
 ):
-    """Ищет ближайшую сущность среди уже итерируемого набора DXF-объектов."""
+    """Find the nearest entity within an already iterated DXF entity set."""
 
     if not target_point:
         return None, float('inf')

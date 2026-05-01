@@ -11,4 +11,5 @@ __all__ = [
     "TableAnalysis",
     "TextClusterAnalyzer",
 ]
+
 __version__ = "0.1.0"

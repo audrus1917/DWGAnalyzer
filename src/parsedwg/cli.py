@@ -1,4 +1,4 @@
-"""Консольная точка входа для работы с DWG/DXF."""
+"""Console entry point for working with DWG/DXF."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 
 def _write_progress_line(message: str, previous_width: int = 0) -> int:
-    """Обновляет одну строку прогресса в stdout."""
+    """Update a single progress line in stdout."""
 
     width = max(previous_width, len(message))
     sys.stdout.write("\r" + message.ljust(width))
@@ -44,7 +44,7 @@ def _write_progress_line(message: str, previous_width: int = 0) -> int:
 
 
 def _finish_progress_line(width: int) -> None:
-    """Завершает строку прогресса переводом строки."""
+    """Finish the progress line with a newline."""
 
     if width <= 0:
         return
@@ -53,12 +53,12 @@ def _finish_progress_line(width: int) -> None:
 
 
 def _format_duration_seconds(duration_seconds: float) -> str:
-    """Форматирует длительность обработки в секундах."""
+    """Format processing duration in seconds."""
 
     return f"{duration_seconds:.2f} c"
 
 def _save_rows_to_json(output_path: Path, rows: list[ResultRow]) -> None:
-    """Сохраняет строки результата в JSON-файл."""
+    """Save result rows to a JSON file."""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
@@ -68,7 +68,7 @@ def _save_rows_to_json(output_path: Path, rows: list[ResultRow]) -> None:
 
 
 def as_table(rows: list[ResultRow]) -> str:
-    """Форматирует строки результата в простую ASCII-таблицу."""
+    """Format result rows as a simple ASCII table."""
 
     if not rows:
         return "Нет данных."
@@ -90,7 +90,7 @@ def as_table(rows: list[ResultRow]) -> str:
 
 
 def print_as_table(rows: list[ResultRow]) -> None:
-    """Выводит строки результата на экран в виде таблицы."""
+    """Print result rows as a table."""
 
     out(as_table(rows))
 
@@ -102,7 +102,7 @@ def handle_search_command(
     output_path: Path | None,
     parent_id: str | None = None,
 ) -> int:
-    """Полнотекстовый поиск по БД PostgreSQL (таблица entity)."""
+    """Run full-text search against the PostgreSQL entity table."""
     from .db import search_entities
 
     rows: list[ResultRow] = asyncio.run(search_entities(query, entity_type, limit, parent_id))
@@ -125,7 +125,7 @@ def handle_index_command(
     batch_size: int,
     reindex: bool,
 ) -> int:
-    """Генерирует и сохраняет эмбеддинги для сущностей в БД."""
+    """Generate and store embeddings for DB entities."""
     from .rag import index_entities
 
     count = asyncio.run(index_entities(entity_type, batch_size, reindex))
@@ -139,7 +139,7 @@ def handle_ask_command(
     top_k: int,
     output_path: Path | None,
 ) -> int:
-    """RAG-запрос: векторный поиск + генерация ответа через llama."""
+    """RAG request: vector search plus answer generation via llama."""
     from .rag import ask
 
     result: ResultRow = asyncio.run(ask(question, entity_type, top_k))
@@ -167,7 +167,7 @@ def handle_process_command(
     ai_base_url: str = settings.ollama_base_url,
     ai_api_key: str = ""
 ) -> int:
-    """Сканирует DWG/DXF, сохраняет дерево сущностей в БД и привязывает к проекту."""
+    """Scan DWG/DXF content, save the entity tree to the DB, and attach it to a project."""
 
     try:
         name_tags_config = get_name_tags_config(
@@ -207,8 +207,7 @@ def get_name_tags_config(
     base_url: str,
     api_key: str,
 ):
-    """Возвращает конфигурацию для AI-извлечения тегов из имён, или `None`, если 
-    режим отключён."""
+    """Return config for AI tag extraction from names, or None if disabled."""
 
     if not enabled:
         return None
@@ -224,7 +223,7 @@ def get_name_tags_config(
 
 
 def handle_process_docs_command(source_path: Path) -> int:
-    """Рекурсивно индексирует PDF/DOCX/XLSX/CSV документы в таблицу entity."""
+    """Recursively index PDF/DOCX/XLSX/CSV documents into the entity table."""
 
     summary = run_documents_ingest(source_path)
     out(f"Найдено документов: {summary['doc_count']}")
@@ -239,7 +238,7 @@ def handle_export_block_png_command(
     output_path: Path | None,
     dpi: int,
 ) -> int:
-    """Экспортирует выбранный блок в PNG."""
+    """Export the selected block to PNG."""
 
     try:
         explorer = DXFExplorer(drawing_path)
@@ -256,7 +255,7 @@ def handle_export_block_svg_command(
     block_name: str,
     output_path: Path | None,
 ) -> int:
-    """Экспортирует выбранный блок в SVG."""
+    """Export the selected block to SVG."""
 
     try:
         explorer = DXFExplorer(drawing_path)
@@ -276,7 +275,7 @@ def handle_extract_name_tags_command(
     ai_base_url: str = "http://localhost:11434/v1",
     ai_api_key: str = "ollama",
 ) -> int:
-    """Извлекает смысловые теги из имен файлов/каталогов."""
+    """Extract semantic tags from file and directory names."""
     from .name_tags import collect_name_tags
 
     try:
@@ -322,7 +321,7 @@ def handle_extract_token_tags_command(
     ai_api_key: str = "ollama",
     with_scores: bool = False,
 ) -> int:
-    """Извлекает JSON-словарь смыслов через LLM для списка токенов."""
+    """Extract a JSON mapping of meanings via LLM for a token list."""
     token_context = "строительство, чертеж"
 
     try:
@@ -378,7 +377,7 @@ def handle_extract_token_tags_command(
 
 
 def _derive_ollama_chat_url(base_url: str) -> str:
-    """Из OpenAI-compatible base URL строит URL для Ollama /api/chat."""
+    """Build an Ollama /api/chat URL from an OpenAI-compatible base URL."""
     stripped = base_url.rstrip("/")
     if stripped.endswith("/v1"):
         stripped = stripped[:-3]
@@ -386,7 +385,7 @@ def _derive_ollama_chat_url(base_url: str) -> str:
 
 
 def _derive_openai_chat_completions_url(base_url: str) -> str:
-    """Из base URL строит URL для OpenAI-compatible v1/chat/completions."""
+    """Build an OpenAI-compatible v1/chat/completions URL from a base URL."""
     stripped = base_url.rstrip("/")
     if stripped.endswith("/v1"):
         return stripped + "/chat/completions"
@@ -401,7 +400,7 @@ def handle_extract_name_meaning_command(
     ai_base_url: str = "http://localhost:11434/v1",
     ai_api_key: str = "ollama",
 ) -> int:
-    """Разбирает название или имя сущности из БД через LLM."""
+    """Analyze a title or DB entity name via LLM."""
     from .db import get_entity_name_by_id
     from .langchain_name_tags import call_openai_chat_completions_name_meaning
 
@@ -449,7 +448,7 @@ def handle_explain_block_command(
     ai_base_url: str = "http://localhost:11434/v1",
     ai_api_key: str = "ollama",
 ) -> int:
-    """Достаёт имя блока из БД по UUID и запускает разбор через LLM."""
+    """Fetch a block name by UUID from the DB and analyze it via LLM."""
     _ = ai_api_key  # Ollama /api/chat не требует авторизации
 
     from .db import get_entity_name_by_id
@@ -485,7 +484,7 @@ def handle_categorize_entities_command(
     workers: int = 1,
     dry: bool = False,
 ) -> int:
-    """Извлекает смысловые категории для сущностей и привязывает их в БД."""
+    """Extract semantic categories for entities and link them in the DB."""
     extra_context = "строительство, чертеж"
 
     from .db import assign_semantic_category, list_entities_for_semantic_categorization
@@ -667,8 +666,10 @@ def handle_interpret_entities_command(
     workers: int = 1,
     dry: bool = False,
 ) -> int:
-    """Запрашивает у LLM интерпретацию имени для сущностей по id или по type,
-    сохраняет текст в поле short_interpretation."""
+    """Request LLM name interpretations for entities by id or type.
+
+    Save the result into the short_interpretation field.
+    """
 
     logger.info("Стартуем")
 
@@ -878,7 +879,7 @@ def handle_interpret_blocks_command(
     workers: int = 1,
     dry: bool = False,
 ) -> int:
-    """Интерпретирует блоки и сохраняет short/full interpretation."""
+    """Interpret blocks and save short/full interpretations."""
 
     from .db import (
         get_file_id_by_source,
@@ -952,7 +953,7 @@ def handle_interpret_blocks_command(
                         ),
                         timeout=llm_timeout_seconds + 5.0,
                     )
-                    # Полное описание блока также запрашиваем у LLM.
+                    # Request the full block description from the LLM as well.
                     full_description = await asyncio.wait_for(
                         asyncio.to_thread(
                             call_openai_chat_completions_name_meaning,
@@ -1136,7 +1137,7 @@ def handle_verify_extraction_command(
     drawing_path: Path,
     file_id: str | None = None,
 ) -> int:
-    """Сверяет содержимое DWG/DXF файла с тем, что уже сохранено в БД."""
+    """Compare DWG/DXF file contents with what is already stored in the DB."""
 
     from .verify_extraction import format_verification_report, verify_extraction
 
@@ -1349,7 +1350,7 @@ def handle_find_mleader_nearest_command(
     by_path: bool = False,
     search_types: list[str] | None = None,
 ) -> int:
-    """Ищет ближайшие объекты для MULTILEADER-сущностей из БД."""
+    """Find nearest objects for MULTILEADER entities from the DB."""
 
     from .db import get_file_id_by_source, list_multileaders_for_nearest_lookup
 
@@ -1389,7 +1390,7 @@ def handle_project_add_command(
     description: str | None,
     created_by: str | None,
 ) -> int:
-    """Создаёт проект."""
+    """Create a project."""
     from .db import create_project
 
     project = asyncio.run(create_project(name=name, description=description, created_by=created_by))
@@ -1404,7 +1405,7 @@ def handle_project_update_command(
     description: str | None,
     created_by: str | None,
 ) -> int:
-    """Обновляет проект."""
+    """Update a project."""
     from .db import update_project
 
     project = asyncio.run(
@@ -1425,7 +1426,7 @@ def handle_project_update_command(
 
 
 def handle_project_delete_command(project_id: str, yes: bool) -> int:
-    """Удаляет проект с подтверждением согласия."""
+    """Delete a project with confirmation."""
     from .db import delete_project
 
     if not yes:
@@ -1450,7 +1451,7 @@ def handle_category_add_command(
     description: str | None,
     parent_id: str | None,
 ) -> int:
-    """Создаёт категорию."""
+    """Create a category."""
     from .db import create_category
 
     category = asyncio.run(
@@ -1469,7 +1470,7 @@ def handle_category_update_command(
     description: str | None,
     parent_id: str | None,
 ) -> int:
-    """Обновляет категорию."""
+    """Update a category."""
     from .db import update_category
 
     category = asyncio.run(
@@ -1492,7 +1493,7 @@ def handle_category_update_command(
 
 
 def handle_category_delete_command(category_id: str, yes: bool) -> int:
-    """Удаляет категорию с подтверждением согласия."""
+    """Delete a category with confirmation."""
     from .db import delete_category
 
     if not yes:
@@ -1513,7 +1514,7 @@ def handle_category_delete_command(category_id: str, yes: bool) -> int:
 
 
 def handle_category_list_command(parent_id: str | None) -> int:
-    """Показывает список категорий."""
+    """Show the category list."""
     from .db import list_categories
 
     rows: list[ResultRow] = []
@@ -1539,7 +1540,7 @@ def handle_file_stat_from_db_command(
     by_path: bool,
     output_path: Path | None,
 ) -> int:
-    """Собирает XLSX-статистику по файлу, уже загруженному в БД."""
+    """Collect XLSX statistics for a file already loaded into the DB."""
 
     import uuid as _uuid
 
@@ -1727,7 +1728,7 @@ def handle_export_blocks_xlsx_command(
     by_path: bool,
     output_path: Path | None,
 ) -> int:
-    """Экспортирует сводную таблицу по блокам файла из БД в XLSX."""
+    """Export a summary table of file blocks from the DB to XLSX."""
 
     import openpyxl
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -1844,7 +1845,7 @@ def handle_export_blocks_table_command(
     by_path: bool,
     output_path: Path | None,
 ) -> int:
-    """Выводит сводную текстовую таблицу по блокам файла из БД."""
+    """Print a summary text table of file blocks from the DB."""
     block_rows = _collect_block_export_rows(file_ref=file_ref, by_path=by_path, multiline=False)
     if block_rows is None:
         return constants.ERROR
@@ -1864,7 +1865,7 @@ def handle_export_blocks_table_command(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Точка входа для командной строки."""
+    """CLI entry point."""
 
     parser = build_args_parser()
     argv = list(sys.argv[1:] if argv is None else argv)

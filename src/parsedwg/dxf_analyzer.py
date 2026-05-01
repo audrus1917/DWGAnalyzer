@@ -1,21 +1,22 @@
-"""Класс анализа и извлечения данных из формата `DXF`."""
+"""DXF analysis and data extraction utilities."""
 
 from typing import Any, Optional
 
-import json
 import re
 
 from ezdxf.document import Drawing
 
 
 class DXFAnalyzer:
-    """Анализирует и извлекает данные из формата `DXF`."""
+    """Analyze and extract data from DXF content."""
 
     def __init__(self, drawing: Drawing):
         self.drawing = drawing
 
     @staticmethod
     def is_point_like(value: object) -> bool:
+        """Determine if a value is point-like."""
+
         if hasattr(value, "x") and hasattr(value, "y"):
             return True
 
@@ -30,7 +31,9 @@ class DXFAnalyzer:
         return False
 
     @staticmethod
-    def format_point(point: object | None) -> Optional[list[float]]:
+    def format_point(point: object | None) -> object | None:
+        """Format a point-like value into a consistent representation."""
+
         if point is None:
             return None
 
@@ -46,7 +49,7 @@ class DXFAnalyzer:
                 py = float(point[1])
                 pz = float(point[2]) if len(point) >= 3 else 0.0
             except (TypeError, ValueError):
-                return str(point)
+                return str(point).rstrip()
             return [px, py, pz]
 
         return point
@@ -54,25 +57,29 @@ class DXFAnalyzer:
 
     @staticmethod
     def get_text(entity) -> str:
-        entity_type = entity.dxftype()
-        if entity_type == "TEXT" and entity.dxf.hasattr("text"):
-            return str(entity.dxf.text).strip()
+        """Extract text content from TEXT or MTEXT entities, if available."""
 
-        if entity_type == "MTEXT":
+        entity_type = entity.dxftype()
+        if entity_type == "TEXT":
+            return entity.dxf.text.rstrip()
+        elif entity_type == "MTEXT":
             plain_text = getattr(entity, "plain_text", None)
             if callable(plain_text):
-                return str(plain_text()).strip()
-
+                return str(plain_text()).rstrip()
         return ""
 
     @classmethod
-    def get_entity_data(cls, entity, block: Optional[object] = None) -> dict[str, Any]:
-        """Возвращает данные DXF-сущности."""
+    def get_entity_data(
+        cls, 
+        entity, 
+        block: Optional[Any] = None
+    ) -> dict[str, Any]:
+        """Return DXF entity data."""
 
-        # Получаем тип сущности и базовые атрибуты
+        # Collect the entity type and base attributes.
         dxftype = entity.dxftype()
 
-        # Общая обработка
+        # Generic handling shared by all entity types.
         entity_data = {
             "type": dxftype,
             "block": getattr(block, "name", None) if block is not None else None,

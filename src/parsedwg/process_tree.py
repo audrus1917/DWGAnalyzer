@@ -1,4 +1,4 @@
-"""Обход каталога DWG/DXF и сохранение дерева сущностей в БД."""
+"""Walk DWG/DXF directories and persist the entity tree to the database."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def skip_blocks(
     block_entity: object,
     filter_handler: Callable[[object], bool] | None = None,
 ) -> bool:
-    """Признак того, какие блоки надо пропускать."""
+    """Return whether a block should be skipped."""
 
     if filter_handler is None:
         return False
@@ -58,7 +58,7 @@ def skip_blocks(
 
 
 class DWGTreeProcessor:
-    """Обходит каталог и собирает задания на разбор DWG/DXF."""
+    """Walk a directory and collect DWG/DXF processing jobs."""
 
     def __init__(self, source_path: Path, root_path: Path | None = None):
         self.source_path = source_path
@@ -68,7 +68,7 @@ class DWGTreeProcessor:
 
     @staticmethod
     def file_md5(path: Path) -> str:
-        """Возвращает MD5-хеш файла для идентификации его содержимого."""
+        """Return the MD5 hash of a file to identify its contents."""
 
         digest = hashlib.md5(usedforsecurity=False)
         with path.open("rb") as stream:
@@ -77,7 +77,7 @@ class DWGTreeProcessor:
         return digest.hexdigest()
 
     def walk(self, root_path: Path) -> Generator[JobEntry, None, None]:
-        """Обходит каталог и генерирует задания на разбор DWG/DXF файлов."""
+        """Walk a directory and yield DWG/DXF parsing jobs."""
 
         for file_path in sorted(path for path in root_path.rglob("*") if path.is_file()):
             suffix = file_path.suffix.lower()
@@ -122,7 +122,7 @@ class DWGTreeProcessor:
 
     @staticmethod
     def split_to_batches(entries: list[JobEntry], workers: int) -> list[list[JobEntry]]:
-        """Разбивает список заданий на батчи для параллельной обработки."""
+        """Split jobs into batches for parallel processing."""
 
         normalized_workers = max(1, workers)
         batches: list[list[JobEntry]] = [[] for _ in range(normalized_workers)]
@@ -132,7 +132,7 @@ class DWGTreeProcessor:
 
     @staticmethod
     def extract_from_zip(zip_path: Path, member: str, temp_dir: Path) -> Path:
-        """Извлекает файл из ZIP-архива во временную папку и возвращает путь к нему."""
+        """Extract a file from a ZIP archive into a temp directory and return its path."""
 
         target_path = temp_dir / Path(member).name
         with zipfile.ZipFile(zip_path) as archive:
@@ -142,7 +142,7 @@ class DWGTreeProcessor:
 
     @staticmethod
     def read_drawing(path: Path):
-        """Читает DWG/DXF-файл с помощью ezdxf / ODAFC (для DWG) и возвращает объект Drawing."""
+        """Read a DWG/DXF file via ezdxf or ODAFC and return a Drawing object."""
 
         suffix = path.suffix.lower()
         if suffix == ".dwg":
@@ -198,7 +198,7 @@ def collect_entity_layers(doc, entity, seen_blocks: set[str] | None = None) -> s
 
 
 def iter_blocks(drawing: Drawing) -> Iterator[BlockLayout]:
-    """Итерирует блоки в документе с отображением прогресса."""
+    """Iterate over document blocks with optional progress reporting."""
 
     blocks = list(drawing.blocks)
     return iter(
@@ -271,7 +271,7 @@ def collect_drawing_summary(
     drawing: Drawing,
     name_tags_extractor: NameTagsExtractor | None = None,
 ) -> dict[str, Any]:
-    """Собирает информацию о Layouts, Blocks и примитивах из документа."""
+    """Collect layout, block, and primitive data from a drawing."""
     
     layouts: list[dict[str, object]] = []
     for layout in drawing.layouts:
@@ -343,9 +343,9 @@ def collect_dxf_summary(
     drawing_path: Path,
     name_tags_extractor: NameTagsExtractor | None = None,
 ) -> dict[str, Any]:
-    """Собирает информацию о Layouts, Blocks и примитивах из DWG/DXF-файла."""
+    """Collect layout, block, and primitive data from a DWG/DXF file."""
 
-    # Чтение файла DWG / DXF
+    # Read the DWG/DXF file.
     doc = DWGTreeProcessor.read_drawing(drawing_path)
     return collect_drawing_summary(doc, name_tags_extractor=name_tags_extractor)
 
@@ -390,7 +390,7 @@ def process_batch(
     batch: list[JobEntry],
     name_tags_config: NameTagsAIConfig | None = None,
 ) -> list[ProcessedEntry]:
-    """Последовательно обрабатывает набор файлов и возвращает готовые summaries."""
+    """Process a batch of files sequentially and return ready summaries."""
 
     processed: list[ProcessedEntry] = []
 
@@ -497,12 +497,14 @@ async def save_tree_to_db(
     project_description: str | None = None,
     created_by: str | None = None,
 ) -> tuple[str, int]:
-    """Сохраняет дерево сущностей в БД по уже обработанным файлам.
-    Возвращает ID проекта и количество созданных сущностей."""
+    """Persist an entity tree to the database from already processed files.
+
+    Returns the project ID and the number of created entities.
+    """
 
     logger.info("Сохраняем результаты в БД")
     async with async_session_factory() as session:
-        # Выбираем существующий проект или создаем новый
+        # Reuse an existing project or create a new one.
         result = await session.execute(
             select(Project.id).where(Project.name == project_name)
         )
@@ -733,7 +735,7 @@ def run_process_tree(
     name_tags_config: NameTagsAIConfig | None = None,
     dry_run: bool = False,
 ) -> dict[str, object]:
-    """Обходит каталог/файл, разбирает DWG/DXF последовательно и сохраняет дерево в БД."""
+    """Walk a directory or file, parse DWG/DXF content, and save the tree to the DB."""
 
     root_path = source_path if source_path.is_dir() else source_path.parent
     logger.info("Старт обработки")

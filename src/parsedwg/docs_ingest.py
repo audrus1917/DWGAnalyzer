@@ -307,7 +307,7 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
 
 
 def run_documents_ingest(source_path: Path) -> dict[str, object]:
-    """Рекурсивно импортирует PDF/DOCX/XLSX/CSV документы в таблицу entity."""
+    """Recursively import PDF/DOCX/XLSX/CSV documents into the entity table."""
 
     source = source_path.resolve()
     documents = _discover_documents(source)

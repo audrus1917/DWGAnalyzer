@@ -1,4 +1,4 @@
-"""Класс для получения данных о свойствах DWG/DXF файлов и выполнения операций с ними."""
+"""Utilities for inspecting DWG/DXF files and running related operations."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ type ExplorerRow = dict[str, object]
 
 
 class DXFExplorer:
-    """Класс для получения данных и выполнения операций с DWG/DXF файлами."""
+    """Inspect DWG/DXF files and perform related operations."""
 
     def __init__(self, drawing: Path | str):
         self.drawing = Path(drawing)
@@ -37,7 +37,7 @@ class DXFExplorer:
         logger.info("Размер файла: %.2f МБ", size_mb)
 
     def _read_document(self) -> Drawing:
-        """Читает DWG/DXF файл и возвращает объект документа ezdxf."""
+        """Read a DWG/DXF file and return an ezdxf document object."""
 
         logger.debug("Читаем файл через ezdxf: %s", self.drawing)
         if self.drawing.suffix.lower() == ".dwg":
@@ -51,7 +51,7 @@ class DXFExplorer:
 
     @staticmethod
     def format_point(point: object | None) -> str:
-        """Возвращает строку с представлением координат точки."""
+        """Return a formatted string representation of point coordinates."""
         if point is None:
             return "n/a"
 
@@ -74,8 +74,9 @@ class DXFExplorer:
 
     @staticmethod
     def is_point(value: object) -> bool:
-        """Возвращает True, если значение похоже на точку с координатами 
-        (имеет x/y или похожую структуру).
+        """Return True if the value looks like a point with coordinates.
+
+        Accepts objects with x/y attributes or tuple-like coordinate containers.
         """
         if hasattr(value, "x") and hasattr(value, "y"):
             return True
@@ -92,7 +93,7 @@ class DXFExplorer:
 
     @staticmethod
     def get_text_content(entity) -> str:
-        """Возвращает содержимое атрибута `text` объекта."""
+        """Return the content of an entity text attribute."""
 
         entity_type = entity.dxftype()
         if entity_type == "TEXT" and entity.dxf.hasattr("text"):
@@ -112,7 +113,7 @@ class DXFExplorer:
         entity,
         seen_blocks: set[str] | None = None,
     ) -> set[str]:
-        """Собирает все слои, на которых находится сущность, включая вложенные блоки."""
+        """Collect all layers touched by an entity, including nested blocks."""
         layers: set[str] = set()
         layer_name = getattr(entity.dxf, "layer", "")
         if layer_name:
@@ -139,7 +140,7 @@ class DXFExplorer:
 
     @classmethod
     def _get_layout_layers(cls, doc, layout) -> str:
-        """Возвращает строку с перечислением всех слоев, на которых находятся сущности в макете."""
+        """Return a comma-separated list of all layers used in a layout."""
         layers: set[str] = set()
         for entity in layout:
             layers.update(cls._collect_entity_layers(doc, entity))
@@ -147,7 +148,7 @@ class DXFExplorer:
 
     @classmethod
     def _get_entity_params(cls, entity) -> dict[str, str]:
-        """Возвращает словарь с параметрами сущности."""
+        """Return a dictionary with entity parameters."""
         entity_type = entity.dxftype()
         params: dict[str, str] = {"type": entity_type}
 
@@ -300,7 +301,7 @@ class DXFExplorer:
         table_blocks: list[dict[str, object]],
         output_dir: Path,
     ) -> list[Path]:
-        """Сохраняет XLSX для блоков-таблиц, полученных из БД."""
+        """Save XLSX files for table blocks loaded from the database."""
         output_paths: list[Path] = []
         for block_payload in table_blocks:
             block_name = str(block_payload.get("block_name", ""))
@@ -337,7 +338,7 @@ class DXFExplorer:
         return output_paths
 
     def list_layouts(self) -> list[ExplorerRow]:
-        """Возвращает список layout'ов для текущего DXF/DWG файла."""
+        """Return layouts for the current DXF/DWG file."""
 
         logger.info("Считываем layout'ы для файла: %s", self.drawing)
         doc = self._read_document()
@@ -351,7 +352,7 @@ class DXFExplorer:
         ]
 
     def list_blocks(self) -> list[ExplorerRow]:
-        """Возвращает список блоков для текущего DXF/DWG файла."""
+        """Return blocks for the current DXF/DWG file."""
 
         logger.info("Считываем блоки для файла: %s", self.drawing)
         doc = self._read_document()
@@ -371,7 +372,7 @@ class DXFExplorer:
         return rows
 
     def list_layer_names(self) -> list[str]:
-        """Возвращает список имен слоев для текущего DXF/DWG файла."""
+        """Return layer names for the current DXF/DWG file."""
 
         logger.info("Считываем слои для файла: %s", self.drawing)
         doc = self._read_document()
@@ -420,7 +421,7 @@ class DXFExplorer:
         output_path: Path | None = None,
         dpi: int = 300,
     ) -> Path:
-        """Экспортирует указанный блок в PNG."""
+        """Export the selected block to PNG."""
 
         return self._export_block_image(
             block_name,
@@ -434,7 +435,7 @@ class DXFExplorer:
         block_name: str,
         output_path: Path | None = None,
     ) -> Path:
-        """Экспортирует указанный блок в SVG."""
+        """Export the selected block to SVG."""
 
         return self._export_block_image(
             block_name,
@@ -449,7 +450,7 @@ class DXFExplorer:
         output_path: Path | None = None,
         dpi: int = 300,
     ) -> Path:
-        """Экспортирует указанный блок в графический файл."""
+        """Export the selected block to a graphic file."""
 
         normalized_format = image_format.lower()
         if normalized_format not in {"png", "svg"}:
@@ -541,7 +542,7 @@ class DXFExplorer:
 
     @staticmethod
     def _collect_block_inserts(doc) -> dict[str, dict[str, object]]:
-        """Возвращает словарь block_name → {insert_count, layers} по всем layout'ам."""
+        """Return block_name -> {insert_count, layers} across all layouts."""
         stats: dict[str, dict] = {}
         for layout in doc.layouts:
             for entity in layout:
@@ -572,12 +573,12 @@ class DXFExplorer:
             sheet.column_dimensions[get_column_letter(col_idx)].width = min(width + 2, 60)
 
     def export_file_stat(self, output_path: Path, project: str = "") -> Path:
-        """Собирает статистику по DXF/DWG файлу и сохраняет в xlsx с 4 вкладками."""
+        """Collect DXF/DWG file statistics and save them to an XLSX workbook."""
         logger.info("Собираем статистику файла: %s", self.drawing)
         doc = self._read_document()
 
         wb = Workbook()
-        # --- Вкладка 1: Файл ---
+        # --- Sheet 1: File ---
         ws_file = wb.active
         ws_file.title = "Файл"
         ws_file.append(["Параметр", "Значение"])
@@ -594,7 +595,7 @@ class DXFExplorer:
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
         self._auto_column_widths(ws_file)
 
-        # --- Вкладка 2: Блоки ---
+        # --- Sheet 2: Blocks ---
         ws_blocks = wb.create_sheet("Блоки")
         headers_blocks = ["Наименование", "Таблица", "Добавлен (раз)", "Слои"]
         ws_blocks.append(headers_blocks)
@@ -619,7 +620,7 @@ class DXFExplorer:
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
         self._auto_column_widths(ws_blocks)
 
-        # --- Вкладка 3: Блоки-таблицы ---
+        # --- Sheet 3: Table blocks ---
         ws_tables = wb.create_sheet("Блоки-таблицы")
         ws_tables.append(headers_blocks)
         self._apply_header_style(ws_tables, 1)
@@ -634,7 +635,7 @@ class DXFExplorer:
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
         self._auto_column_widths(ws_tables)
 
-        # --- Вкладка 4: Текстовые примитивы ---
+        # --- Sheet 4: Text primitives ---
         ws_prim = wb.create_sheet("Текстовые примитивы")
         headers_prim = ["Блок", "Тип", "Текст", "Слой", "Локация"]
         ws_prim.append(headers_prim)

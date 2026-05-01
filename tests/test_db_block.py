@@ -1,4 +1,4 @@
-"""Тесты для db.get_full_description."""
+"""Tests for db.get_full_description."""
 import asyncio
 import uuid
 from types import SimpleNamespace
@@ -34,24 +34,24 @@ def _make_session_side_effect(
     multileader_rows=None,
     source_ref_row=None,
 ):
-    """Возвращает список side_effect-результатов для session.execute() по порядку вызовов."""
-    # Вызов 1: SELECT block
+    """Return session.execute() side effects in call order."""
+    # Call 1: SELECT block.
     r0 = MagicMock()
     r0.scalar_one_or_none.return_value = block
 
-    # Вызов 2: SELECT layers (итерируемый)
+    # Call 2: SELECT layers (iterable).
     r1 = MagicMock()
     r1.__iter__ = lambda s: iter(layer_rows)
 
-    # Вызов 3: SELECT attribs (итерируемый кортежей)
+    # Call 3: SELECT attribs (iterable of tuples).
     r2 = MagicMock()
     r2.__iter__ = lambda s: iter(attrib_data_rows)
 
-    # Вызов 4: SELECT inserts (итерируемый)
+    # Call 4: SELECT inserts (iterable).
     r3 = MagicMock()
     r3.__iter__ = lambda s: iter(insert_rows)
 
-    # Вызов 5: SELECT child MULTILEADER rows
+    # Call 5: SELECT child MULTILEADER rows.
     r4 = MagicMock()
     r4.__iter__ = lambda s: iter(multileader_rows or [])
 
@@ -118,7 +118,7 @@ def test_get_block_full_description_returns_structure(monkeypatch) -> None:
         SimpleNamespace(name="0-ВК-ТРУБЫ", short_interpretation="Трубопроводы ВК"),
         SimpleNamespace(name="0-ВК-ОБОРУДОВАНИЕ", short_interpretation=None),
     ]
-    # attribs: один INSERT с двумя атрибутами
+    # attribs: one INSERT with two attributes.
     attrib_data_rows = [
         ({"block": "НС-01", "attribs": {"ДИАМЕТР": "DN50", "НАПОР": "20м"}},),
     ]
@@ -165,7 +165,7 @@ def test_get_block_full_description_merges_attribs_from_multiple_inserts(monkeyp
     attrib_data_rows = [
         ({"attribs": {"TAG_A": "val1"}},),
         ({"attribs": {"TAG_B": "val2"}},),
-        ({"нет": "attribs"},),          # нет поля attribs — пропускается
+        ({"нет": "attribs"},),          # No attribs field, should be skipped.
     ]
     insert_rows: list = []
 

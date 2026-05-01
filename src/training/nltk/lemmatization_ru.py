@@ -1,19 +1,19 @@
 """
-Пример лемматизации русских слов через pymorphy2.
+Example of Russian word lemmatization with pymorphy3.
 
-Лемматизатор возвращает канонические словарные формы (leммы), а не обрезанные
-стемы — «этажа» → «этаж», «вентиляции» → «вентиляция».
+The lemmatizer returns canonical dictionary forms (lemmas), not truncated
+stems, for example: "этажа" -> "этаж", "вентиляции" -> "вентиляция".
 
-NLTK не содержит встроенного морфологического анализатора для русского языка,
-поэтому используется pymorphy3 — поддерживаемый форк pymorphy2 для Python 3.10+.
+NLTK does not include a built-in morphological analyzer for Russian, so this
+script uses pymorphy3, the maintained fork of pymorphy2 for Python 3.10+.
 
-Запуск:
+Run:
     PYTHONPATH=src .venv/bin/python src/training/nltk/lemmatization_ru.py
 
-Установка (если ещё не установлено):
+Install first, if needed:
     .venv/bin/pip install pymorphy3
 
-При желании сравнить с NLTK SnowballStemmer — запустите stemming_ru.py.
+To compare the result with NLTK SnowballStemmer, run stemming_ru.py.
 """
 from __future__ import annotations
 
@@ -28,14 +28,14 @@ except ImportError as exc:  # pragma: no cover
 
 MORPH = pymorphy3.MorphAnalyzer()
 
-# Те же слова, что в stemming_ru.py — удобно сравнивать результаты.
+# The same words as in stemming_ru.py, which makes result comparison easier.
 WORDS: list[str] = [
-    # Словоформы одного слова — лемматизатор должен давать одну лемму
+    # Different inflected forms of the same word should map to one lemma.
     "этаж",
     "этажа",
     "этажей",
     "этажном",
-    # Строительные термины
+    # Construction-related terms.
     "вентиляция",
     "вентиляции",
     "вентиляционный",
@@ -47,7 +47,7 @@ WORDS: list[str] = [
     "пожаротушения",
     "автоматизация",
     "автоматизированный",
-    # Прочие
+    # Miscellaneous examples.
     "кровля",
     "кровле",
     "кровли",
@@ -58,7 +58,7 @@ WORDS: list[str] = [
 
 
 def lemmatize(word: str) -> str:
-    """Возвращает наиболее вероятную (первую) лемму слова."""
+    """Return the most likely (first) lemma for a word."""
     parsed = MORPH.parse(word)
     if not parsed:
         return word

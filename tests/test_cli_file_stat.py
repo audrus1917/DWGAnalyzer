@@ -1,4 +1,4 @@
-"""Тесты для команды file-stat."""
+"""Tests for the file-stat command."""
 
 from pathlib import Path
 

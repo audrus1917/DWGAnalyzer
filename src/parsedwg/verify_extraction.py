@@ -1,4 +1,4 @@
-"""Верификация того, что DWG/DXF файл корректно сохранён в текущую БД."""
+"""Verify that a DWG/DXF file is stored correctly in the current database."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def compare_counts(expected: PrimitiveCountMap, actual: PrimitiveCountMap) -> li
             if expected_count == actual_count:
                 continue
             mismatches.append(
-                "block={!r} type={} файл={} БД={}".format(
+                "block={!r} type={} file={} db={}".format(
                     block_name,
                     primitive_type,
                     expected_count,
@@ -66,11 +66,11 @@ def compare_layers(expected_layers: set[str], actual_layers: set[str]) -> list[s
     extra_layers = sorted(actual_layers - expected_layers)
     if missing_layers:
         mismatches.append(
-            f"Отсутствуют слои в БД: {', '.join(missing_layers)}"
+            f"Missing layers in the DB: {', '.join(missing_layers)}"
         )
     if extra_layers:
         mismatches.append(
-            f"Лишние слои в БД: {', '.join(extra_layers)}"
+            f"Extra layers in the DB: {', '.join(extra_layers)}"
         )
     return mismatches
 
@@ -81,11 +81,11 @@ def compare_layout_names(expected_layouts: set[str], actual_layouts: set[str]) -
     extra_layouts = sorted(actual_layouts - expected_layouts)
     if missing_layouts:
         mismatches.append(
-            f"Отсутствуют layout в БД: {', '.join(missing_layouts)}"
+            f"Missing layouts in the DB: {', '.join(missing_layouts)}"
         )
     if extra_layouts:
         mismatches.append(
-            f"Лишние layout в БД: {', '.join(extra_layouts)}"
+            f"Extra layouts in the DB: {', '.join(extra_layouts)}"
         )
     return mismatches
 
@@ -140,7 +140,7 @@ def build_verification_report(
     source_summary: dict[str, Any],
     db_snapshot: dict[str, object],
 ) -> dict[str, object]:
-    """Строит итоговый отчёт верификации из summary файла и снимка БД."""
+    """Build the final verification report from a file summary and DB snapshot."""
 
     file_entity = cast(Entity, db_snapshot["file_entity"])
     layouts = cast(list[Entity], db_snapshot["layouts"])
@@ -185,14 +185,14 @@ def build_verification_report(
         expected_count = expected_blocks.get(block_name)
         actual_count = actual_blocks.get(block_name)
         if expected_count is None:
-            block_mismatches.append(f"лишний block в БД: {block_name!r}")
+            block_mismatches.append(f"Extra block in DB: {block_name!r}")
             continue
         if actual_count is None:
-            block_mismatches.append(f"block отсутствует в БД: {block_name!r}")
+            block_mismatches.append(f"Block missing in DB: {block_name!r}")
             continue
         if expected_count != actual_count:
             block_mismatches.append(
-                f"block={block_name!r} entity_count файл={expected_count} БД={actual_count}"
+                f"block={block_name!r} entity_count file={expected_count} db={actual_count}"
             )
 
     expected_primitive_counts = count_primitives(
@@ -233,13 +233,13 @@ def build_verification_report(
         layer_entity = layer_by_name.get(layer_name)
         if layer_entity is None:
             missing_layer_links.append(
-                f"primitive={primitive.id} layer={layer_name!r}: нет layer entity"
+                f"primitive={primitive.id} layer={layer_name!r}: missing layer entity"
             )
             continue
 
         if (primitive.id, layer_entity.id) not in on_layer_links:
             missing_layer_links.append(
-                f"primitive={primitive.id} layer={layer_name!r}: нет link on_layer"
+                f"primitive={primitive.id} layer={layer_name!r}: missing on_layer link"
             )
 
     wrong_file_id_entities: list[str] = []
@@ -292,7 +292,7 @@ def build_verification_report(
 
 
 def format_verification_report(report: dict[str, object]) -> str:
-    """Форматирует отчёт в удобный для CLI текст."""
+    """Format the report as CLI-friendly text."""
 
     layouts = cast(dict[str, object], report["layouts"])
     blocks = cast(dict[str, object], report["blocks"])
@@ -303,7 +303,7 @@ def format_verification_report(report: dict[str, object]) -> str:
 
     def _render_list(items: list[str], limit: int = 20) -> list[str]:
         if not items:
-            return ["    Расхождений: 0"]
+            return ["    Mismatches: 0"]
         rendered = [f"    Расхождений: {len(items)}"]
         rendered.extend(f"    {item}" for item in items[:limit])
         if len(items) > limit:
@@ -443,7 +443,7 @@ async def _load_db_snapshot(file_entity: Entity) -> dict[str, object]:
 
 
 async def verify_extraction(path: Path, file_id: str | None = None) -> dict[str, object]:
-    """Сверяет DWG/DXF файл с тем, что сохранено в текущей БД."""
+    """Compare a DWG/DXF file with what is stored in the current database."""
 
     resolved_path = path.expanduser().resolve()
     if not resolved_path.exists():

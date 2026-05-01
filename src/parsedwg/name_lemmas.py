@@ -42,8 +42,8 @@ def _lemmatize_token(token: str, wordnet: object | None, russian_stemmer: object
     if re.search(r"[а-яё]", token):
         if russian_stemmer is None:
             return token
-        # NLTK не содержит полноценного русского лемматизатора без внешних словарей,
-        # поэтому для кириллицы используем ближайшую нормализацию через Snowball.
+        # NLTK does not provide a full Russian lemmatizer without external dictionaries,
+        # so for Cyrillic text we fall back to the closest Snowball normalization.
         return russian_stemmer.stem(token)
 
     if wordnet is None:
@@ -53,7 +53,7 @@ def _lemmatize_token(token: str, wordnet: object | None, russian_stemmer: object
         lemma = wordnet.lemmatize(token)
         return lemma if lemma else token
     except LookupError:
-        # Если не скачан wordnet corpus, оставляем токен без изменений.
+        # If the WordNet corpus is missing, keep the token unchanged.
         return token
 
 

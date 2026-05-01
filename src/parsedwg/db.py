@@ -1,4 +1,4 @@
-"""Опеарции с БД."""
+"""Database operations."""
 
 from typing import Any, cast
 
@@ -23,7 +23,7 @@ async_session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
 
 
 async def get_file_id_by_source(source_ref: str) -> str | None:
-    """Возвращает UUID file-сущности по source_ref (пути к файлу)."""
+    """Return the UUID of a file entity by its source_ref path."""
     stmt = (
         select(Entity.id)
         .where(Entity.entity_type == EntityType.file)
@@ -38,14 +38,14 @@ async def get_file_id_by_source(source_ref: str) -> str | None:
 
 
 async def get_entity_name_by_id(entity_id: str) -> str | None:
-    """Возвращает name сущности по UUID, или None если не найдена."""
+    """Return the entity name by UUID, or None if it is missing."""
     async with async_session_factory() as session:
         entity = await session.get(Entity, _uuid.UUID(entity_id))
     return entity.name if entity is not None else None
 
 
 async def save_short_interpretation(entity_id: str, text: str) -> None:
-    """Записывает short_interpretation для сущности по UUID."""
+    """Persist short_interpretation for an entity identified by UUID."""
     async with async_session_factory() as session:
         entity = await session.get(Entity, _uuid.UUID(entity_id))
         if entity is None:
@@ -55,7 +55,7 @@ async def save_short_interpretation(entity_id: str, text: str) -> None:
 
 
 async def save_block_description(block_id: str, description: str) -> None:
-    """Записывает description блока по UUID."""
+    """Persist a block description by UUID."""
     async with async_session_factory() as session:
         entity = await session.get(Entity, _uuid.UUID(block_id))
         if entity is None:
@@ -70,7 +70,7 @@ async def save_block_interpretations(
     full_interpretation: str,
     description: str,
 ) -> None:
-    """Записывает интерпретации блока по UUID."""
+    """Persist block interpretations by UUID."""
     async with async_session_factory() as session:
         entity = await session.get(Entity, _uuid.UUID(block_id))
         if entity is None:
@@ -85,7 +85,7 @@ async def list_blocks_for_interpretation(
     block_ids: list[str] | None = None,
     file_id: str | None = None,
 ) -> list[dict[str, str]]:
-    """Возвращает блоки для пакетной интерпретации."""
+    """Return blocks prepared for batch interpretation."""
 
     if bool(block_ids) == bool(file_id):
         raise ValueError("Нужно указать либо block_ids, либо file_id.")
@@ -125,7 +125,7 @@ async def list_blocks_for_interpretation(
 async def list_multileaders_for_nearest_lookup(
     file_id: str | None = None,
 ) -> list[dict[str, str]]:
-    """Возвращает MULTILEADER-сущности вместе с source_ref исходного файла."""
+    """Return MULTILEADER entities together with the source_ref of the source file."""
 
     file_entity = aliased(Entity)
     stmt = (
@@ -249,9 +249,11 @@ async def get_full_description(
     block_name: str,
     file_id: str | None = None,
 ) -> dict[str, object] | None:
-    """Возвращает полное описание BLOCK-сущности:
-    имя, слои (name + short_interpretation), атрибуты INSERT-примитивов,
-    список INSERT-сущностей, где name совпадает с именем блока."""
+    """Return the full description of a BLOCK entity.
+
+    Includes its name, layers (name + short_interpretation), attributes of
+    INSERT primitives, and INSERT entities whose name matches the block name.
+    """
     async with async_session_factory() as session:
         block_stmt = (
             select(Entity)
@@ -268,7 +270,7 @@ async def get_full_description(
         block_file_id = getattr(block, "file_id", None)
         resolved_file_id = block_file_id or (_uuid.UUID(file_id) if file_id is not None else None)
 
-        # Слои: через EntityToEntity (on_layer) от дочерних примитивов
+        # Layers: resolve through EntityToEntity (on_layer) from child primitives.
         child_ids_subq = (
             select(Entity.id)
             .where(Entity.parent_id == block.id)
@@ -292,7 +294,7 @@ async def get_full_description(
             for row in layers_result
         ]
 
-        # Атрибуты: из data["attribs"] всех INSERT-потомков блока
+        # Attributes: merge data["attribs"] from all INSERT descendants of the block.
         attribs_result = await session.execute(
             select(Entity.data)
             .where(Entity.parent_id == block.id)
@@ -304,7 +306,7 @@ async def get_full_description(
             if isinstance(row_data, dict) and isinstance(row_data.get("attribs"), dict):
                 merged_attribs.update(row_data["attribs"])
 
-        # INSERT-сущности, вставляющие этот блок (name == block_name)
+        # INSERT entities that reference this block (name == block_name).
         inserts_stmt = (
             select(Entity.id, Entity.parent_id, Entity.file_id, Entity.data)
             .where(Entity.entity_type == "INSERT")
@@ -361,7 +363,7 @@ async def get_full_description(
 
 
 async def get_full_description_by_id(block_id: str) -> dict[str, object] | None:
-    """Возвращает полное описание блока по UUID."""
+    """Return the full block description by UUID."""
 
     async with async_session_factory() as session:
         block = await session.get(Entity, _uuid.UUID(block_id))
@@ -371,7 +373,7 @@ async def get_full_description_by_id(block_id: str) -> dict[str, object] | None:
 
 
 async def list_blocks_for_export(file_id: str) -> list[dict[str, object]]:
-    """Возвращает данные BLOCK-сущностей файла для XLSX-экспорта."""
+    """Return BLOCK entity data for XLSX export."""
     file_uuid = _uuid.UUID(file_id)
     stmt = (
         select(Entity.name)
@@ -393,7 +395,7 @@ async def list_blocks_for_export(file_id: str) -> list[dict[str, object]]:
 
 
 async def get_table_blocks_by_file_id(file_id: str) -> list[dict[str, object]]:
-    """Возвращает блоки-таблицы из БД, у которых parent_id = file_id."""
+    """Return table blocks from the DB whose parent_id equals file_id."""
     stmt = (
         select(Entity.name, Entity.data)
         .where(Entity.entity_type == EntityType.block)
@@ -429,10 +431,10 @@ async def search_entities(
     limit: int = 20,
     parent_id: str | None = None,
 ) -> list[dict]:
-    """Полнотекстовый поиск по entity_text с fallback на name и description.
+    """Run full-text search on entity_text with fallback to name and description.
 
-    Использует PostgreSQL websearch_to_tsquery (поддерживает кавычки, минус, OR)
-    и to_tsvector с конфигурацией 'russian'.
+    Uses PostgreSQL websearch_to_tsquery, which supports quotes, minus, and OR,
+    together with to_tsvector configured for Russian.
     """
 
     tsquery = func.websearch_to_tsquery("russian", query)
@@ -497,7 +499,7 @@ async def create_project(
     description: str | None = None,
     created_by: str | None = None,
 ) -> dict[str, str]:
-    """Создаёт проект и возвращает его основные поля."""
+    """Create a project and return its main fields."""
 
     async with async_session_factory() as session:
         project = Project(
@@ -599,7 +601,7 @@ async def list_entities_for_semantic_categorization(
     entity_ids: list[str] | None = None,
     entity_type: str | None = None,
 ) -> list[dict[str, str]]:
-    """Возвращает сущности для AI-категоризации по id или по entity_type."""
+    """Return entities for AI categorization by id or entity_type."""
 
     if bool(entity_ids) == bool(entity_type):
         raise ValueError("Нужно указать либо entity_ids, либо entity_type.")
@@ -645,7 +647,7 @@ async def assign_semantic_category(
     entity_id: str,
     meanings: list[dict[str, object]],
 ) -> dict[str, object]:
-    """Создаёт или находит категорию по AI-смыслам и привязывает её к сущности."""
+    """Create or find a category from AI meanings and link it to the entity."""
 
     entity_uuid = _uuid.UUID(entity_id)
 
@@ -720,7 +722,7 @@ async def assign_semantic_category(
 async def assign_semantic_categories(
     categorizations: list[dict[str, object]],
 ) -> list[dict[str, object]]:
-    """Создаёт или находит категории по AI-смыслам и привязывает их к сущностям."""
+    """Create or find categories from AI meanings and link them to entities."""
 
     if not categorizations:
         return []
@@ -747,7 +749,7 @@ async def create_category(
     description: str | None = None,
     parent_id: str | None = None,
 ) -> dict[str, str]:
-    """Создаёт категорию и возвращает её основные поля."""
+    """Create a category and return its main fields."""
 
     parent_uuid = _uuid.UUID(parent_id) if parent_id is not None else None
 
@@ -775,7 +777,7 @@ async def update_category(
     description: str | None = None,
     parent_id: str | None = None,
 ) -> dict[str, str] | None:
-    """Обновляет категорию по id. Возвращает None, если категория не найдена."""
+    """Update a category by id. Return None if the category is not found."""
 
     category_uuid = _uuid.UUID(category_id)
     parent_uuid = _uuid.UUID(parent_id) if parent_id is not None else None
@@ -803,7 +805,7 @@ async def update_category(
 
 
 async def delete_category(category_id: str) -> bool:
-    """Удаляет категорию по id. Возвращает True, если удаление произошло."""
+    """Delete a category by id. Return True if deletion happened."""
 
     category_uuid = _uuid.UUID(category_id)
 
@@ -818,7 +820,7 @@ async def delete_category(category_id: str) -> bool:
 
 
 async def list_categories(parent_id: str | None = None) -> list[dict[str, str]]:
-    """Возвращает список категорий, опционально отфильтрованный по parent_id."""
+    """Return categories, optionally filtered by parent_id."""
 
     stmt = select(Category).order_by(Category.name.asc())
     if parent_id is not None:
@@ -845,7 +847,7 @@ async def update_project(
     description: str | None = None,
     created_by: str | None = None,
 ) -> dict[str, str] | None:
-    """Обновляет проект по id. Возвращает None, если проект не найден."""
+    """Update a project by id. Return None if the project is not found."""
     async with async_session_factory() as session:
         project = await session.get(Project, _uuid.UUID(project_id))
         if project is None:
@@ -869,7 +871,7 @@ async def update_project(
 
 
 async def delete_project(project_id: str) -> bool:
-    """Удаляет проект по id. Возвращает True, если удаление произошло."""
+    """Delete a project by id. Return True if deletion happened."""
     async with async_session_factory() as session:
         project = await session.get(Project, _uuid.UUID(project_id))
         if project is None:
@@ -881,7 +883,7 @@ async def delete_project(project_id: str) -> bool:
 
 
 async def get_table_blocks_for_source(source_ref: str) -> list[dict[str, object]]:
-    """Возвращает блоки-таблицы из БД для заданного source_ref файла."""
+    """Return table blocks from the DB for the given file source_ref."""
     file_id_subquery = (
         select(Entity.id)
         .where(Entity.entity_type == EntityType.file)
@@ -916,7 +918,7 @@ async def get_table_blocks_for_source(source_ref: str) -> list[dict[str, object]
 
 
 def get_block_full_description(block: dict[str, object]) -> str:
-    """Генерирует текстовое описание блока для AI на основе его данных."""
+    """Generate a text description of a block for AI based on its data."""
 
     name = str(block.get("name", "") or "")
     description = str(block.get("description", "") or "")

@@ -68,7 +68,7 @@ def count_attribs_from_file(doc) -> dict[str, int]:
 
 
 async def count_from_db(session: AsyncSession, file_id: str) -> dict[str, dict[str, int]]:
-    """block_name → {entity_type → count} из БД"""
+    """Return block_name -> {entity_type -> count} from the DB."""
     rows = await session.execute(
         text("""
             SELECT b.name as block_name, e.entity_type, COUNT(*) as cnt
@@ -109,7 +109,7 @@ async def check_missing_layers(session: AsyncSession, file_id: str) -> int:
 
 
 async def count_attribs_from_db(session: AsyncSession, file_id: str) -> dict[str, int]:
-    """handle → attrib_count из БД"""
+    """Return handle -> attrib_count from the DB."""
     rows = await session.execute(
         text("""
             SELECT e.handle, COUNT(a.id) as cnt
@@ -144,7 +144,7 @@ async def verify(path: Path, file_id: str | None) -> None:
                 return
         print(f"  Проверка file_id={file_id}\n")
 
-        # 1. Подсчёт сущностей: файл vs БД
+        # 1. Entity counts: file vs DB.
         file_counts = count_from_file(doc)
         db_counts = await count_from_db(session, file_id)
 
@@ -179,17 +179,17 @@ async def verify(path: Path, file_id: str | None) -> None:
         else:
             print(f"    Расхождений:   0 ✓")
 
-        # 2. Неразрешённые INSERT
+        # 2. Unresolved INSERT entities.
         unresolved = await check_unresolved_inserts(session, file_id)
         status = "✓" if unresolved == 0 else f"⚠ {unresolved} INSERT без ref_block_def_id"
         print(f"\n[2] Неразрешённые INSERT → block: {status}")
 
-        # 3. Отсутствующие слои
+        # 3. Missing layers.
         missing_layers = await check_missing_layers(session, file_id)
         status = "✓" if missing_layers == 0 else f"⚠ {missing_layers} entity с layer_id без записи в dwg_layer"
         print(f"[3] Ссылки entity → layer:          {status}")
 
-        # 4. ATTRIB: файл vs БД
+        # 4. ATTRIB: file vs DB.
         file_attribs = count_attribs_from_file(doc)
         db_attribs = await count_attribs_from_db(session, file_id)
 

@@ -1,6 +1,6 @@
-"""LangChain-экстрактор тегов для имен/текстов.
+"""LangChain-based tag extractor for names and texts.
 
-Модуль импортируется только при явно включенном AI-режиме.
+The module is imported only when AI mode is enabled explicitly.
 """
 
 from __future__ import annotations
@@ -70,8 +70,8 @@ _TEXT_TAGS_SCORED_HUMAN_PROMPT = (
 
 
 # _NAME_MEANING_SYSTEM_PROMPT = (
-#     "Ты — технический аналитик CAD-данных. Твоя задача — определять назначение "
-#     "объекта по его имени, игнорируя технические индексы, префиксы и цифры."
+#     "You are a technical CAD data analyst. Your task is to determine an "
+#     "object's purpose from its name while ignoring technical indexes, prefixes, and digits."
 # )
 _NAME_MEANING_SYSTEM_PROMPT = (
     "Ты — эксперт по обработке данных DXF и BIM. Твоя задача: расшифровать "
@@ -181,14 +181,14 @@ _NAME_MEANING_HUMAN_PROMPT_TEMPLATE = (
     "Ответ:"
 )
 
-# Оптимизированный системный промпт для Llama 3.1 8B
+# Optimized system prompt for Llama 3.1 8B.
 _NAME_MEANING_SYSTEM_PROMPT = (
     "Ты — эксперт по DXF и BIM. Твоя задача: определять физический смысл объекта по его техническому имени. "
     "ПРАВИЛО: Ответ строго в одну строку по шаблону: Категория: [тип]. Описание: [суть]. "
     "Никаких вводных слов и пояснений. Примитивы (HATCH, LINE) переводи технически (Штриховка, Линия)."
 )
 
-# Оптимизированный шаблон запроса
+# Optimized request template.
 _NAME_MEANING_HUMAN_PROMPT_TEMPLATE = (
     "Проанализируй название объекта.\n\n"
     "ПРИМЕРЫ:\n"
@@ -216,7 +216,7 @@ class LangChainAgentConfig:
 
 
 class LangChainNameTagsExtractor:
-    """Извлекает смысловые теги через LLM, завернутый в LangChain."""
+    """Extract semantic tags via an LLM wrapped with LangChain."""
 
     def __init__(
         self,
@@ -283,7 +283,7 @@ class LangChainNameTagsExtractor:
             if value:
                 normalized.append(value)
 
-        # Стабильный порядок без дублей
+        # Keep a stable order without duplicates.
         return sorted(set(normalized))
 
     def extract_token_meanings(
@@ -369,7 +369,7 @@ class LangChainNameTagsExtractor:
         tokens: list[str],
         extra_context: str = "",
     ) -> dict[str, list[dict[str, object]]]:
-        """Возвращает словарь token -> list[{"meaning": str, "score": float | None}]."""
+        """Return a mapping of token -> list[{"meaning": str, "score": float | None}]."""
         
         cleaned_tokens = [token.strip() for token in tokens if isinstance(token, str) and token.strip()]
         if not cleaned_tokens:
@@ -404,7 +404,7 @@ class LangChainNameTagsExtractor:
             value = json.loads(raw)
             return value if isinstance(value, dict) else {}
         except json.JSONDecodeError:
-            # Поддержка ответа в markdown fenced block.
+            # Support a response wrapped in a fenced Markdown block.
             start = raw.find("{")
             end = raw.rfind("}")
             if start == -1 or end == -1 or end <= start:
@@ -587,7 +587,7 @@ class LangChainNameTagsExtractor:
 
 
 def extract_semantic_token_meanings_json(tokens: list[str], config: LangChainAgentConfig) -> str:
-    """Возвращает JSON-словарь token -> list[str] для списка токенов."""
+    """Return a JSON mapping of token -> list[str] for the given tokens."""
 
     extractor = LangChainNameTagsExtractor.from_config(config)
     return extractor.extract_token_meanings_json(tokens)
@@ -642,62 +642,62 @@ def _build_scored_text_tags_prompt_template(chat_prompt_template_cls):
 
 
 # def clean_cad_name(name):
-#     # 1. Убираем служебные слова в начале (RECOVER, COPY, и т.д.)
+#     # 1. Remove service words at the beginning (RECOVER, COPY, etc.).
 #     name = re.sub(r'^(RECOVER|COPY|TMP|TEMP)_+', '', name, flags=re.IGNORECASE)
     
-#     # 2. Убираем длинные цифровые последовательности и временные метки (от 6 цифр и более)
-#     # Удаляет такие части как 171212140632-1
+#     # 2. Remove long digit sequences and timestamps (6+ digits).
+#     # Removes fragments such as 171212140632-1.
 #     name = re.sub(r'[_\-]?\d{6,}[_\-]?\d*', '', name)
     
-#     # 3. Убираем висящие в начале или конце разделители, которые остались после чистки
+#     # 3. Remove dangling separators left at the start or end after cleanup.
 #     name = name.strip('_ -')
     
 #     return name
 
-def clean_cad_name(name):
-    # 1. Убираем служебные слова (RECOVER, COPY, и т.д.)
+def _clean_cad_name_legacy(name):
+    # 1. Remove service words (RECOVER, COPY, etc.).
     name = re.sub(r'^(RECOVER|COPY|TMP|TEMP)_+', '', name, flags=re.IGNORECASE)
     
-    # 2. Убираем спецсимволы: $, #, @, %, &, *
-    # Оставляем только буквы, цифры, пробелы, подчеркивания и дефисы
+    # 2. Remove special symbols: $, #, @, %, &, *.
+    # Keep only letters, digits, spaces, underscores, and hyphens.
     name = re.sub(r'[$\#@%&*]', '', name)
     
-    # 3. Убираем длинные ID и временные метки (6+ цифр)
+    # 3. Remove long IDs and timestamps (6+ digits).
     name = re.sub(r'[_\-]?\d{6,}[_\-]?\d*', '', name)
     
-    # 4. Убираем лишние подчеркивания/пробелы, которые могли возникнуть (например, "Wall__Hatch")
+    # 4. Remove redundant underscores/spaces that may have appeared.
     name = re.sub(r'[_\-\s]{2,}', '_', name)
     
-    # 5. Финальная обрезка краев
+    # 5. Final trim of surrounding separators.
     cleaned_name = name.strip('_ -')
     # logger.debug(f"Cleaned CAD name: '{cleaned_name}' from original '{name}'")
     return cleaned_name
 
 
 def clean_cad_name(name):
-    # 1. Попытка исправить типичную проблему кодировки (cp1251 -> utf-8)
-    # Если в названии "РЎС‚РµРЅР°" (Стена), этот блок может помочь.
-    # Если данные уже в UTF-8, просто пропускаем.
+    # 1. Try to fix a common encoding issue (cp1251 -> utf-8).
+    # If the name looks like mojibake, this block may help.
+    # If the data is already UTF-8, this step is skipped.
     try:
-        # Проверяем, нет ли там специфических символов "битой" кодировки
+        # Check for symbols that usually indicate broken encoding.
         if any(c in name for c in "РЎР"): 
             name = name.encode('cp1252').decode('cp1251')
-    except:
+    except Exception:
         pass
 
-    # 2. Убираем служебный мусор (RECOVER, COPY, и спецсимволы $, #, @, %)
+    # 2. Remove service noise (RECOVER, COPY, and special symbols $, #, @, %).
     name = re.sub(r'^(RECOVER|COPY|TMP|TEMP)_+', '', name, flags=re.IGNORECASE)
     name = re.sub(r'[$\#@%&*^!]', '', name)
 
-    # 3. Убираем временные метки и длинные ID (6+ цифр)
+    # 3. Remove timestamps and long IDs (6+ digits).
     name = re.sub(r'[_\-]?\d{6,}[_\-]?\d*', '', name)
 
-    # 4. Заменяем все разделители на один пробел для удобства LLM
-    # Это превращает "Wall_Gasconcrete-Hatch" в "Wall Gasconcrete Hatch"
+    # 4. Replace all separators with a single space to simplify LLM input.
+    # This turns "Wall_Gasconcrete-Hatch" into "Wall Gasconcrete Hatch".
     name = re.sub(r'[_\-\s]+', ' ', name).strip()
 
-    # 5. Опционально: переводим в нижний регистр для единообразия
-    # Но для 8B лучше оставить как есть, так как Case может указывать на начало нового слова
+    # 5. Optionally lowercase for consistency.
+    # For 8B models it is better to keep the original case, since it may encode word boundaries.
     cleaned_name = name
     # logger.debug(f"Cleaned CAD name: '{cleaned_name}' from original '{name}'")
     return cleaned_name
@@ -712,7 +712,7 @@ def build_name_meaning_human_prompt(
     name: str,
     extra_context: str = "",
 ) -> str:
-    """Собирает user prompt для разбора имени сущности."""
+    """Build the user prompt used to analyze an entity name."""
     context_line = (
         f"Дополнительный контекст: {extra_context.strip()}\n"
         if extra_context.strip()
@@ -729,7 +729,7 @@ def build_name_meaning_prompt(
     name: str,
     extra_context: str = "",
 ) -> str:
-    """Собирает полный текст промпта для обратной совместимости."""
+    """Build the full prompt text for backward compatibility."""
     return (
         f"{build_name_meaning_system_prompt()}\n\n"
         f"{build_name_meaning_human_prompt(name=name, extra_context=extra_context)}"
@@ -743,7 +743,7 @@ def call_ollama_name_meaning(
     extra_context: str = "",
     timeout_seconds: float = 60.0,
 ) -> str:
-    """Запрашивает Ollama /api/chat и возвращает свободный текстовый разбор названия."""
+    """Call Ollama /api/chat and return a free-form name interpretation."""
     import urllib.error
     import urllib.request
 
@@ -753,7 +753,7 @@ def call_ollama_name_meaning(
         "messages": [{"role": "user", "content": content}],
         "stream": False,
     }).encode()
-    logger.debug(f"{payload=}")
+    logger.debug("payload=%s", payload)
     req = urllib.request.Request(
         chat_url,
         data=payload,
@@ -783,7 +783,7 @@ def call_openai_chat_completions_name_meaning(
     timeout_seconds: float = 60.0,
     api_key: str = "",
 ) -> str:
-    """Запрашивает OpenAI-compatible v1/chat/completions и возвращает текстовый разбор."""
+    """Call an OpenAI-compatible v1/chat/completions endpoint and return a text interpretation."""
     import urllib.error
     import urllib.request
 
