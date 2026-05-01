@@ -216,39 +216,33 @@ def _is_layout_block(block_name: str) -> bool:
     return block_name.startswith("*Model_Space") or block_name.startswith("*Paper_Space")
 
 
-def _collect_layout_insert_primitives(doc) -> list[dict[str, object]]:
+def _collect_layout_primitives(doc) -> list[dict[str, object]]:
     primitives: list[dict[str, object]] = []
 
     for layout in doc.layouts:
         layout_name = str(layout.name)
         for entity in layout:
-            if entity.dxftype() != "INSERT" or not entity.dxf.hasattr("name"):
-                continue
+            primitive = DXFAnalyzer.get_entity_data(entity)
+            primitive["layout"] = layout_name
+            primitive["parent_block"] = layout_name
 
-            target_block = str(entity.dxf.name)
-            if skip_blocks(entity):
-                continue
+            primitive_block = str(primitive.get("block", "") or "").strip()
+            if not primitive_block:
+                primitive["block"] = layout_name
 
-            location = ""
-            if entity.dxf.hasattr("insert"):
-                point = DXFAnalyzer.format_point(getattr(entity.dxf, "insert"))
-                if point is not None:
-                    location = str(point)
+            if primitive.get("type") == "INSERT":
+                target_block = str(getattr(entity.dxf, "name", "") or "").strip()
+                if target_block:
+                    primitive["target_block"] = target_block
+                    primitive["text"] = target_block
+                location = ""
+                if entity.dxf.hasattr("insert"):
+                    point = DXFAnalyzer.format_point(getattr(entity.dxf, "insert"))
+                    if point is not None:
+                        location = str(point)
+                primitive["location"] = location
 
-            primitives.append(
-                {
-                    "block": target_block,
-                    "type": "INSERT",
-                    "text": target_block,
-                    "location": location,
-                    "layer": str(getattr(entity.dxf, "layer", "")),
-                    "target_block": target_block,
-                    "layout": layout_name,
-                    "attribs": {
-                        "insert": DXFAnalyzer.format_point(getattr(entity.dxf, "insert", None)),
-                    },
-                }
-            )
+            primitives.append(primitive)
 
     return primitives
 
@@ -330,7 +324,7 @@ def collect_drawing_summary(
         for entity in block:
             primitives.append(DXFAnalyzer.get_entity_data(entity, block=block))
 
-    primitives.extend(_collect_layout_insert_primitives(drawing))
+    primitives.extend(_collect_layout_primitives(drawing))
 
     if name_tags_extractor is not None:
         primitives_payload = _enrich_primitives_with_name_tags(primitives, name_tags_extractor)
@@ -580,6 +574,7 @@ async def save_tree_to_db(
 
             summary = cast(dict[str, list[dict[str, object]]], entry["summary"])
             layer_entities_by_key: dict[str, Entity] = {}
+            layout_entities_by_name: dict[str, uuid.UUID] = {}
             logger.info("Layouts (%d шт.)", len(summary.get("layouts", [])))
             for layout in summary["layouts"]:
                 layout_name = str(layout["name"])
@@ -595,6 +590,7 @@ async def save_tree_to_db(
                 )
                 session.add(layout_entity)
                 await session.flush()
+                layout_entities_by_name[layout_name] = layout_entity.id
                 created_entities += 1
 
             logger.info("Слои (%d шт.)", len(summary.get("layers", [])))
@@ -659,10 +655,13 @@ async def save_tree_to_db(
             for idx, primitive in enumerate(primitive_iterable, start=1):
                 block_name = str(primitive["block"])
                 parent_block_name = str(primitive.get("parent_block", block_name))
-                parent_block_entity_id = block_entities_by_name.get(parent_block_name)
+                parent_block_entity_id = (
+                    block_entities_by_name.get(parent_block_name)
+                    or layout_entities_by_name.get(parent_block_name)
+                )
                 if parent_block_entity_id is None:
                     logger.warning(
-                        "Пропускаем примитив %s: не найден block entity %s",
+                        "Пропускаем примитив %s: не найден parent entity %s",
                         primitive.get("text", ""),
                         block_name,
                     )
@@ -677,7 +676,7 @@ async def save_tree_to_db(
                     continue
 
                 if "name" in primitive and isinstance(primitive["name"], str):
-                    name = primitive.pop("name").strip()
+                    name = str(primitive.pop("name")).strip()
                 else:
                     name = str(primitive.get("type", ""))
                 

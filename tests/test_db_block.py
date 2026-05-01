@@ -9,18 +9,31 @@ import pytest
 from parsedwg.db import get_block_full_description, get_full_description
 
 
-def _make_block(block_name: str, block_id: uuid.UUID | None = None) -> SimpleNamespace:
+def _make_block(
+    block_name: str,
+    block_id: uuid.UUID | None = None,
+    file_id: uuid.UUID | None = None,
+) -> SimpleNamespace:
     bid = block_id or uuid.uuid4()
     return SimpleNamespace(
         id=bid,
         name=block_name,
         description=f"Block {block_name}",
         short_interpretation="Насос подачи воды",
+        full_interpretation=None,
+        file_id=file_id,
         entity_type="BLOCK",
     )
 
 
-def _make_session_side_effect(block, layer_rows, attrib_data_rows, insert_rows):
+def _make_session_side_effect(
+    block,
+    layer_rows,
+    attrib_data_rows,
+    insert_rows,
+    multileader_rows=None,
+    source_ref_row=None,
+):
     """Возвращает список side_effect-результатов для session.execute() по порядку вызовов."""
     # Вызов 1: SELECT block
     r0 = MagicMock()
@@ -38,11 +51,36 @@ def _make_session_side_effect(block, layer_rows, attrib_data_rows, insert_rows):
     r3 = MagicMock()
     r3.__iter__ = lambda s: iter(insert_rows)
 
-    return [r0, r1, r2, r3]
+    # Вызов 5: SELECT child MULTILEADER rows
+    r4 = MagicMock()
+    r4.__iter__ = lambda s: iter(multileader_rows or [])
+
+    side_effect = [r0, r1, r2, r3, r4]
+
+    if source_ref_row is not None:
+        r5 = MagicMock()
+        r5.first.return_value = source_ref_row
+        side_effect.append(r5)
+
+    return side_effect
 
 
-def _make_fake_session_factory(block, layer_rows, attrib_data_rows, insert_rows):
-    side_effect = _make_session_side_effect(block, layer_rows, attrib_data_rows, insert_rows)
+def _make_fake_session_factory(
+    block,
+    layer_rows,
+    attrib_data_rows,
+    insert_rows,
+    multileader_rows=None,
+    source_ref_row=None,
+):
+    side_effect = _make_session_side_effect(
+        block,
+        layer_rows,
+        attrib_data_rows,
+        insert_rows,
+        multileader_rows=multileader_rows,
+        source_ref_row=source_ref_row,
+    )
     session = AsyncMock()
     session.execute.side_effect = side_effect
 
@@ -112,6 +150,7 @@ def test_get_block_full_description_returns_structure(monkeypatch) -> None:
     assert layers[1]["short_interpretation"] is None
 
     assert result["attributes"] == {"ДИАМЕТР": "DN50", "НАПОР": "20м"}
+    assert result["annotation_texts"] == []
 
     inserts = result["inserts"]
     assert len(inserts) == 1
@@ -153,6 +192,54 @@ def test_get_block_full_description_empty_inserts_and_layers(monkeypatch) -> Non
     assert result["layers"] == []
     assert result["attributes"] == {}
     assert result["inserts"] == []
+    assert result["annotation_texts"] == []
+
+
+def test_get_block_full_description_collects_annotation_texts_from_child_multileaders(monkeypatch) -> None:
+    block = _make_block("МЛ-01")
+    multileader_rows = [
+        ("Помещение 101", {}),
+        ("", {"annotation_text": "Ог.1"}),
+        ("", {"text": "Ог.1"}),
+    ]
+
+    factory = _make_fake_session_factory(
+        block,
+        [],
+        [],
+        [],
+        multileader_rows=multileader_rows,
+    )
+    monkeypatch.setattr("parsedwg.db.async_session_factory", factory)
+
+    result = asyncio.run(get_full_description("МЛ-01"))
+
+    assert result is not None
+    assert result["annotation_texts"] == ["Помещение 101", "Ог.1"]
+
+
+def test_get_block_full_description_collects_annotation_texts_from_source_when_db_empty(monkeypatch) -> None:
+    file_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    block = _make_block("МЛ-02", file_id=file_id)
+
+    factory = _make_fake_session_factory(
+        block,
+        [],
+        [],
+        [],
+        multileader_rows=[],
+        source_ref_row=("/tmp/source.dxf",),
+    )
+    monkeypatch.setattr("parsedwg.db.async_session_factory", factory)
+    monkeypatch.setattr(
+        "parsedwg.db._collect_block_annotation_texts_from_source",
+        lambda block_name, source_ref: [f"{block_name}@{source_ref}"],
+    )
+
+    result = asyncio.run(get_full_description("МЛ-02"))
+
+    assert result is not None
+    assert result["annotation_texts"] == ["МЛ-02@/tmp/source.dxf"]
 
 
 def test_get_block_full_description_builds_readable_text() -> None:
@@ -165,6 +252,7 @@ def test_get_block_full_description_builds_readable_text() -> None:
                 {"name": "0-ВК-ОБОР", "short_interpretation": None},
             ],
             "attributes": {"A": "1", "B": "2"},
+            "annotation_texts": ["Помещение 101", "Ог.1"],
             "insert_count": 3,
             "inserts": [
                 {
@@ -183,4 +271,5 @@ def test_get_block_full_description_builds_readable_text() -> None:
     assert "Связанные слои: 0-ВК-ТРУБЫ (Трубопроводы); 0-ВК-ОБОР" in description
     assert "Атрибуты: A=1; B=2" in description
     assert "Количество вставок: 3" in description
+    assert "Тексты аннотаций: Помещение 101; Ог.1" in description
     assert "Примеры вставок: {block=НС-01; layer=0-ВК-ОБОР; attribs=TAG=VALUE}" in description

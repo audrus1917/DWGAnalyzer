@@ -169,6 +169,140 @@ def test_collect_dxf_summary_includes_insert_primitives_from_layouts(tmp_path: P
     )
 
 
+def test_collect_drawing_summary_includes_layout_multileader_primitives(monkeypatch) -> None:
+    class FakeDxfNamespace:
+        layer = "A-ANNO"
+
+        @staticmethod
+        def hasattr(name: str) -> bool:
+            return hasattr(FakeDxfNamespace, name)
+
+    class FakeEntity:
+        dxf = FakeDxfNamespace()
+
+        @staticmethod
+        def dxftype() -> str:
+            return "MULTILEADER"
+
+    class FakeLayout:
+        def __init__(self, name: str, is_modelspace: bool = False):
+            self.name = name
+            self.is_modelspace = is_modelspace
+            self.dxf = {"taborder": 0}
+
+        def __iter__(self):
+            return iter([FakeEntity()])
+
+    class FakeDoc:
+        def __init__(self):
+            self.layouts = [FakeLayout("Model", is_modelspace=True)]
+            self.layers = []
+            self.blocks = []
+
+    monkeypatch.setattr("parsedwg.process_tree.iter_blocks", lambda drawing: iter([]))
+    monkeypatch.setattr(
+        "parsedwg.process_tree.DXFAnalyzer.get_entity_data",
+        lambda entity, block=None: {
+            "type": entity.dxftype(),
+            "block": None,
+            "layer": "A-ANNO",
+        },
+    )
+
+    summary = collect_drawing_summary(FakeDoc())
+
+    assert summary["primitives"] == [
+        {
+            "type": "MULTILEADER",
+            "block": "Model",
+            "layer": "A-ANNO",
+            "layout": "Model",
+            "parent_block": "Model",
+        }
+    ]
+
+
+def test_save_tree_to_db_keeps_layout_primitives_without_block_entity(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    processed_entry = {
+        "kind": "file",
+        "source": str(tmp_path / "sample.dxf"),
+        "name": "sample.dxf",
+        "file_type": ".dxf",
+        "parent_rel": "",
+        "source_ref": str(tmp_path / "sample.dxf"),
+        "file_md5": "abc",
+        "summary": {
+            "layouts": [{"name": "Model"}],
+            "layers": [{"name": "A-ANNO", "data": {}}],
+            "blocks": [],
+            "primitives": [
+                {
+                    "type": "MULTILEADER",
+                    "text": "Выноска",
+                    "block": "Model",
+                    "parent_block": "Model",
+                    "layout": "Model",
+                    "layer": "A-ANNO",
+                }
+            ],
+        },
+    }
+
+    added_entities = []
+
+    class _FakeScalarResult:
+        def scalar_one_or_none(self):
+            return None
+
+    class _FakeSession:
+        def add(self, obj):
+            if isinstance(obj, Entity):
+                if obj.id is None:
+                    obj.id = uuid.uuid4()
+                added_entities.append(obj)
+
+        def add_all(self, objects):
+            for obj in objects:
+                self.add(obj)
+
+        async def flush(self):
+            return None
+
+        async def execute(self, _stmt):
+            return _FakeScalarResult()
+
+        async def commit(self):
+            return None
+
+    class _FakeSessionContext:
+        async def __aenter__(self):
+            return _FakeSession()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    def _fake_async_session_factory():
+        return _FakeSessionContext()
+
+    monkeypatch.setattr(
+        "parsedwg.process_tree.async_session_factory",
+        _fake_async_session_factory,
+    )
+
+    asyncio.run(
+        save_tree_to_db(
+            root_path=str(tmp_path),
+            processed_entries=[processed_entry],
+            project_name="Test Project",
+        )
+    )
+
+    assert any(entity.entity_type == "MULTILEADER" for entity in added_entities)
+
+
 def test_collect_dxf_summary_marks_table_blocks_and_keeps_table_data(tmp_path: Path) -> None:
     source = tmp_path / "table-block.dxf"
 

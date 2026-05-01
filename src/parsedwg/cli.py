@@ -15,6 +15,7 @@ from .langchain_name_tags import LangChainAgentConfig, LangChainNameTagsExtracto
 
 
 from . import constants
+from .dxf_analyzer import DXFAnalyzer
 from .settings import settings
 from .explorer import DXFExplorer
 from .process_tree import run_process_tree
@@ -1162,10 +1163,13 @@ def _resolve_source_ref_to_drawing_path(source_ref: str, temp_dir: Path) -> Path
 
 
 def _get_block_layout_by_name(doc, block_name: str):
+    for layout in doc.layouts:
+        if str(layout.name) == block_name:
+            return layout
     for block in doc.blocks:
         if str(block.name) == block_name:
             return block
-    if block_name.startswith("*Model_Space"):
+    if block_name == "Model" or block_name.startswith("*Model_Space"):
         return doc.modelspace()
     return None
 
@@ -1304,9 +1308,7 @@ def _collect_mleader_nearest_rows(
                         if nearest_entity.dxftype() == "TEXT" and nearest_entity.dxf.hasattr("text"):
                             nearest_text = str(nearest_entity.dxf.text)
                         elif nearest_entity.dxftype() == "MTEXT":
-                            plain_text = getattr(nearest_entity, "plain_text", None)
-                            if callable(plain_text):
-                                nearest_text = str(plain_text())
+                            nearest_text = DXFAnalyzer.get_text(nearest_entity)
 
                         rows.append(
                             {
