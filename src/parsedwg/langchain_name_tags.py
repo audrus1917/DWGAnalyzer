@@ -11,6 +11,7 @@ import json
 import logging
 import re
 
+from .settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -743,21 +744,26 @@ def call_ollama_name_meaning(
     extra_context: str = "",
     timeout_seconds: float = 60.0,
 ) -> str:
+    
     """Call Ollama /api/chat and return a free-form name interpretation."""
     import urllib.error
     import urllib.request
 
     content = build_name_meaning_prompt(name=name, extra_context=extra_context)
+    content = content
     payload = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": content}],
         "stream": False,
     }).encode()
-    logger.debug("payload=%s", payload)
+
+    api_key = settings.ollama_api_key
+
     req = urllib.request.Request(
         chat_url,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {api_key.strip()}" if api_key.strip() else "",},
         method="POST",
     )
     try:

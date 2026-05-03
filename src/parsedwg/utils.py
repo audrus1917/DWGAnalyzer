@@ -944,4 +944,3 @@ def find_closest_entity_in_entities(
             continue
 
     return closest_entity, min_dist
-

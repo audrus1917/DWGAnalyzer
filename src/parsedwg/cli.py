@@ -384,14 +384,6 @@ def _derive_ollama_chat_url(base_url: str) -> str:
     return stripped.rstrip("/") + "/api/chat"
 
 
-def _derive_openai_chat_completions_url(base_url: str) -> str:
-    """Build an OpenAI-compatible v1/chat/completions URL from a base URL."""
-    stripped = base_url.rstrip("/")
-    if stripped.endswith("/v1"):
-        return stripped + "/chat/completions"
-    return stripped + "/v1/chat/completions"
-
-
 def handle_extract_name_meaning_command(
     name: str | None = None,
     entity_id: str | None = None,
@@ -402,7 +394,9 @@ def handle_extract_name_meaning_command(
 ) -> int:
     """Analyze a title or DB entity name via LLM."""
     from .db import get_entity_name_by_id
-    from .langchain_name_tags import call_openai_chat_completions_name_meaning
+    from .langchain_name_tags import call_ollama_name_meaning
+
+    logger.debug("AI API key configured: %s", bool(ai_api_key))
 
     if bool(name) == bool(entity_id):
         logger.error("Нужно указать либо name, либо --entity-id.")
@@ -424,15 +418,14 @@ def handle_extract_name_meaning_command(
     assert resolved_name is not None
     normalized_name = " ".join(resolved_name.split())
     normalized_extra_context = " ".join(extra_context.split())
-    completions_url = _derive_openai_chat_completions_url(ai_base_url)
+    chat_url = _derive_ollama_chat_url(ai_base_url)
 
     try:
-        result = call_openai_chat_completions_name_meaning(
+        result = call_ollama_name_meaning(
             name=normalized_name,
-            completions_url=completions_url,
+            chat_url=chat_url,
             model=ai_model,
             extra_context=normalized_extra_context,
-            api_key=ai_api_key,
         )
         out(result)
         return constants.OK
@@ -676,8 +669,10 @@ def handle_interpret_entities_command(
     from .db import list_entities_for_semantic_categorization, save_short_interpretation
     from .langchain_name_tags import (
         build_name_meaning_prompt,
-        call_openai_chat_completions_name_meaning,
+        call_ollama_name_meaning,
     )
+
+    logger.debug("AI API key configured: %s", bool(ai_api_key))
 
     if bool(entity_ids) == bool(entity_type):
         logger.error("Нужно указать либо --entity-id, либо --entity-type.")
@@ -686,7 +681,7 @@ def handle_interpret_entities_command(
         logger.error("--workers должен быть больше 0.")
         return constants.UNBOUND_ERROR
 
-    chat_url = _derive_openai_chat_completions_url(ai_base_url)
+    chat_url = _derive_ollama_chat_url(ai_base_url)
     logger.debug("chat_url: %s", chat_url)
     normalized_context = " ".join(extra_context.split())
     llm_timeout_seconds = settings.ollama_timeout_seconds
@@ -720,13 +715,12 @@ def handle_interpret_entities_command(
                 try:
                     text = await asyncio.wait_for(
                         asyncio.to_thread(
-                            call_openai_chat_completions_name_meaning,
+                            call_ollama_name_meaning,
                             name=entity["name"],
-                            completions_url=chat_url,
+                            chat_url=chat_url,
                             model=ai_model,
                             extra_context=normalized_context,
                             timeout_seconds=llm_timeout_seconds,
-                            api_key=ai_api_key,
                         ),
                         timeout=llm_timeout_seconds + 5.0,
                     )
@@ -873,9 +867,9 @@ def handle_interpret_blocks_command(
     file_ref: str | None,
     by_path: bool,
     extra_context: str = "",
-    ai_model: str = "llama3.1:8b",
-    ai_base_url: str = "http://localhost:11434/v1",
-    ai_api_key: str = "ollama",
+    ai_model: str = settings.ollama_llm_model,
+    ai_base_url: str = settings.ollama_base_url,
+    ai_api_key: str = settings.ollama_api_key,
     workers: int = 1,
     dry: bool = False,
 ) -> int:
@@ -888,7 +882,9 @@ def handle_interpret_blocks_command(
         save_block_description,
         save_block_interpretations,
     )
-    from .langchain_name_tags import call_openai_chat_completions_name_meaning
+    from .langchain_name_tags import call_ollama_name_meaning
+
+    logger.debug("AI API key configured: %s", bool(ai_api_key))
 
     if bool(block_ids) == bool(file_ref):
         logger.error("Нужно указать либо --block-id, либо file_ref.")
@@ -904,7 +900,7 @@ def handle_interpret_blocks_command(
             out("Файл не найден в БД.")
             return constants.NOT_FOUND
 
-    completions_url = _derive_openai_chat_completions_url(ai_base_url)
+    chat_url = _derive_ollama_chat_url(ai_base_url)
     normalized_context = " ".join(extra_context.split())
     llm_timeout_seconds = settings.ollama_timeout_seconds
 
@@ -943,26 +939,24 @@ def handle_interpret_blocks_command(
                         )
                     short_interpretation = await asyncio.wait_for(
                         asyncio.to_thread(
-                            call_openai_chat_completions_name_meaning,
+                            call_ollama_name_meaning,
                             name=block_name,
-                            completions_url=completions_url,
+                            chat_url=chat_url,
                             model=ai_model,
                             extra_context=normalized_context,
                             timeout_seconds=llm_timeout_seconds,
-                            api_key=ai_api_key,
                         ),
                         timeout=llm_timeout_seconds + 5.0,
                     )
                     # Request the full block description from the LLM as well.
                     full_description = await asyncio.wait_for(
                         asyncio.to_thread(
-                            call_openai_chat_completions_name_meaning,
+                            call_ollama_name_meaning,
                             name=block_text_for_llm,
-                            completions_url=completions_url,
+                            chat_url=chat_url,
                             model=ai_model,
                             extra_context=normalized_context + "\nДай максимально подробное описание назначения и структуры этого блока, с деталями для проектировщика.",
                             timeout_seconds=llm_timeout_seconds,
-                            api_key=ai_api_key,
                         ),
                         timeout=llm_timeout_seconds + 10.0,
                     )
@@ -1104,6 +1098,7 @@ def handle_interpret_blocks_command(
 
         return {"rows": rows, "failures": failures}
 
+    logger.debug("Born to run")
     try:
         result = asyncio.run(_run())
         rows = result.get("rows", [])

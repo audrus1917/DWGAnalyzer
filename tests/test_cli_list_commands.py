@@ -419,15 +419,15 @@ def test_main_extract_token_tags_with_scores_prints_weighted_json(monkeypatch, c
 
 
 def test_main_extract_name_meaning_prints_freeform_text(monkeypatch, capsys) -> None:
-    def stub_call(name, completions_url, model, extra_context="", **kwargs):
+    def stub_call(name, chat_url, model, extra_context="", **kwargs):
         assert name == "Насос пожаротушения"
         assert extra_context == "секция А, пожаротушение"
-        assert "chat/completions" in completions_url
+        assert chat_url.endswith("/api/chat")
         assert model == "llama3.1:8b"
         return "1. Насос — оборудование системы пожаротушения.\n2. Числовые идентификаторы отсутствуют."
 
     monkeypatch.setattr(
-        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        "parsedwg.langchain_name_tags.call_ollama_name_meaning",
         stub_call,
     )
 
@@ -445,13 +445,13 @@ def test_main_extract_name_meaning_prints_freeform_text(monkeypatch, capsys) -> 
 
 
 def test_main_extract_name_meaning_includes_floor_and_elevation(monkeypatch, capsys) -> None:
-    def stub_call(name, completions_url, model, extra_context="", **kwargs):
+    def stub_call(name, chat_url, model, extra_context="", **kwargs):
         assert name == "План 4й этаж отметка +2метра"
-        assert "chat/completions" in completions_url
+        assert chat_url.endswith("/api/chat")
         return "1. Архитектурный план.\n2. 4-й этаж; отметка +2 м."
 
     monkeypatch.setattr(
-        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        "parsedwg.langchain_name_tags.call_ollama_name_meaning",
         stub_call,
     )
 
@@ -464,11 +464,12 @@ def test_main_extract_name_meaning_includes_floor_and_elevation(monkeypatch, cap
 
 
 def test_main_extract_name_meaning_handles_ai_runtime_error(monkeypatch) -> None:
-    def stub_call(name, completions_url, model, extra_context="", **kwargs):
+    def stub_call(name, chat_url, model, extra_context="", **kwargs):
+        _ = (name, chat_url, model, extra_context, kwargs)
         raise RuntimeError("model not found")
 
     monkeypatch.setattr(
-        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        "parsedwg.langchain_name_tags.call_ollama_name_meaning",
         stub_call,
     )
 
@@ -482,15 +483,15 @@ def test_main_extract_name_meaning_loads_name_from_db_by_entity_id(monkeypatch, 
         assert entity_id == "11111111-1111-1111-1111-111111111111"
         return "Клапан дымоудаления"
 
-    def stub_call(name, completions_url, model, extra_context="", **kwargs):
+    def stub_call(name, chat_url, model, extra_context="", **kwargs):
         assert name == "Клапан дымоудаления"
         assert extra_context == "раздел ДУ"
-        assert "chat/completions" in completions_url
+        assert chat_url.endswith("/api/chat")
         return "1. Клапан системы дымоудаления."
 
     monkeypatch.setattr("parsedwg.db.get_entity_name_by_id", fake_get_entity_name_by_id)
     monkeypatch.setattr(
-        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        "parsedwg.langchain_name_tags.call_ollama_name_meaning",
         stub_call,
     )
 
@@ -551,15 +552,15 @@ def test_main_explain_block_fetches_name_and_calls_llm(monkeypatch, capsys) -> N
         assert entity_id == "11111111-1111-1111-1111-111111111111"
         return "Насос-пожарный-4этаж"
 
-    def stub_call(name, completions_url, model, extra_context="", **_kwargs):
+    def stub_call(name, chat_url, model, extra_context="", **_kwargs):
         assert name == "Насос-пожарный-4этаж"
         assert extra_context == "раздел ВК"
-        assert "chat/completions" in completions_url
+        assert chat_url.endswith("/api/chat")
         return "1. Пожарный насос.\n2. 4-й этаж."
 
     monkeypatch.setattr("parsedwg.db.get_entity_name_by_id", fake_get_entity_name_by_id)
     monkeypatch.setattr(
-        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        "parsedwg.langchain_name_tags.call_ollama_name_meaning",
         stub_call,
     )
 
@@ -598,7 +599,7 @@ def test_main_explain_block_propagates_llm_error(monkeypatch) -> None:
 
     monkeypatch.setattr("parsedwg.db.get_entity_name_by_id", fake_get_entity_name_by_id)
     monkeypatch.setattr(
-        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        "parsedwg.langchain_name_tags.call_ollama_name_meaning",
         stub_call,
     )
 
@@ -629,7 +630,7 @@ def test_main_interpret_entities_dry_mode(monkeypatch, capsys) -> None:
         "parsedwg.db.list_entities_for_semantic_categorization", fake_list_entities
     )
     monkeypatch.setattr(
-        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        "parsedwg.langchain_name_tags.call_ollama_name_meaning",
         stub_call,
     )
     monkeypatch.setattr("parsedwg.db.save_short_interpretation", fake_save)
@@ -676,7 +677,7 @@ def test_main_interpret_entities_saves_to_db(monkeypatch) -> None:
         "parsedwg.db.list_entities_for_semantic_categorization", fake_list_entities
     )
     monkeypatch.setattr(
-        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        "parsedwg.langchain_name_tags.call_ollama_name_meaning",
         stub_call,
     )
     monkeypatch.setattr("parsedwg.db.save_short_interpretation", fake_save)
@@ -727,7 +728,7 @@ def test_main_interpret_entities_continues_after_entity_error(monkeypatch, capsy
         "parsedwg.db.list_entities_for_semantic_categorization", fake_list_entities
     )
     monkeypatch.setattr(
-        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        "parsedwg.langchain_name_tags.call_ollama_name_meaning",
         stub_call,
     )
     monkeypatch.setattr("parsedwg.db.save_short_interpretation", fake_save)
@@ -762,7 +763,7 @@ def test_main_interpret_entities_dry_mode_shows_entity_errors(monkeypatch, capsy
         "parsedwg.db.list_entities_for_semantic_categorization", fake_list_entities
     )
     monkeypatch.setattr(
-        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        "parsedwg.langchain_name_tags.call_ollama_name_meaning",
         stub_call,
     )
     monkeypatch.setattr("parsedwg.db.save_short_interpretation", fake_save)
@@ -828,7 +829,7 @@ def test_main_interpret_blocks_dry_mode(monkeypatch, capsys) -> None:
         fake_get_full_description,
     )
     monkeypatch.setattr(
-        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        "parsedwg.langchain_name_tags.call_ollama_name_meaning",
         stub_call,
     )
 
@@ -922,7 +923,7 @@ def test_main_interpret_blocks_saves_both_interpretations(monkeypatch, capsys) -
     )
     full_description_text = json.dumps(full_description_payload, ensure_ascii=False, sort_keys=True)
     monkeypatch.setattr(
-        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        "parsedwg.langchain_name_tags.call_ollama_name_meaning",
         lambda *_args, **kwargs: (
             f"FULL::{kwargs['name']}"
             if "максимально подробное описание" in kwargs.get("extra_context", "")
@@ -1009,7 +1010,7 @@ def test_main_interpret_blocks_reports_failures(monkeypatch, capsys) -> None:
         fake_save_block_interpretations,
     )
     monkeypatch.setattr(
-        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        "parsedwg.langchain_name_tags.call_ollama_name_meaning",
         stub_call,
     )
 
@@ -1093,7 +1094,7 @@ def test_main_interpret_block_by_entity_id(monkeypatch, capsys) -> None:
         fake_save_block_interpretations,
     )
     monkeypatch.setattr(
-        "parsedwg.langchain_name_tags.call_openai_chat_completions_name_meaning",
+        "parsedwg.langchain_name_tags.call_ollama_name_meaning",
         stub_call,
     )
 

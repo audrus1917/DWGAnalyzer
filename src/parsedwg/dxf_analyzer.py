@@ -54,7 +54,6 @@ class DXFAnalyzer:
 
         return point
 
-
     @staticmethod
     def get_text(entity) -> str:
         """Extract text content from TEXT or MTEXT entities, if available."""
@@ -67,6 +66,8 @@ class DXFAnalyzer:
             if callable(plain_text):
                 return str(plain_text()).rstrip()
         return ""
+
+    
 
     @classmethod
     def get_entity_data(

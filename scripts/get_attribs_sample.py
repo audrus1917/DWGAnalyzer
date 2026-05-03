@@ -40,7 +40,9 @@ def extract_all_data(filename):
     for entity in msp:
         if entity.xdata:
             for appid, tags in entity.xdata.data.items():
-                print(f"XDATA (AppID: {appid}): {tags}")
+                print(f"XDATA (AppID: {appid}):")
+                for tag in tags:
+                    print(f"  {tag.code}: {tag.value}")
 
     # 3. Словари расширения (Extension Dictionaries) у объектов
     for entity in msp:
@@ -48,13 +50,19 @@ def extract_all_data(filename):
             xdict = entity.get_extension_dict()
             for name, obj in xdict.items():
                 if obj.dxftype() == "XRECORD":
-                    print(f"XRECORD в объекте: {name} = {obj.tags}")
+                    print(f"XRECORD в объекте: {name}")
+                    for tag in obj.tags:
+                        print(f"  {tag.code}: {tag.value}")
+                elif obj.dxftype() == "DICTIONARY":
+                    print(f"Вложенный словарь '{name}' найден в объекте")
 
     # 4. Глобальные словари (Root Dictionary)
     print("\nГлобальные данные чертежа:")
     for name, obj in doc.rootdict.items():
         if obj.dxftype() == "XRECORD":
-            print(f"Глобальный XRECORD '{name}': {obj.tags}")
+            print(f"Глобальный XRECORD '{name}':")
+            for tag in obj.tags:
+                print(f"  {tag.code}: {tag.value}")
         elif obj.dxftype() == "DICTIONARY":
             print(f"Вложенный словарь '{name}' найден")
 

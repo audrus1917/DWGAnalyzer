@@ -29,6 +29,7 @@ class Settings:
     ollama_embed_model: str
     ollama_llm_model: str
     ollama_timeout_seconds: float
+    ollama_api_key: str
 
 
 load_dotenv()
@@ -40,6 +41,7 @@ settings = Settings(
     ollama_embed_model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
     ollama_llm_model=os.getenv("OLLAMA_LLM_MODEL", "llama3.1:8b"),
     ollama_timeout_seconds=_as_float(os.getenv("OLLAMA_TIMEOUT_SECONDS"), default=120.0),
+    ollama_api_key=os.getenv("OLLAMA_API_KEY", "ollama")
 )
 
 
