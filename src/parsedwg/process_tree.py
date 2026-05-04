@@ -21,7 +21,7 @@ from ezdxf.filemanagement import readfile
 from sqlalchemy import func, select
 
 from .db import async_session_factory
-from .orm import Entity, EntityToEntity, EntityType, Project
+from .orm import Entity, EntityEmbedding, EntityGeom, EntityToEntity, EntityType, Project
 from .table_analysis import TextClusterAnalyzer
 from .dxf_analyzer import DXFAnalyzer
 from .utils import safe_float
@@ -44,17 +44,6 @@ type NameTagsAIConfig = dict[str, str]
 
 class NameTagsExtractor(Protocol):
     def extract(self, text: str) -> list[str]: ...
-
-
-def skip_blocks(
-    block_entity: object,
-    filter_handler: Callable[[object], bool] | None = None,
-) -> bool:
-    """Return whether a block should be skipped."""
-
-    if filter_handler is None:
-        return False
-    return filter_handler(block_entity)
 
 
 class DWGTreeProcessor:
@@ -170,6 +159,19 @@ def _build_entity_text(text_value: str | None):
     if text_value is None or not text_value.strip():
         return None
     return func.to_tsvector("russian", text_value)
+
+
+def _build_entity_embedding(text_value: str | None) -> EntityEmbedding | None:
+    entity_text = _build_entity_text(text_value)
+    if entity_text is None:
+        return None
+    return EntityEmbedding(entity_text=entity_text)
+
+
+def _build_entity_geom(geom_value: str | None) -> EntityGeom | None:
+    if not geom_value:
+        return None
+    return EntityGeom(geom=geom_value)
 
 
 def collect_entity_layers(doc, entity, seen_blocks: set[str] | None = None) -> set[str]:
@@ -363,7 +365,7 @@ def process_entry(
         if entry["kind"] == "file":
             source_ref = entry["source"]
             working_path = source
-            file_md5 = DWGTreeProcessor.file_md5(working_path)
+            entity_md5 = DWGTreeProcessor.file_md5(working_path)
         else:
             is_zip = " (zip)"
             member_name = entry.get("member")
@@ -372,7 +374,7 @@ def process_entry(
             
             working_path = DWGTreeProcessor.extract_from_zip(source, member_name, temp_dir)
             source_ref = f"{entry['source']}::{member_name}"
-            file_md5 = DWGTreeProcessor.file_md5(working_path)
+            entity_md5 = DWGTreeProcessor.file_md5(working_path)
 
         logger.info("Обрабатываем файл: %s%s", source_ref, is_zip)
         summary = collect_dxf_summary(working_path, name_tags_extractor=name_tags_extractor)
@@ -380,7 +382,7 @@ def process_entry(
     processed_entry: ProcessedEntry = {
         **entry,
         "source_ref": source_ref,
-        "file_md5": file_md5,
+        "entity_md5": entity_md5,
         "summary": summary,
     }
     return processed_entry
@@ -409,11 +411,10 @@ async def _create_folders_tree(
     root_entity = Entity(
         name=root_path.name or str(root_path),
         description=f"Источник сканирования: {root_path}",
-        entity_text=_build_entity_text(f"Источник сканирования: {root_path}"),
         entity_type=EntityType.folder,
         data={"path": str(root_path)},
         project_id=project_id,
-
+        embedding_data=_build_entity_embedding(f"Источник сканирования: {root_path}"),
     )
     session.add(root_entity)
     await session.flush()
@@ -431,9 +432,9 @@ async def _create_folders_tree(
             project_id=project_id,
             name=dir_path.name,
             description=f"Каталог: {dir_path}",
-            entity_text=_build_entity_text(f"Каталог: {dir_path}"),
             entity_type=EntityType.folder,
             data={"path": str(dir_path)},
+            embedding_data=_build_entity_embedding(f"Каталог: {dir_path}"),
         )
         session.add(folder_entity)
         await session.flush()
@@ -545,9 +546,9 @@ async def save_tree_to_db(
                         project_id=project_id,
                         name=Path(zip_source).name,
                         description=f"ZIP-архив: {zip_source}",
-                        entity_text=_build_entity_text(f"ZIP-архив: {zip_source}"),
                         entity_type=EntityType.zipfile,
                         data={"path": zip_source},
+                        embedding_data=_build_entity_embedding(f"ZIP-архив: {zip_source}"),
                     )
                     session.add(zip_entity)
                     await session.flush()
@@ -565,10 +566,10 @@ async def save_tree_to_db(
                 project_id=project_id,
                 name=str(entry["name"]),
                 description=f"Исходный файл: {source_ref}",
-                entity_text=_build_entity_text(f"Исходный файл: {source_ref}"),
                 entity_type=file_type,
                 data={"source_ref": source_ref},
-                file_md5=str(entry.get("file_md5", "")) or None,
+                entity_md5=str(entry.get("entity_md5", "")) or None,
+                embedding_data=_build_entity_embedding(f"Исходный файл: {source_ref}"),
             )
             session.add(file_entity)
             await session.flush()
@@ -586,9 +587,9 @@ async def save_tree_to_db(
                     project_id=project_id,
                     name=layout_name,
                     description="",
-                    entity_text=_build_entity_text(f"Layout {entry['name']}"),
                     entity_type=EntityType.layout,
                     data={},
+                    embedding_data=_build_entity_embedding(f"Layout {entry['name']}"),
                 )
                 session.add(layout_entity)
                 await session.flush()
@@ -604,9 +605,9 @@ async def save_tree_to_db(
                     project_id=project_id,
                     name=layer_name,
                     description="",
-                    entity_text=_build_entity_text(f"Layer {layer_name}"),
                     entity_type=EntityType.layer,
                     data=layer.get("data", {}),
+                    embedding_data=_build_entity_embedding(f"Layer {layer_name}"),
                 )
                 session.add(layer_entity)
                 await session.flush()
@@ -617,8 +618,6 @@ async def save_tree_to_db(
             logger.info("Блоки (%d шт.)", len(summary.get("blocks", [])))
             for block in summary["blocks"]:
                 block_name = str(block["name"])
-                if skip_blocks(block_name):
-                    continue
 
                 block_data: dict[str, object] = {
                     "entity_count": block["entity_count"],
@@ -632,10 +631,10 @@ async def save_tree_to_db(
                     project_id=project_id,
                     name=block_name,
                     description=f"Block файла {entry['name']}",
-                    entity_text=_build_entity_text(f"Block файла {entry['name']}"),
                     entity_type=EntityType.block,
                     data=block_data,
                     is_table=cast(bool, block["is_table"]),
+                    embedding_data=_build_entity_embedding(f"Block файла {entry['name']}"),
                 )
                 session.add(block_entity)
                 await session.flush()
@@ -689,11 +688,11 @@ async def save_tree_to_db(
                     project_id=project_id,
                     name=name,
                     description=str(primitive.get("text", "")),
-                    entity_text=_build_entity_text(str(primitive.get("text", ""))),
                     entity_type=str(primitive.get("type", "primitive")),
                     data=primitive,
-                    geom=geom,
                     is_primitive=True,
+                    embedding_data=_build_entity_embedding(str(primitive.get("text", ""))),
+                    geom_data=_build_entity_geom(geom),
                 )
                 primitive_entities_batch.append(primitive_entity)
 

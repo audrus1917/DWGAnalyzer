@@ -14,7 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import async_session_factory
-from .orm import Entity, EntityType
+from .orm import Entity, EntityEmbedding, EntityType
 
 SUPPORTED_DOC_SUFFIXES = {".pdf", ".docx", ".xlsx", ".csv"}
 
@@ -239,6 +239,13 @@ def _build_entity_text(text_value: str | None):
     return func.to_tsvector("russian", text_value)
 
 
+def _build_entity_embedding(text_value: str | None) -> EntityEmbedding | None:
+    entity_text = _build_entity_text(text_value)
+    if entity_text is None:
+        return None
+    return EntityEmbedding(entity_text=entity_text)
+
+
 async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int:
     created = 0
 
@@ -248,11 +255,11 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
         root = Entity(
             name=source_path.name if source_path.name else str(source_path),
             description="Корневая папка импортированных документов PDF/DOCX/XLSX/CSV",
-            entity_text=_build_entity_text(
-                "Корневая папка импортированных документов PDF/DOCX/XLSX/CSV"
-            ),
             entity_type=EntityType.folder,
             data={"path": str(source_path)},
+            embedding_data=_build_entity_embedding(
+                "Корневая папка импортированных документов PDF/DOCX/XLSX/CSV"
+            ),
         )
         session.add(root)
         await session.flush()
@@ -268,15 +275,15 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
             entity = Entity(
                 name=doc_path.name,
                 description=text,
-                entity_text=_build_entity_text(text),
                 entity_type=EntityType.file,
                 data={
                     "doc_type": doc_path.suffix.lower().lstrip("."),
                     "relative_path": rel_path,
                     "size_bytes": doc_path.stat().st_size,
                 },
-                file_md5=_compute_md5_hex(doc_path),
+                entity_md5=_compute_md5_hex(doc_path),
                 parent_id=root.id,
+                embedding_data=_build_entity_embedding(text),
             )
             session.add(entity)
             await session.flush()
@@ -287,7 +294,6 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
                     Entity(
                         name=term.term,
                         description=term.definition,
-                        entity_text=_build_entity_text(term.definition),
                         entity_type=EntityType.primitive,
                         data={
                             "article_no": term.article_no,
@@ -297,6 +303,7 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
                             "source_file": rel_path,
                         },
                         parent_id=entity.id,
+                        embedding_data=_build_entity_embedding(term.definition),
                     )
                 )
                 created += 1

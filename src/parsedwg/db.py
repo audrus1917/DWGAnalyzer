@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import aliased, selectinload
 
 from .settings import settings
-from .orm import Category, Entity, EntityToEntity, EntityType, Project
+from .orm import Category, Entity, EntityEmbedding, EntityToEntity, EntityType, Project
 
 engine = create_async_engine(settings.database_url, echo=settings.database_echo)
 
@@ -442,9 +442,10 @@ async def search_entities(
         "russian",
         func.concat_ws(" ", Entity.name, Entity.description),
     )
-    entity_match = Entity.entity_text.op("@@")(tsquery)
+    entity_text = EntityEmbedding.entity_text
+    entity_match = entity_text.op("@@")(tsquery)
     fallback_match = fallback_tsvector.op("@@")(tsquery)
-    entity_rank = cast(Any, func.coalesce(func.ts_rank(Entity.entity_text, tsquery), 0.0))
+    entity_rank = cast(Any, func.coalesce(func.ts_rank(entity_text, tsquery), 0.0))
     fallback_rank = cast(Any, func.coalesce(func.ts_rank(fallback_tsvector, tsquery), 0.0))
     priority = case((entity_match, 1), else_=0)
 
@@ -455,6 +456,7 @@ async def search_entities(
             Entity.description,
             Entity.entity_type,
         )
+        .join(EntityEmbedding, EntityEmbedding.entity_id == Entity.id, isouter=True)
         .where(
             or_(
                 entity_match,

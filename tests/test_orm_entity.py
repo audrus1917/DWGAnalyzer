@@ -1,7 +1,7 @@
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import ARRAY
 
-from parsedwg.orm import Category, Entity, Project, category_to_entity
+from parsedwg.orm import Category, Entity, EntityEmbedding, EntityGeom, Project, category_to_entity
 
 
 def test_entity_has_parent_id_self_fk() -> None:
@@ -24,11 +24,11 @@ def test_entity_has_file_id_self_fk() -> None:
     assert fk.target_fullname == "entity.id"
 
 
-def test_entity_has_file_md5_column() -> None:
-    file_md5_column = Entity.__table__.c.file_md5
+def test_entity_has_entity_md5_column() -> None:
+    entity_md5_column = Entity.__table__.c.entity_md5
 
-    assert file_md5_column.nullable is True
-    assert file_md5_column.type.length == 32
+    assert entity_md5_column.nullable is True
+    assert entity_md5_column.type.length == 32
 
 
 def test_entity_has_is_table_column() -> None:
@@ -37,11 +37,32 @@ def test_entity_has_is_table_column() -> None:
     assert is_table_column.nullable is True
 
 
-def test_entity_has_entity_text_tsvector_column() -> None:
-    entity_text_column = Entity.__table__.c.entity_text
+def test_entity_embedding_has_entity_text_tsvector_column() -> None:
+    entity_text_column = EntityEmbedding.__table__.c.entity_text
 
     assert entity_text_column.nullable is True
     assert isinstance(entity_text_column.type, TSVECTOR)
+
+
+def test_entity_embedding_has_entity_fk() -> None:
+    entity_id_column = EntityEmbedding.__table__.c.entity_id
+
+    assert entity_id_column.nullable is False
+    fk = next(iter(entity_id_column.foreign_keys))
+    assert fk.target_fullname == "entity.id"
+
+
+def test_entity_geom_has_entity_fk() -> None:
+    entity_id_column = EntityGeom.__table__.c.entity_id
+
+    assert entity_id_column.nullable is False
+    fk = next(iter(entity_id_column.foreign_keys))
+    assert fk.target_fullname == "entity.id"
+
+
+def test_entity_has_embedding_and_geom_relationships() -> None:
+    assert "embedding_data" in Entity.__mapper__.relationships
+    assert "geom_data" in Entity.__mapper__.relationships
 
 
 def test_entity_has_project_id_fk() -> None:
