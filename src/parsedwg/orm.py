@@ -118,17 +118,11 @@ class Entity(Base):
     data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     is_table: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     is_primitive: Mapped[bool | None] = mapped_column(Boolean, default=True, index=True)
+    entity_md5: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow,
         index=True
     )
-
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)
-    entity_text: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
-
-    file_md5: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    geom: Mapped[str | None] = mapped_column(Geometry("GEOMETRY", srid=4326),
-                                             nullable=True, index=True)
 
     parent: Mapped[Entity | None] = relationship(
         "Entity",
@@ -160,6 +154,49 @@ class Entity(Base):
         secondary=category_to_entity,
         back_populates="entities",
     )
+    embedding_data: Mapped[EntityEmbedding | None] = relationship(
+        "EntityEmbedding",
+        back_populates="entity",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    geom_data: Mapped[EntityGeom | None] = relationship(
+        "EntityGeom",
+        back_populates="entity",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class EntityEmbedding(Base):
+    __tablename__ = "entity_embedding"
+
+    entity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("entity.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)
+    entity_text: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
+
+    entity: Mapped[Entity] = relationship("Entity", back_populates="embedding_data")
+
+
+class EntityGeom(Base):
+    __tablename__ = "entity_geom"
+
+    entity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("entity.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    geom: Mapped[str | None] = mapped_column(
+        Geometry("GEOMETRY", srid=4326),
+        nullable=True,
+        index=True,
+    )
+
+    entity: Mapped[Entity] = relationship("Entity", back_populates="geom_data")
 
 
 class EntityToEntity(Base):

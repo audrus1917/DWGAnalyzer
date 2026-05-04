@@ -1629,7 +1629,7 @@ def handle_file_stat_from_db_command(
         cell.fill = fill
         cell.font = font
     ws_file.append(["Имя файла", file_entity.name])
-    ws_file.append(["MD5", file_entity.file_md5 or ""])
+    ws_file.append(["MD5", file_entity.entity_md5 or ""])
     ws_file.append(["Родительские каталоги", " / ".join(parent_dirs)])
     ws_file.append(["Проект", project])
     ws_file.freeze_panes = "A2"

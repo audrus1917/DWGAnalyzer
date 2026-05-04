@@ -12,10 +12,11 @@ import uuid
 from typing import Any
 
 import httpx
-from sqlalchemy import select, text, cast, String
+from sqlalchemy import select, text, cast, String, func, or_
+from sqlalchemy.orm import selectinload
 
 from .db import async_session_factory
-from .orm import Entity
+from .orm import Entity, EntityEmbedding
 from .settings import settings
 
 logger = logging.getLogger(__name__)
@@ -211,11 +212,19 @@ async def index_entities(
         Number of indexed records.
     """
     async with async_session_factory() as session:
-        stmt = select(Entity)
+        stmt = select(Entity).options(selectinload(Entity.embedding_data))
         if entity_type is not None:
             stmt = stmt.where(Entity.entity_type == entity_type)
         if not reindex:
-            stmt = stmt.where(Entity.embedding.is_(None))
+            stmt = (
+                stmt.join(EntityEmbedding, EntityEmbedding.entity_id == Entity.id, isouter=True)
+                .where(
+                    or_(
+                        EntityEmbedding.entity_id.is_(None),
+                        EntityEmbedding.embedding.is_(None),
+                    )
+                )
+            )
 
         result = await session.execute(stmt)
         entities = list(result.scalars().all())
@@ -235,7 +244,18 @@ async def index_entities(
                 if managed_entity is None:
                     logger.warning("Сущность %s не найдена при сохранении эмбеддинга", entity.id)
                     continue
-                managed_entity.embedding = vec
+                if managed_entity.embedding_data is None:
+                    managed_entity.embedding_data = EntityEmbedding(
+                        embedding=vec,
+                        entity_text=func.to_tsvector("russian", txt) if txt.strip() else None,
+                    )
+                else:
+                    managed_entity.embedding_data.embedding = vec
+                    if txt.strip():
+                        managed_entity.embedding_data.entity_text = func.to_tsvector(
+                            "russian",
+                            txt,
+                        )
                 total += 1
             await session.commit()
         logger.info("Проиндексировано %d / %d", min(i + batch_size, len(entities)), len(entities))
@@ -268,9 +288,13 @@ async def similarity_search(
                 Entity.name,
                 Entity.description,
                 Entity.entity_type,
-                cast(Entity.embedding.op("<->")(text(f"'{vec_str}'::vector")), String).label("distance"),
+                cast(
+                    EntityEmbedding.embedding.op("<->")(text(f"'{vec_str}'::vector")),
+                    String,
+                ).label("distance"),
             )
-            .where(Entity.embedding.is_not(None))
+            .join(EntityEmbedding, EntityEmbedding.entity_id == Entity.id)
+            .where(EntityEmbedding.embedding.is_not(None))
             .order_by(text("distance"))
             .limit(top_k)
         )

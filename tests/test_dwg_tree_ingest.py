@@ -233,7 +233,7 @@ def test_save_tree_to_db_keeps_layout_primitives_without_block_entity(
         "file_type": ".dxf",
         "parent_rel": "",
         "source_ref": str(tmp_path / "sample.dxf"),
-        "file_md5": "abc",
+        "entity_md5": "abc",
         "summary": {
             "layouts": [{"name": "Model"}],
             "layers": [{"name": "A-ANNO", "data": {}}],
@@ -362,7 +362,7 @@ def test_save_tree_to_db_sets_file_id_for_all_descendants(
         "file_type": ".dxf",
         "parent_rel": "",
         "source_ref": str(tmp_path / "sample.dxf"),
-        "file_md5": "abc",
+        "entity_md5": "abc",
         "summary": {
             "layouts": [{"name": "Model"}],
             "layers": [{"name": "A-TEXT", "data": {}}],
@@ -463,7 +463,7 @@ def test_save_tree_to_db_commits_primitives_in_batches(
         "file_type": ".dxf",
         "parent_rel": "",
         "source_ref": str(tmp_path / "sample.dxf"),
-        "file_md5": "abc",
+        "entity_md5": "abc",
         "summary": {
             "layouts": [{"name": "Model"}],
             "layers": [{"name": "A-TEXT", "data": {}}],
@@ -538,7 +538,7 @@ def test_save_tree_to_db_uses_tqdm_for_primitives(
         "file_type": ".dxf",
         "parent_rel": "",
         "source_ref": str(tmp_path / "sample.dxf"),
-        "file_md5": "abc",
+        "entity_md5": "abc",
         "summary": {
             "layouts": [{"name": "Model"}],
             "layers": [{"name": "A-TEXT", "data": {}}],
@@ -632,7 +632,7 @@ def test_run_process_tree_uses_single_process_pipeline(tmp_path: Path, monkeypat
         "file_type": ".dxf",
         "parent_rel": "",
         "source_ref": str(source),
-        "file_md5": "abc",
+        "entity_md5": "abc",
         "summary": {"layouts": [], "blocks": [], "primitives": []},
     }
 
@@ -686,7 +686,7 @@ def test_run_process_tree_dry_mode_skips_db_save(tmp_path: Path, monkeypatch) ->
         "file_type": ".dxf",
         "parent_rel": "",
         "source_ref": str(source),
-        "file_md5": "abc",
+        "entity_md5": "abc",
         "summary": {"layouts": [], "blocks": [], "primitives": []},
     }
 
