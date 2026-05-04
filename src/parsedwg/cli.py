@@ -67,6 +67,16 @@ def _save_rows_to_json(output_path: Path, rows: list[ResultRow]) -> None:
     )
 
 
+def _save_payload_to_json(output_path: Path, payload: object) -> None:
+    """Save any JSON-serializable payload to a file."""
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def as_table(rows: list[ResultRow]) -> str:
     """Format result rows as a simple ASCII table."""
 
@@ -264,6 +274,29 @@ def handle_export_block_svg_command(
         return constants.OK
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         logger.error("Не удалось экспортировать блок в SVG: %s", exc)
+        return constants.ERROR
+
+
+def handle_describe_block_command(
+    drawing_path: Path,
+    block_name: str,
+    output_path: Path | None,
+) -> int:
+    """Read a drawing file and return a description of the selected block."""
+
+    try:
+        explorer = DXFExplorer(drawing_path)
+        payload = explorer.describe_block(block_name)
+
+        if output_path is not None:
+            _save_payload_to_json(output_path, payload)
+            logger.info("JSON сохранён: %s", output_path)
+            return constants.OK
+
+        out(json.dumps(payload, ensure_ascii=False, indent=2))
+        return constants.OK
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        logger.error("Не удалось получить описание блока: %s", exc)
         return constants.ERROR
 
 
@@ -2060,6 +2093,13 @@ def main(argv: list[str] | None = None) -> int:
         case "extract-block":
             explorer = DXFExplorer(args.drawing)
             return_code = explorer.extract_block(args.block_name)
+
+        case "describe-block":
+            return_code = handle_describe_block_command(
+                drawing_path=Path(args.drawing),
+                block_name=args.block_name,
+                output_path=Path(args.output) if args.output else None,
+            )
 
         case "export-block-png":
             return_code = handle_export_block_png_command(

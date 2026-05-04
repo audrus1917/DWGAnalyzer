@@ -59,6 +59,19 @@ def build_args_parser() -> argparse.ArgumentParser:
     )
     extract_block_parser.add_argument("block_name", help="Имя блока для извлечения")
 
+    describe_block_parser = subparsers.add_parser(
+        "describe-block",
+        parents=[extract_common],
+        help="Прочитать файл и вывести описание блока по имени.",
+    )
+    describe_block_parser.add_argument("block_name", help="Имя блока для описания")
+    describe_block_parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Путь к JSON-файлу результата (если не указан, вывод в stdout).",
+    )
+
     export_block_png_parser = subparsers.add_parser(
         "export-block-png",
         parents=[extract_common],

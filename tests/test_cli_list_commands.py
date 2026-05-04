@@ -275,6 +275,73 @@ def test_main_export_block_svg_runs_pipeline(tmp_path, monkeypatch, capsys) -> N
     assert f"SVG сохранён: {target_path}" in captured.out
 
 
+def test_main_describe_block_outputs_json(tmp_path, monkeypatch, capsys) -> None:
+    source_path = tmp_path / "sample.dxf"
+    source_path.write_text("stub", encoding="utf-8")
+    payload = {
+        "drawing": str(source_path),
+        "block": "BLOCK_A",
+        "description": "Сущностей: 2. Вставок: 1",
+        "entity_count": 2,
+        "is_table": False,
+        "entities": [{"type": "LINE"}],
+        "inserts": [{"container_type": "layout", "container_name": "Model"}],
+        "insert_count": 1,
+    }
+    captured_args: dict[str, object] = {}
+
+    class StubExplorer:
+        def __init__(self, drawing: Path):
+            captured_args["drawing"] = drawing
+
+        def describe_block(self, block_name: str) -> dict[str, object]:
+            captured_args["block_name"] = block_name
+            return payload
+
+    monkeypatch.setattr("parsedwg.cli.DXFExplorer", StubExplorer)
+
+    exit_code = main(["describe-block", str(source_path), "BLOCK_A"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_args["drawing"] == source_path
+    assert captured_args["block_name"] == "BLOCK_A"
+    assert json.loads(captured.out) == payload
+
+
+def test_main_describe_block_writes_json_file(tmp_path, monkeypatch, capsys) -> None:
+    source_path = tmp_path / "sample.dxf"
+    source_path.write_text("stub", encoding="utf-8")
+    output_path = tmp_path / "block.json"
+    payload = {
+        "drawing": str(source_path),
+        "block": "BLOCK_A",
+        "description": "Сущностей: 1. Вставок: 0",
+        "entity_count": 1,
+        "is_table": False,
+        "entities": [{"type": "TEXT", "text": "A"}],
+        "inserts": [],
+        "insert_count": 0,
+    }
+
+    class StubExplorer:
+        def __init__(self, drawing: Path):
+            assert drawing == source_path
+
+        def describe_block(self, block_name: str) -> dict[str, object]:
+            assert block_name == "BLOCK_A"
+            return payload
+
+    monkeypatch.setattr("parsedwg.cli.DXFExplorer", StubExplorer)
+
+    exit_code = main(["describe-block", str(source_path), "BLOCK_A", "-o", str(output_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert json.loads(output_path.read_text(encoding="utf-8")) == payload
+    assert captured.out == ""
+
+
 def test_main_extract_name_tags_writes_json(tmp_path) -> None:
     source_dir = tmp_path / "names"
     source_dir.mkdir(parents=True)

@@ -27,6 +27,7 @@ def extract_all_data(filename):
     for entity in msp.query("INSERT POLYLINE"):
         # Для INSERT используем .attribs
         if entity.dxftype() == "INSERT" and entity.attribs:
+            print(f"Вставка блока {entity.dxf.name}")
             for attr in entity.attribs:
                 print(f"Атрибут Блока: [{attr.dxf.tag}] = {attr.dxf.text}")
 

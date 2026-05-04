@@ -16,6 +16,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from .dxf_analyzer import DXFAnalyzer
 from .table_analysis import TableAnalysis, TextClusterAnalyzer
 
 logger = logging.getLogger(__name__)
@@ -370,6 +371,77 @@ class DXFExplorer:
                 self._get_entity_params(entity)
                 # logger.debug("  Entity: %s", self._describe_entity(params))
         return rows
+
+    @staticmethod
+    def _is_layout_block_name(block_name: str) -> bool:
+        """Return True for internal layout-backed block names."""
+
+        return block_name.startswith("*Model_Space") or block_name.startswith("*Paper_Space")
+
+    @classmethod
+    def _collect_block_insert_rows(cls, doc, target_block_name: str) -> list[ExplorerRow]:
+        """Return all INSERT entities referencing the requested block."""
+
+        rows: list[ExplorerRow] = []
+
+        for layout in doc.layouts:
+            for entity in layout:
+                if entity.dxftype() != "INSERT" or not entity.dxf.hasattr("name"):
+                    continue
+                if str(entity.dxf.name) != target_block_name:
+                    continue
+
+                params = cls._get_entity_params(entity)
+                rows.append(
+                    {
+                        "container_type": "layout",
+                        "container_name": str(layout.name),
+                        **params,
+                    }
+                )
+
+        for block in doc.blocks:
+            parent_block_name = str(block.name)
+            if cls._is_layout_block_name(parent_block_name):
+                continue
+
+            for entity in block:
+                if entity.dxftype() != "INSERT" or not entity.dxf.hasattr("name"):
+                    continue
+                if str(entity.dxf.name) != target_block_name:
+                    continue
+
+                params = cls._get_entity_params(entity)
+                rows.append(
+                    {
+                        "container_type": "block",
+                        "container_name": parent_block_name,
+                        **params,
+                    }
+                )
+
+        rows.sort(
+            key=lambda row: (
+                str(row.get("container_type", "")),
+                str(row.get("container_name", "")),
+                str(row.get("layer", "")),
+                str(row.get("insert", "")),
+            )
+        )
+        return rows
+
+    def describe_block(self, block_name: str) -> dict[str, Any]:
+        """Return a JSON-serializable description of a block from the source file."""
+
+        logger.info("Собираем описание блока '%s' из файла: %s", block_name, self.drawing)
+        doc = self._read_document()
+        block = doc.blocks.get(block_name)
+        if block is None:
+            logger.error("Блок '%s' не найден в файле.", block_name)
+            raise ValueError(f"Блок '{block_name}' не найден в файле.")
+
+        block_description = DXFAnalyzer.get_block_decsription(doc, block_name)
+        return block_description
 
     def list_layer_names(self) -> list[str]:
         """Return layer names for the current DXF/DWG file."""

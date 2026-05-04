@@ -2,9 +2,12 @@
 
 from typing import Any, Optional
 
+import logging
 import re
 
 from ezdxf.document import Drawing
+
+logger = logging.getLogger(__name__)
 
 
 class DXFAnalyzer:
@@ -66,8 +69,6 @@ class DXFAnalyzer:
             if callable(plain_text):
                 return str(plain_text()).rstrip()
         return ""
-
-    
 
     @classmethod
     def get_entity_data(
@@ -167,3 +168,102 @@ class DXFAnalyzer:
             else:
                 rendered.append(f"{key}={value}")
         return entity_data
+    
+    @classmethod
+    def analyze_block(
+        cls,
+        doc: Drawing,
+        block_name, 
+        data=None, 
+        processed=None
+    ):
+        if data is None:
+            data = {
+                "primitives_layers": set(), 
+                "nested_blocks": set(),
+                "text_content": set(),
+                "attdefs": []  # Список определений атрибутов
+            }
+        if processed is None:
+            processed = set()
+
+        if block_name in processed:
+            return data
+        processed.add(block_name)
+
+        block_def = doc.blocks.get(block_name)
+        if not block_def:
+            return data
+
+        for entity in block_def:
+            # 1. Слои
+            data["primitives_layers"].add(entity.dxf.layer)
+            
+            # 2. Текст (TEXT и MTEXT)
+            if entity.dxftype() in ('TEXT', 'MTEXT'):
+                val = entity.dxf.text.strip()
+                if val: data["text_content"].add(val)
+            
+            # 3. ATTDEFS (Определения атрибутов)
+            if entity.dxftype() == 'ATTDEF':
+                data["attdefs"].append({
+                    "tag": entity.dxf.tag,
+                    "prompt": getattr(entity.dxf, 'prompt', ''), # Подсказка для пользователя
+                    "default": entity.dxf.text # Значение по умолчанию
+                })
+            
+            # 4. Рекурсия для вложенных вставок
+            if entity.dxftype() == 'INSERT':
+                nested_name = entity.dxf.name
+                data["nested_blocks"].add(nested_name)
+                cls.analyze_block(doc, nested_name, data, processed)
+                
+        return data
+
+    @classmethod
+    def get_block_decsription(
+        cls,
+        doc: Drawing, 
+        block_name: str
+    ) -> dict[str, Any]:
+        """Returns the DXF block description."""
+
+        msp = doc.modelspace()
+        block = doc.blocks.get(block_name)
+        if block is None:
+            logger.error("Блок '%s' не найден в файле.", block_name)
+            raise ValueError(f"Блок '{block_name}' не найден в файле.")
+
+        internal = cls.analyze_block(doc, block_name)
+        block_info = {
+            "block_name": block_name
+        }
+        
+        if primitives_layers := list(internal["primitives_layers"]):
+            block_info["primitives_layers"] = primitives_layers
+        if nested_blocks := list(internal["nested_blocks"]):
+            block_info["nested_blocks"] = nested_blocks
+        if text_content := list(internal["text_content"]):
+            block_info["text_content"] = text_content
+        if attdefs := internal["attdefs"]:
+            block_info["attdefs"] = attdefs
+
+        inserts = msp.query(f'INSERT[name=="{block.name}"]')
+        insert_samples = []
+        insert_layers = []
+        idx = 0
+        for entity in inserts:
+            if entity.dxf.layer:
+                insert_layers.append(entity.dxf.layer)
+            if entity.attribs:
+                sample_attribs = {}
+                for attr in entity.attribs:
+                    sample_attribs[attr.dxf.tag] = attr.dxf.text
+                insert_samples.append(sample_attribs)
+                idx += 1
+                if idx > 2:
+                    continue
+
+        if insert_samples:
+            block_info["insert_samples"] = insert_samples
+        return block_info

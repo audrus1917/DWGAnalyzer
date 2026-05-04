@@ -306,20 +306,22 @@ def collect_drawing_summary(
         if _is_layout_block(str(block.name)):
             continue
 
-        table_stats = TextClusterAnalyzer.analyze_table(block)
+        # table_stats = TextClusterAnalyzer.analyze_table(block)
+        block_description = DXFAnalyzer.get_block_decsription(drawing, block.name)
         blocks.append(
             {
                 "name": block.name,
                 "entity_count": sum(1 for _ in block),
-                "is_table": table_stats.is_table,
-                "table": {
-                    "title": table_stats.title,
-                    "rows": table_stats.rows,
-                    "total_texts": table_stats.total_texts,
-                    "table_like_texts": table_stats.table_like_texts,
-                    "x_clusters": len(table_stats.x_clusters),
-                    "y_clusters": len(table_stats.y_clusters),
-                },
+                "description": block_description or '',
+                # "is_table": table_stats.is_table,
+                # "table": {
+                #     "title": table_stats.title,
+                #     "rows": table_stats.rows,
+                #     "total_texts": table_stats.total_texts,
+                #     "table_like_texts": table_stats.table_like_texts,
+                #     "x_clusters": len(table_stats.x_clusters),
+                #     "y_clusters": len(table_stats.y_clusters),
+                # },
             }
         )
 
@@ -625,16 +627,18 @@ async def save_tree_to_db(
                 if block.get("is_table"):
                     block_data["table"] = block["table"]
 
+                block_description = block.get("description")
+
                 block_entity = Entity(
                     parent_id=file_entity.id,
                     file_id=file_entity.id,
                     project_id=project_id,
                     name=block_name,
-                    description=f"Block файла {entry['name']}",
+                    description=str(block_description),
                     entity_type=EntityType.block,
                     data=block_data,
-                    is_table=cast(bool, block["is_table"]),
-                    embedding_data=_build_entity_embedding(f"Block файла {entry['name']}"),
+                    # is_table=cast(bool, block["is_table"]),
+                    embedding_data=_build_entity_embedding(f"Block {block_name}"),
                 )
                 session.add(block_entity)
                 await session.flush()

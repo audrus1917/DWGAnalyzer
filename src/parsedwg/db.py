@@ -267,98 +267,10 @@ async def get_full_description(
         block = block_result.scalar_one_or_none()
         if block is None:
             return None
-        block_file_id = getattr(block, "file_id", None)
-        resolved_file_id = block_file_id or (_uuid.UUID(file_id) if file_id is not None else None)
-
-        # Layers: resolve through EntityToEntity (on_layer) from child primitives.
-        child_ids_subq = (
-            select(Entity.id)
-            .where(Entity.parent_id == block.id)
-            .scalar_subquery()
-        )
-        layer_ids_subq = (
-            select(EntityToEntity.dst_id)
-            .where(EntityToEntity.src_id.in_(child_ids_subq))
-            .where(EntityToEntity.link == "on_layer")
-            .scalar_subquery()
-        )
-        layers_result = await session.execute(
-            select(Entity.name, Entity.short_interpretation)
-            .where(Entity.id.in_(layer_ids_subq))
-            .where(Entity.entity_type == EntityType.layer)
-            .distinct()
-            .order_by(Entity.name.asc())
-        )
-        layers = [
-            {"name": row.name, "short_interpretation": row.short_interpretation}
-            for row in layers_result
-        ]
-
-        # Attributes: merge data["attribs"] from all INSERT descendants of the block.
-        attribs_result = await session.execute(
-            select(Entity.data)
-            .where(Entity.parent_id == block.id)
-            .where(Entity.entity_type == "INSERT")
-            .where(Entity.data.is_not(None))
-        )
-        merged_attribs: dict[str, object] = {}
-        for (row_data,) in attribs_result:
-            if isinstance(row_data, dict) and isinstance(row_data.get("attribs"), dict):
-                merged_attribs.update(row_data["attribs"])
-
-        # INSERT entities that reference this block (name == block_name).
-        inserts_stmt = (
-            select(Entity.id, Entity.parent_id, Entity.file_id, Entity.data)
-            .where(Entity.entity_type == "INSERT")
-            .where(Entity.name == block_name)
-            .order_by(Entity.id.asc())
-        )
-        if resolved_file_id is not None:
-            inserts_stmt = inserts_stmt.where(Entity.file_id == resolved_file_id)
-        inserts_result = await session.execute(inserts_stmt)
-        inserts = [
-            {
-                "id": str(row.id),
-                "parent_id": str(row.parent_id) if row.parent_id else None,
-                "file_id": str(row.file_id) if row.file_id else None,
-                "data": row.data or {},
-            }
-            for row in inserts_result
-        ]
-
-        multileader_result = await session.execute(
-            select(Entity.description, Entity.data)
-            .where(Entity.parent_id == block.id)
-            .where(Entity.entity_type == "MULTILEADER")
-            .order_by(Entity.id.asc())
-        )
-        multileader_rows = list(multileader_result)
-        annotation_texts = _collect_annotation_texts_from_rows(multileader_rows)
-
-        source_ref = ""
-        if not annotation_texts and resolved_file_id is not None:
-            source_result = await session.execute(
-                select(Entity.data["source_ref"].astext)
-                .where(Entity.id == resolved_file_id)
-                .limit(1)
-            )
-            source_row = source_result.first()
-            source_ref = str(source_row[0] or "") if source_row else ""
-
-    if not annotation_texts and source_ref:
-        annotation_texts = _collect_block_annotation_texts_from_source(block.name, source_ref)
-
     return {
         "id": str(block.id),
         "name": block.name,
         "description": block.description,
-        "full_interpretation": getattr(block, "full_interpretation", None),
-        "short_interpretation": getattr(block, "short_interpretation", None),
-        "layers": layers,
-        "attributes": merged_attribs,
-        "inserts": inserts,
-        "insert_count": len(inserts),
-        "annotation_texts": annotation_texts,
     }
 
 
