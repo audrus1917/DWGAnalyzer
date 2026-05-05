@@ -104,6 +104,19 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="Путь к SVG-файлу результата (по умолчанию: рядом с исходным файлом).",
     )
 
+    export_block_dxf_parser = subparsers.add_parser(
+        "export-block-dxf",
+        parents=[extract_common],
+        help="Вывести DXF-текст выбранного блока.",
+    )
+    export_block_dxf_parser.add_argument("block_name", help="Имя блока для экспорта")
+    export_block_dxf_parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        help="Путь к DXF-файлу результата (если не указан, вывод в stdout).",
+    )
+
     file_stat_parser = subparsers.add_parser(
         "file-stat",
         parents=[extract_common],

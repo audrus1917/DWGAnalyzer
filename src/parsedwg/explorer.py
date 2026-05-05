@@ -6,11 +6,14 @@ import hashlib
 import logging
 import re
 from collections.abc import Iterable
+from io import StringIO
+from typing import Any
 
 from pathlib import Path
 
 from ezdxf.document import Drawing
 from ezdxf.filemanagement import new, readfile
+from ezdxf.lldxf.tagwriter import TagCollector
 from ezdxf.addons.odafc import readfile as read_odafc
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -514,6 +517,30 @@ class DXFExplorer:
             image_format="svg",
             output_path=output_path,
         )
+
+    def export_block_dxf(self, block_name: str) -> str:
+        """Return DXF text for the selected block."""
+
+        logger.info("Экспортируем DXF-текст блока '%s' из файла: %s", block_name, self.drawing)
+        doc = self._read_document()
+        block = doc.blocks.get(block_name)
+        if block is None:
+            logger.error("Блок '%s' не найден в файле.", block_name)
+            raise ValueError(f"Блок '{block_name}' не найден в файле.")
+
+        if block.block is None or block.endblk is None:
+            raise RuntimeError(f"Блок '{block_name}' не может быть сериализован в DXF.")
+
+        collector = TagCollector(dxfversion=doc.dxfversion)
+        block.block.export_dxf(collector)
+        for entity in block:
+            entity.export_dxf(collector)
+        block.endblk.export_dxf(collector)
+
+        stream = StringIO()
+        for tag in collector.tags:
+            stream.write(tag.dxfstr())
+        return stream.getvalue()
 
     def _export_block_image(
         self,

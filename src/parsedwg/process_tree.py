@@ -413,7 +413,7 @@ async def _create_folders_tree(
     root_entity = Entity(
         name=root_path.name or str(root_path),
         description=f"Источник сканирования: {root_path}",
-        entity_type=EntityType.folder,
+        entity_type=EntityType.FOLDER,
         data={"path": str(root_path)},
         project_id=project_id,
         embedding_data=_build_entity_embedding(f"Источник сканирования: {root_path}"),
@@ -434,7 +434,7 @@ async def _create_folders_tree(
             project_id=project_id,
             name=dir_path.name,
             description=f"Каталог: {dir_path}",
-            entity_type=EntityType.folder,
+            entity_type=EntityType.FOLDER,
             data={"path": str(dir_path)},
             embedding_data=_build_entity_embedding(f"Каталог: {dir_path}"),
         )
@@ -532,7 +532,7 @@ async def save_tree_to_db(
             source_ref = str(entry["source_ref"])
             kind = str(entry["kind"])
             logger.info("Сохраняем для файла для сохранения: %s (%s)", source_ref, kind)
-            file_type = EntityType.file if kind == "file" else EntityType.zipped_file
+            file_type = EntityType.FILE if kind == "file" else EntityType.ZIPPED_FILE
 
             if kind == "zipped_file":
                 zip_source = str(entry["source"])
@@ -548,7 +548,7 @@ async def save_tree_to_db(
                         project_id=project_id,
                         name=Path(zip_source).name,
                         description=f"ZIP-архив: {zip_source}",
-                        entity_type=EntityType.zipfile,
+                        entity_type=EntityType.ZIPFILE,
                         data={"path": zip_source},
                         embedding_data=_build_entity_embedding(f"ZIP-архив: {zip_source}"),
                     )
@@ -579,7 +579,7 @@ async def save_tree_to_db(
 
             summary = cast(dict[str, list[dict[str, object]]], entry["summary"])
             layer_entities_by_key: dict[str, Entity] = {}
-            layout_entities_by_name: dict[str, uuid.UUID] = {}
+            layout_entities_by_name: dict[str, int] = {}
             logger.info("Layouts (%d шт.)", len(summary.get("layouts", [])))
             for layout in summary["layouts"]:
                 layout_name = str(layout["name"])
@@ -589,7 +589,7 @@ async def save_tree_to_db(
                     project_id=project_id,
                     name=layout_name,
                     description="",
-                    entity_type=EntityType.layout,
+                    entity_type=EntityType.LAYOUT,
                     data={},
                     embedding_data=_build_entity_embedding(f"Layout {entry['name']}"),
                 )
@@ -607,7 +607,7 @@ async def save_tree_to_db(
                     project_id=project_id,
                     name=layer_name,
                     description="",
-                    entity_type=EntityType.layer,
+                    entity_type=EntityType.LAYER,
                     data=layer.get("data", {}),
                     embedding_data=_build_entity_embedding(f"Layer {layer_name}"),
                 )
@@ -616,7 +616,7 @@ async def save_tree_to_db(
                 layer_entities_by_key[layer_name] = layer_entity
                 created_entities += 1
 
-            block_entities_by_name: dict[str, uuid.UUID] = {}
+            block_entities_by_name: dict[str, int] = {}
             logger.info("Блоки (%d шт.)", len(summary.get("blocks", [])))
             for block in summary["blocks"]:
                 block_name = str(block["name"])
@@ -635,7 +635,7 @@ async def save_tree_to_db(
                     project_id=project_id,
                     name=block_name,
                     description=str(block_description),
-                    entity_type=EntityType.block,
+                    entity_type=EntityType.BLOCK,
                     data=block_data,
                     # is_table=cast(bool, block["is_table"]),
                     embedding_data=_build_entity_embedding(f"Block {block_name}"),
@@ -692,7 +692,7 @@ async def save_tree_to_db(
                     project_id=project_id,
                     name=name,
                     description=str(primitive.get("text", "")),
-                    entity_type=str(primitive.get("type", "primitive")),
+                    entity_type=primitive.get("type", EntityType.PRIMITIVE),
                     data=primitive,
                     is_primitive=True,
                     embedding_data=_build_entity_embedding(str(primitive.get("text", ""))),

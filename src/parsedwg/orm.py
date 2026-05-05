@@ -1,16 +1,19 @@
+"""The main models."""
+
 from __future__ import annotations
 
-import enum
-import uuid
 from datetime import datetime, timezone
 
 from pgvector.sqlalchemy import Vector
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Table, Text, Column
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR, UUID
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Table, Text, Column, Integer, Enum
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from geoalchemy2 import Geometry
+
+from .constants import EntityType
+
 
 class Base(DeclarativeBase):
     pass
@@ -19,21 +22,13 @@ class Base(DeclarativeBase):
 category_to_entity = Table(
     "category_to_entity",
     Base.metadata,
-    Column("category_id", UUID(as_uuid=True), ForeignKey("category.id", ondelete="CASCADE"),
+    Column("category_id", Integer, ForeignKey("category.id", ondelete="CASCADE"),
            primary_key=True),
-    Column("entity_id", UUID(as_uuid=True), ForeignKey("entity.id", ondelete="CASCADE"),
+    Column("entity_id", Integer, ForeignKey("entity.id", ondelete="CASCADE"),
            primary_key=True),
 )
 
-class EntityType(str, enum.Enum):
-    folder = "FOLDER"
-    file = "FILE"
-    zipfile = "ZIPFILE"
-    zipped_file = "ZIPPED_FILE"
-    block = "BLOCK"
-    layout = "LAYOUT"
-    layer = "LAYER"
- 
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -42,9 +37,7 @@ def _utcnow() -> datetime:
 class Project(Base):
     __tablename__ = "project"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(512), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(256), nullable=True)
@@ -58,17 +51,15 @@ class Project(Base):
 class Category(Base):
     __tablename__ = "category"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    parent_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_id: Mapped[int | None] = mapped_column(
+        Integer,
         ForeignKey("category.id", ondelete="SET NULL"),
         nullable=True,
     )
     name: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    aliases: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True) 
+    aliases: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     parent: Mapped[Category | None] = relationship(
@@ -92,29 +83,25 @@ class Category(Base):
 class Entity(Base):
     __tablename__ = "entity"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    parent_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_id: Mapped[int | None] = mapped_column(
+        Integer,
         ForeignKey("entity.id", ondelete="SET NULL"),
         nullable=True,
     )
-    file_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+    file_id: Mapped[int | None] = mapped_column(
+        Integer,
         ForeignKey("entity.id", ondelete="SET NULL"),
         nullable=True,
     )
-    project_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
+    project_id: Mapped[int | None] = mapped_column(
+        Integer,
         ForeignKey("project.id", ondelete="SET NULL"),
         nullable=True,
     )
-    entity_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    entity_type: Mapped[EntityType] = mapped_column(Enum(EntityType), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    full_interpretation: Mapped[str | None] = mapped_column(Text, nullable=True)
-    short_interpretation: Mapped[str | None] = mapped_column(Text, nullable=True)
     data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     is_table: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     is_primitive: Mapped[bool | None] = mapped_column(Boolean, default=True, index=True)
@@ -169,15 +156,18 @@ class Entity(Base):
 
 
 class EntityEmbedding(Base):
+    """Embeddings and AI interpretations for an entity."""
     __tablename__ = "entity_embedding"
 
-    entity_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    entity_id: Mapped[int] = mapped_column(
+        Integer,
         ForeignKey("entity.id", ondelete="CASCADE"),
         primary_key=True,
     )
     embedding: Mapped[list[float] | None] = mapped_column(Vector(768), nullable=True)
     entity_text: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
+    full_interpretation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    short_interpretation: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     entity: Mapped[Entity] = relationship("Entity", back_populates="embedding_data")
 
@@ -185,8 +175,8 @@ class EntityEmbedding(Base):
 class EntityGeom(Base):
     __tablename__ = "entity_geom"
 
-    entity_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    entity_id: Mapped[int] = mapped_column(
+        Integer,
         ForeignKey("entity.id", ondelete="CASCADE"),
         primary_key=True,
     )
@@ -202,13 +192,13 @@ class EntityGeom(Base):
 class EntityToEntity(Base):
     __tablename__ = "entity_to_entity"
 
-    src_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    src_id: Mapped[int] = mapped_column(
+        Integer,
         ForeignKey("entity.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    dst_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    dst_id: Mapped[int] = mapped_column(
+        Integer,
         ForeignKey("entity.id", ondelete="CASCADE"),
         primary_key=True,
     )

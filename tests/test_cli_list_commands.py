@@ -275,6 +275,31 @@ def test_main_export_block_svg_runs_pipeline(tmp_path, monkeypatch, capsys) -> N
     assert f"SVG сохранён: {target_path}" in captured.out
 
 
+def test_main_export_block_dxf_prints_text(tmp_path, monkeypatch, capsys) -> None:
+    source_path = tmp_path / "sample.dxf"
+    source_path.write_text("stub", encoding="utf-8")
+    captured_args: dict[str, object] = {}
+    dxf_text = "  0\nBLOCK\n  2\nBLOCK_A\n  0\nENDBLK\n"
+
+    class StubExplorer:
+        def __init__(self, drawing: Path):
+            captured_args["drawing"] = drawing
+
+        def export_block_dxf(self, block_name: str) -> str:
+            captured_args["block_name"] = block_name
+            return dxf_text
+
+    monkeypatch.setattr("parsedwg.cli.DXFExplorer", StubExplorer)
+
+    exit_code = main(["export-block-dxf", str(source_path), "BLOCK_A"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured_args["drawing"] == source_path
+    assert captured_args["block_name"] == "BLOCK_A"
+    assert captured.out == f"{dxf_text}\n"
+
+
 def test_main_describe_block_outputs_json(tmp_path, monkeypatch, capsys) -> None:
     source_path = tmp_path / "sample.dxf"
     source_path.write_text("stub", encoding="utf-8")

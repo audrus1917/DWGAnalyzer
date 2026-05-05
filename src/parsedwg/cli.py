@@ -277,6 +277,33 @@ def handle_export_block_svg_command(
         return constants.ERROR
 
 
+def handle_export_block_dxf_command(
+    drawing_path: Path,
+    block_name: str,
+    output_path: Path | None,
+) -> int:
+    """Return DXF text for the selected block."""
+
+    try:
+        explorer = DXFExplorer(drawing_path)
+        dxf_text = explorer.export_block_dxf(block_name)
+
+        if output_path is not None:
+            resolved_output_path = output_path
+            if resolved_output_path.suffix.lower() != ".dxf":
+                resolved_output_path = resolved_output_path.with_suffix(".dxf")
+            resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
+            resolved_output_path.write_text(dxf_text, encoding="utf-8")
+            out(f"DXF сохранён: {resolved_output_path}")
+            return constants.OK
+
+        out(dxf_text)
+        return constants.OK
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        logger.error("Не удалось экспортировать DXF-текст блока: %s", exc)
+        return constants.ERROR
+
+
 def handle_describe_block_command(
     drawing_path: Path,
     block_name: str,
@@ -2111,6 +2138,13 @@ def main(argv: list[str] | None = None) -> int:
 
         case "export-block-svg":
             return_code = handle_export_block_svg_command(
+                drawing_path=Path(args.drawing),
+                block_name=args.block_name,
+                output_path=Path(args.output) if args.output else None,
+            )
+
+        case "export-block-dxf":
+            return_code = handle_export_block_dxf_command(
                 drawing_path=Path(args.drawing),
                 block_name=args.block_name,
                 output_path=Path(args.output) if args.output else None,

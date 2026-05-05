@@ -2,8 +2,6 @@
 
 """Get the extended block dscription n JSON format."""
 
-from typing import Any, Union
-
 import sys
 
 import logging

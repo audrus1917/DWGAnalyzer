@@ -7,6 +7,8 @@ import re
 
 from ezdxf.document import Drawing
 
+from .constants import EntityType, ENTITY_TYPES
+
 logger = logging.getLogger(__name__)
 
 
@@ -83,7 +85,7 @@ class DXFAnalyzer:
 
         # Generic handling shared by all entity types.
         entity_data = {
-            "type": dxftype,
+            "type": ENTITY_TYPES.get(dxftype, EntityType.PRIMITIVE),
             "block": getattr(block, "name", None) if block is not None else None,
             "layer": entity.dxf.layer if hasattr(entity.dxf, "layer") else None,
         }
@@ -98,7 +100,6 @@ class DXFAnalyzer:
                 attribs[attr_name] = value
         if attribs:
             entity_data["attribs"] = attribs
-
             
         match dxftype:
             case "INSERT":
