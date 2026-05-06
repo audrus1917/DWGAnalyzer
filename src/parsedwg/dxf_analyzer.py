@@ -6,6 +6,7 @@ import logging
 import re
 
 from ezdxf.document import Drawing
+from ezdxf.math import area as math_area
 
 from .constants import EntityType, ENTITY_TYPES
 
@@ -161,6 +162,15 @@ class DXFAnalyzer:
                 entity_data["geom"] = "SRID=4326;POINT({} {})".format(
                     entity.dxf.insert.x, entity.dxf.insert.y
                 )
+            case "HATCH":
+                try:
+                    hatch_path = entity.get_path()
+                    vertices = list(hatch_path.flattening(distance=0.01))
+                    entity_data["hatch_points"] = [cls.format_point(point) for point in vertices]
+                    entity_data["hatch_area"] = math_area(vertices)
+                except Exception as e:
+                    logger.error(f"Ошибка при обработке HATCH: {e}")
+                    entity_data["hatch_points"] = []    
 
         rendered: list[str] = []
         for key, value in entity_data.items():
@@ -201,9 +211,15 @@ class DXFAnalyzer:
             data["primitives_layers"].add(entity.dxf.layer)
             
             # 2. Текст (TEXT и MTEXT)
-            if entity.dxftype() in ('TEXT', 'MTEXT'):
+            val = None
+            if entity.dxftype() == 'TEXT':
                 val = entity.dxf.text.strip()
-                if val: data["text_content"].add(val)
+            elif entity.dxftype() == 'MTEXT':
+                plain_text = getattr(entity, "plain_text", None)
+                if callable(plain_text):
+                    val = str(plain_text()).rstrip()
+                if val: 
+                    data["text_content"].add(val)
             
             # 3. ATTDEFS (Определения атрибутов)
             if entity.dxftype() == 'ATTDEF':

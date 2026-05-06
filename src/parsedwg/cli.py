@@ -721,7 +721,7 @@ def handle_interpret_entities_command(
 ) -> int:
     """Request LLM name interpretations for entities by id or type.
 
-    Save the result into the short_interpretation field.
+    Save the result into entity embedding interpretation fields.
     """
 
     logger.info("Стартуем")
@@ -1000,7 +1000,7 @@ def handle_interpret_blocks_command(
                     short_interpretation = await asyncio.wait_for(
                         asyncio.to_thread(
                             call_ollama_name_meaning,
-                            name=block_name,
+                            name=block_text_for_llm,
                             chat_url=chat_url,
                             model=ai_model,
                             extra_context=normalized_context,
@@ -1020,7 +1020,7 @@ def handle_interpret_blocks_command(
                         ),
                         timeout=llm_timeout_seconds + 10.0,
                     )
-                    block_description = block_payload
+                    block_description = block_text_for_llm
                     full_interpretation = full_description
                 except TimeoutError:
                     duration_seconds = round(time.perf_counter() - started_at, 3)

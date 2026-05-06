@@ -32,11 +32,61 @@ def _parse_id(raw_id: str | int) -> int:
         raise ValueError(f"Некорректный id: {raw_id}") from exc
 
 
+def _get_short_interpretation(value: object) -> str | None:
+    embedding_data = getattr(value, "embedding_data", None)
+    if embedding_data is not None:
+        interpretation = getattr(embedding_data, "short_interpretation", None)
+        if interpretation is not None:
+            return str(interpretation)
+
+    interpretation = getattr(value, "short_interpretation", None)
+    if interpretation is None:
+        return None
+    return str(interpretation)
+
+
+def _get_full_interpretation(value: object) -> str | None:
+    embedding_data = getattr(value, "embedding_data", None)
+    if embedding_data is not None:
+        interpretation = getattr(embedding_data, "full_interpretation", None)
+        if interpretation is not None:
+            return str(interpretation)
+
+    interpretation = getattr(value, "full_interpretation", None)
+    if interpretation is None:
+        return None
+    return str(interpretation)
+
+
+def _ensure_embedding(entity: Entity) -> EntityEmbedding:
+    embedding_data = entity.embedding_data
+    if embedding_data is None:
+        embedding_data = EntityEmbedding(entity=entity)
+        entity.embedding_data = embedding_data
+    return embedding_data
+
+
+def _row_value(row: object, index: int, attr_name: str) -> object:
+    if isinstance(row, tuple):
+        return row[index] if len(row) > index else None
+    return getattr(row, attr_name, None)
+
+
+async def _get_entity_with_embedding(session: AsyncSession, entity_id: str | int) -> Entity | None:
+    stmt = (
+        select(Entity)
+        .options(selectinload(Entity.embedding_data))
+        .where(Entity.id == _parse_id(entity_id))
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def get_file_id_by_source(source_ref: str) -> str | None:
     """Return the id of a file entity by its source_ref path."""
     stmt = (
         select(Entity.id)
-        .where(Entity.entity_type == EntityType.file)
+        .where(Entity.entity_type == EntityType.FILE)
         .where(Entity.data["source_ref"].astext == source_ref)
         .order_by(Entity.created_at.desc())
         .limit(1)
@@ -57,10 +107,12 @@ async def get_entity_name_by_id(entity_id: str) -> str | None:
 async def save_short_interpretation(entity_id: str, text: str) -> None:
     """Persist short_interpretation for an entity identified by id."""
     async with async_session_factory() as session:
-        entity = await session.get(Entity, _parse_id(entity_id))
+        entity = await _get_entity_with_embedding(session, entity_id)
         if entity is None:
             raise LookupError(f"Сущность {entity_id} не найдена.")
-        entity.short_interpretation = text
+        embedding_data = _ensure_embedding(entity)
+        embedding_data.short_interpretation = text
+        session.add(embedding_data)
         await session.commit()
 
 
@@ -82,12 +134,14 @@ async def save_block_interpretations(
 ) -> None:
     """Persist block interpretations by id."""
     async with async_session_factory() as session:
-        entity = await session.get(Entity, _parse_id(block_id))
+        entity = await _get_entity_with_embedding(session, block_id)
         if entity is None:
             raise LookupError(f"Блок {block_id} не найден.")
         entity.description = description
-        entity.short_interpretation = short_interpretation
-        entity.full_interpretation = full_interpretation
+        embedding_data = _ensure_embedding(entity)
+        embedding_data.short_interpretation = short_interpretation
+        embedding_data.full_interpretation = full_interpretation
+        session.add(embedding_data)
         await session.commit()
 
 
@@ -102,7 +156,7 @@ async def list_blocks_for_interpretation(
 
     stmt = (
         select(Entity.id, Entity.name, Entity.description, Entity.file_id)
-        .where(Entity.entity_type == EntityType.block)
+        .where(Entity.entity_type == EntityType.BLOCK)
     )
     id_order: dict[int, int] = {}
 
@@ -267,7 +321,8 @@ async def get_full_description(
     async with async_session_factory() as session:
         block_stmt = (
             select(Entity)
-            .where(Entity.entity_type == EntityType.block)
+            .options(selectinload(Entity.embedding_data))
+            .where(Entity.entity_type == EntityType.BLOCK)
             .where(Entity.name == block_name)
         )
         if file_id is not None:
@@ -277,10 +332,100 @@ async def get_full_description(
         block = block_result.scalar_one_or_none()
         if block is None:
             return None
+
+        layer_stmt = (
+            select(Entity.name, EntityEmbedding.short_interpretation)
+            .select_from(Entity)
+            .outerjoin(EntityEmbedding, EntityEmbedding.entity_id == Entity.id)
+            .where(Entity.entity_type == EntityType.LAYER)
+        )
+        if block.file_id is not None:
+            layer_stmt = layer_stmt.where(Entity.file_id == block.file_id)
+        elif getattr(block, "parent_id", None) is not None:
+            layer_stmt = layer_stmt.where(Entity.parent_id == block.parent_id)
+        layer_stmt = layer_stmt.order_by(Entity.name.asc(), Entity.id.asc())
+        layer_rows = await session.execute(layer_stmt)
+        layers = []
+        for row in layer_rows:
+            name = _row_value(row, 0, "name")
+            short_interpretation = _row_value(row, 1, "short_interpretation")
+            layers.append(
+                {
+                    "name": str(name),
+                    "short_interpretation": (
+                        str(short_interpretation) if short_interpretation is not None else None
+                    ),
+                }
+            )
+
+        attrib_stmt = select(Entity.data).where(Entity.data["block"].astext == block_name)
+        if block.file_id is not None:
+            attrib_stmt = attrib_stmt.where(Entity.file_id == block.file_id)
+        attrib_rows = await session.execute(attrib_stmt)
+        attributes: dict[str, object] = {}
+        for row in attrib_rows:
+            row_data = _row_value(row, 0, "data")
+            if not isinstance(row_data, dict):
+                continue
+            row_attribs = row_data.get("attribs")
+            if isinstance(row_attribs, dict):
+                attributes.update(row_attribs)
+
+        inserts_stmt = (
+            select(Entity.id, Entity.parent_id, Entity.file_id, Entity.data)
+            .where(Entity.name == block_name)
+        )
+        if block.file_id is not None:
+            inserts_stmt = inserts_stmt.where(Entity.file_id == block.file_id)
+        insert_rows = await session.execute(inserts_stmt)
+        inserts = []
+        for row in insert_rows:
+            row_id = _row_value(row, 0, "id")
+            row_parent_id = _row_value(row, 1, "parent_id")
+            row_file_id = _row_value(row, 2, "file_id")
+            row_data = _row_value(row, 3, "data")
+            if row_id == block.id:
+                continue
+            inserts.append(
+                {
+                    "id": str(row_id),
+                    "parent_id": str(row_parent_id) if row_parent_id is not None else None,
+                    "file_id": str(row_file_id) if row_file_id is not None else None,
+                    "data": row_data if isinstance(row_data, dict) else {},
+                }
+            )
+
+        multileader_stmt = (
+            select(Entity.description, Entity.data)
+            .where(Entity.file_id == block.file_id)
+            .where(Entity.entity_type == EntityType.MLEADER)
+        )
+        multileader_rows = await session.execute(multileader_stmt)
+        annotation_texts = _collect_annotation_texts_from_rows(multileader_rows)
+
+        if not annotation_texts and block.file_id is not None:
+            source_ref_stmt = (
+                select(Entity.data["source_ref"].astext)
+                .where(Entity.id == block.file_id)
+                .limit(1)
+            )
+            source_ref_result = await session.execute(source_ref_stmt)
+            source_ref_row = source_ref_result.first()
+            source_ref = str(source_ref_row[0] or "") if source_ref_row else ""
+            if source_ref:
+                annotation_texts = _collect_block_annotation_texts_from_source(block_name, source_ref)
+
     return {
         "id": str(block.id),
         "name": block.name,
         "description": block.description,
+        "short_interpretation": _get_short_interpretation(block),
+        "full_interpretation": _get_full_interpretation(block),
+        "layers": layers,
+        "attributes": attributes,
+        "inserts": inserts,
+        "insert_count": len(inserts),
+        "annotation_texts": annotation_texts,
     }
 
 
@@ -299,7 +444,7 @@ async def list_blocks_for_export(file_id: str) -> list[dict[str, object]]:
     file_entity_id = _parse_id(file_id)
     stmt = (
         select(Entity.name)
-        .where(Entity.entity_type == EntityType.block)
+        .where(Entity.entity_type == EntityType.BLOCK)
         .where(Entity.parent_id == file_entity_id)
         .order_by(Entity.name.asc())
     )
@@ -320,7 +465,7 @@ async def get_table_blocks_by_file_id(file_id: str) -> list[dict[str, object]]:
     """Return table blocks from the DB whose parent_id equals file_id."""
     stmt = (
         select(Entity.name, Entity.data)
-        .where(Entity.entity_type == EntityType.block)
+        .where(Entity.entity_type == EntityType.BLOCK)
         .where(Entity.is_table.is_(True))
         .where(Entity.parent_id == _parse_id(file_id))
         .order_by(Entity.name.asc())
@@ -810,7 +955,7 @@ async def get_table_blocks_for_source(source_ref: str) -> list[dict[str, object]
     """Return table blocks from the DB for the given file source_ref."""
     file_id_subquery = (
         select(Entity.id)
-        .where(Entity.entity_type == EntityType.file)
+        .where(Entity.entity_type == EntityType.FILE)
         .where(Entity.data["source_ref"].astext == source_ref)
         .order_by(Entity.created_at.desc())
         .limit(1)
@@ -818,7 +963,7 @@ async def get_table_blocks_for_source(source_ref: str) -> list[dict[str, object]
     )
     stmt = (
         select(Entity.name, Entity.data)
-        .where(Entity.entity_type == EntityType.block)
+        .where(Entity.entity_type == EntityType.BLOCK)
         .where(Entity.is_table.is_(True))
         .where(Entity.parent_id == file_id_subquery)
         .order_by(Entity.name.asc())

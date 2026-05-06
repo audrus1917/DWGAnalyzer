@@ -441,14 +441,14 @@ def build_args_parser() -> argparse.ArgumentParser:
 
     interpret_entities_parser = subparsers.add_parser(
         "interpret-entities",
-        help="Запросить LLM-интерпретацию имён для всех сущностей типа и сохранить в short_interpretation.",
+        help="Запросить LLM-интерпретацию имён для всех сущностей типа и сохранить её в entity_embedding.short_interpretation.",
     )
     interpret_entities_parser.add_argument(
         "--entity-id",
         dest="entity_ids",
         action="append",
         default=None,
-        help="UUID сущности. Можно указывать несколько раз.",
+        help="ID сущности. Можно указывать несколько раз.",
     )
     interpret_entities_parser.add_argument(
         "--entity-type",
@@ -492,8 +492,8 @@ def build_args_parser() -> argparse.ArgumentParser:
     interpret_blocks_parser = subparsers.add_parser(
         "interpret-blocks",
         help=(
-            "Распознать смысл имени блока и сохранить его в short_interpretation, "
-            "а полное описание блока сохранить в full_interpretation."
+            "Распознать смысл имени блока и сохранить интерпретации в "
+            "entity_embedding.short_interpretation и entity_embedding.full_interpretation."
         ),
     )
     interpret_blocks_parser.add_argument(
@@ -501,18 +501,18 @@ def build_args_parser() -> argparse.ArgumentParser:
         dest="block_ids",
         action="append",
         default=None,
-        help="UUID блока. Можно указывать несколько раз.",
+        help="ID блока. Можно указывать несколько раз.",
     )
     interpret_blocks_parser.add_argument(
         "file_ref",
         nargs="?",
         default=None,
-        help="UUID file-сущности или путь к файлу (если --by-path).",
+        help="ID file-сущности или путь к файлу (если --by-path).",
     )
     interpret_blocks_parser.add_argument(
         "--by-path",
         action="store_true",
-        help="Искать file-сущность по пути, а не по UUID.",
+        help="Искать file-сущность по пути, а не по ID.",
     )
     interpret_blocks_parser.add_argument(
         "--extra-context",
@@ -550,15 +550,15 @@ def build_args_parser() -> argparse.ArgumentParser:
     interpret_block_parser = subparsers.add_parser(
         "interpret-block",
         help=(
-            "Распознать смысл имени одного блока и сохранить его в short_interpretation, "
-            "а полное описание блока сохранить в full_interpretation."
+            "Распознать смысл имени одного блока и сохранить интерпретации в "
+            "entity_embedding.short_interpretation и entity_embedding.full_interpretation."
         ),
     )
     interpret_block_parser.add_argument(
         "--entity-id",
         dest="entity_id",
         required=True,
-        help="UUID блока в БД.",
+        help="ID блока в БД.",
     )
     interpret_block_parser.add_argument(
         "--extra-context",

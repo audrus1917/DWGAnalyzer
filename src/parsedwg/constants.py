@@ -73,3 +73,17 @@ class EntityType(int, enum.Enum):
     PRIMITIVE= 53
 
 ENTITY_TYPES = {e.name: e for e in EntityType}
+
+
+# Словарь расшифровки материалов
+ANSI_MAP = {
+    'ANSI31': 'Чугун / Кирпич',
+    'ANSI32': 'Сталь',
+    'ANSI33': 'Медь / Латунь',
+    'ANSI34': 'Пластик / Резина',
+    'ANSI35': 'Огнеупорный кирпич',
+    'ANSI36': 'Мрамор / Стекло',
+    'ANSI37': 'Свинец / Изоляция',
+    'ANSI38': 'Алюминий'
+}
+
