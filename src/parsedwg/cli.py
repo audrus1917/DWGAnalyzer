@@ -11,16 +11,17 @@ import time
 
 from pathlib import Path
 
-from .langchain_name_tags import LangChainAgentConfig, LangChainNameTagsExtractor
+from src.parsedwg.langchain_name_tags import LangChainAgentConfig, LangChainNameTagsExtractor
 
 
-from . import constants
-from .dxf_analyzer import DXFAnalyzer
-from .settings import settings
-from .explorer import DXFExplorer
-from .process_tree import run_process_tree
-from .docs_ingest import run_documents_ingest
-from .utils import build_args_parser, out
+from src.parsedwg import constants
+from src.parsedwg.dxf_analyzer import DXFAnalyzer
+from src.parsedwg.settings import settings, get_ai_settings
+from src.parsedwg.explorer import DXFExplorer
+from src.parsedwg.docs_ingest import run_documents_ingest
+from src.parsedwg.utils.args import build_args_parser
+from src.parsedwg.commands.process import handle_process_command
+
 
 type ResultRow = dict[str, object]
 
@@ -102,7 +103,7 @@ def as_table(rows: list[ResultRow]) -> str:
 def print_as_table(rows: list[ResultRow]) -> None:
     """Print result rows as a table."""
 
-    out(as_table(rows))
+    print(as_table(rows))
 
 
 def handle_search_command(
@@ -118,7 +119,7 @@ def handle_search_command(
     rows: list[ResultRow] = asyncio.run(search_entities(query, entity_type, limit, parent_id))
 
     if not rows:
-        out("Нет результатов.")
+        print("Нет результатов.")
         return constants.OK
 
     if output_path is not None:
@@ -139,7 +140,7 @@ def handle_index_command(
     from .rag import index_entities
 
     count = asyncio.run(index_entities(entity_type, batch_size, reindex))
-    out(f"Проиндексировано: {count}")
+    print(f"Проиндексировано: {count}")
     return constants.OK
 
 
@@ -159,86 +160,20 @@ def handle_ask_command(
         logger.info("JSON сохранён: %s", output_path)
         return constants.OK
 
-    out(result["answer"])
-    out("")
-    out("Источники:")
+    print(result["answer"])
+    print("")
+    print("Источники:")
     print_as_table(result["sources"])  # type: ignore[arg-type]
     return constants.OK
-
-
-def handle_process_command(
-    source_path: Path,
-    dry: bool = False,
-    project_name: str | None = None,
-    project_description: str | None = None,
-    created_by: str | None = None,
-    ai_name_tags: bool = False,
-    ai_model: str = settings.ollama_llm_model,
-    ai_base_url: str = settings.ollama_base_url,
-    ai_api_key: str = ""
-) -> int:
-    """Scan DWG/DXF content, save the entity tree to the DB, and attach it to a project."""
-
-    try:
-        name_tags_config = get_name_tags_config(
-            enabled=ai_name_tags,
-            model=ai_model,
-            base_url=ai_base_url,
-            api_key=ai_api_key,
-        )
-        summary = run_process_tree(
-            source_path,
-            dry_run=dry,
-            project_name=project_name,
-            project_description=project_description,
-            created_by=created_by,
-            name_tags_config=name_tags_config,
-        )
-        if summary.get("dry_run"):
-            out("Dry run: запись в БД отключена")
-        else:
-            out(f"Создан проект: {summary['project_id']}")
-        out(f"Найдено файлов: {summary['file_count']}")
-        out(f"Обработано файлов: {summary['processed_count']}")
-        out(f"Режим обработки: {summary['mode']}")
-        out(f"Создано сущностей в БД: {summary['created_entities']}")
-        return constants.OK
-    except ValueError as e:
-        logger.exception("Ошибка при обработке каталога / файла: %s", e)
-        return constants.ERROR
-    except RuntimeError as e:
-        logger.error("Ошибка AI-режима: %s", e)
-        return constants.ERROR
-
-
-def get_name_tags_config(
-    enabled: bool,
-    model: str,
-    base_url: str,
-    api_key: str,
-):
-    """Return config for AI tag extraction from names, or None if disabled."""
-
-    if not enabled:
-        return None
-
-    from .langchain_name_tags import ensure_langchain_available
-
-    ensure_langchain_available()
-    return {
-        "model": model,
-        "base_url": base_url,
-        "api_key": api_key,
-    }
 
 
 def handle_process_docs_command(source_path: Path) -> int:
     """Recursively index PDF/DOCX/XLSX/CSV documents into the entity table."""
 
     summary = run_documents_ingest(source_path)
-    out(f"Найдено документов: {summary['doc_count']}")
-    out(f"Создано сущностей в БД: {summary['created_entities']}")
-    out(f"Источник: {summary['source']}")
+    print(f"Найдено документов: {summary['doc_count']}")
+    print(f"Создано сущностей в БД: {summary['created_entities']}")
+    print(f"Источник: {summary['source']}")
     return constants.OK
 
 
@@ -253,7 +188,7 @@ def handle_export_block_png_command(
     try:
         explorer = DXFExplorer(drawing_path)
         saved_path = explorer.export_block_png(block_name, output_path=output_path, dpi=dpi)
-        out(f"PNG сохранён: {saved_path}")
+        print(f"PNG сохранён: {saved_path}")
         return constants.OK
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         logger.error("Не удалось экспортировать блок в PNG: %s", exc)
@@ -270,7 +205,7 @@ def handle_export_block_svg_command(
     try:
         explorer = DXFExplorer(drawing_path)
         saved_path = explorer.export_block_svg(block_name, output_path=output_path)
-        out(f"SVG сохранён: {saved_path}")
+        print(f"SVG сохранён: {saved_path}")
         return constants.OK
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         logger.error("Не удалось экспортировать блок в SVG: %s", exc)
@@ -294,10 +229,10 @@ def handle_export_block_dxf_command(
                 resolved_output_path = resolved_output_path.with_suffix(".dxf")
             resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
             resolved_output_path.write_text(dxf_text, encoding="utf-8")
-            out(f"DXF сохранён: {resolved_output_path}")
+            print(f"DXF сохранён: {resolved_output_path}")
             return constants.OK
 
-        out(dxf_text)
+        print(dxf_text)
         return constants.OK
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         logger.error("Не удалось экспортировать DXF-текст блока: %s", exc)
@@ -320,7 +255,7 @@ def handle_describe_block_command(
             logger.info("JSON сохранён: %s", output_path)
             return constants.OK
 
-        out(json.dumps(payload, ensure_ascii=False, indent=2))
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
         return constants.OK
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         logger.error("Не удалось получить описание блока: %s", exc)
@@ -341,7 +276,7 @@ def handle_extract_name_tags_command(
     try:
         ai_extractor = None
         if ai_name_tags:
-            ensure_config = get_name_tags_config(
+            ensure_config = get_ai_settings(
                 enabled=True,
                 model=ai_model,
                 base_url=ai_base_url,
@@ -363,7 +298,7 @@ def handle_extract_name_tags_command(
             logger.info("JSON сохранён: %s", output_path)
             return constants.OK
 
-        out(json.dumps(rows, ensure_ascii=False, indent=2))
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
         return constants.OK
     except RuntimeError as e:
         logger.error("Ошибка AI-режима: %s", e)
@@ -414,14 +349,14 @@ def handle_extract_token_tags_command(
             )
         )
         if with_scores:
-            out(
+            print(
                 extractor.extract_token_meanings_scored_json(
                     merged_tokens,
                     extra_context=token_context,
                 )
             )
         else:
-            out(
+            print(
                 extractor.extract_token_meanings_json(
                     merged_tokens,
                     extra_context=token_context,
@@ -470,10 +405,10 @@ def handle_extract_name_meaning_command(
             logger.error("Некорректный entity_id: %s", exc)
             return constants.UNBOUND_ERROR
         if resolved_name is None:
-            out(f"Сущность не найдена: {entity_id}")
+            print(f"Сущность не найдена: {entity_id}")
             return constants.NOT_FOUND
-        out(f"Сущность: {resolved_name}")
-        out("")
+        print(f"Сущность: {resolved_name}")
+        print("")
 
     assert resolved_name is not None
     normalized_name = " ".join(resolved_name.split())
@@ -487,7 +422,7 @@ def handle_extract_name_meaning_command(
             model=ai_model,
             extra_context=normalized_extra_context,
         )
-        out(result)
+        print(result)
         return constants.OK
     except RuntimeError as e:
         logger.error("Ошибка AI-режима: %s", e)
@@ -513,11 +448,11 @@ def handle_explain_block_command(
         return constants.UNBOUND_ERROR
 
     if name is None:
-        out(f"Блок не найден: {block_id}")
+        print(f"Блок не найден: {block_id}")
         return constants.NOT_FOUND
 
-    out(f"Блок: {name}")
-    out("")
+    print(f"Блок: {name}")
+    print("")
     return handle_extract_name_meaning_command(
         name=name,
         entity_id=None,
@@ -578,7 +513,7 @@ def handle_categorize_entities_command(
         if not selected_entities:
             return []
         if not dry:
-            out(f"Выбрано сущностей: {len(selected_entities)}")
+            print(f"Выбрано сущностей: {len(selected_entities)}")
 
         queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
         semaphore = asyncio.Semaphore(workers)
@@ -676,12 +611,12 @@ def handle_categorize_entities_command(
         rows = asyncio.run(_run_stream())
         if not rows:
             if dry:
-                out("[]")
+                print("[]")
             else:
-                out("Нет сущностей для категоризации.")
+                print("Нет сущностей для категоризации.")
             return constants.OK
         if dry:
-            out(json.dumps(rows, ensure_ascii=False, indent=2))
+            print(json.dumps(rows, ensure_ascii=False, indent=2))
             return constants.OK
         printable_rows: list[ResultRow] = []
         for row in rows:
@@ -744,7 +679,7 @@ def handle_interpret_entities_command(
     chat_url = _derive_ollama_chat_url(ai_base_url)
     logger.debug("chat_url: %s", chat_url)
     normalized_context = " ".join(extra_context.split())
-    llm_timeout_seconds = settings.ollama_timeout_seconds
+    llm_timeout_seconds = settings.ai_timeout_seconds
 
     async def _run() -> dict[str, object]:
         entities = await list_entities_for_semantic_categorization(
@@ -754,7 +689,7 @@ def handle_interpret_entities_command(
         if not entities:
             return {"rows": [], "failures": []}
         if not dry:
-            out(f"Выбрано сущностей: {len(entities)}")
+            print(f"Выбрано сущностей: {len(entities)}")
 
         semaphore = asyncio.Semaphore(workers)
 
@@ -905,14 +840,14 @@ def handle_interpret_entities_command(
             if failures:
                 logger.error("Не удалось интерпретировать ни одной сущности. Ошибок: %d", len(failures))
                 return constants.ERROR
-            out("Нет сущностей для интерпретации.")
+            print("Нет сущностей для интерпретации.")
             return constants.OK
         if dry:
-            out(json.dumps(rows + failures, ensure_ascii=False, indent=2))
+            print(json.dumps(rows + failures, ensure_ascii=False, indent=2))
             return constants.OK
-        out(f"Интерпретировано: {len(rows)}")
+        print(f"Интерпретировано: {len(rows)}")
         if failures:
-            out(f"Ошибок: {len(failures)}")
+            print(f"Ошибок: {len(failures)}")
         return constants.OK
     except RuntimeError as e:
         logger.error("Ошибка AI-режима: %s", e)
@@ -927,9 +862,9 @@ def handle_interpret_blocks_command(
     file_ref: str | None,
     by_path: bool,
     extra_context: str = "",
-    ai_model: str = settings.ollama_llm_model,
-    ai_base_url: str = settings.ollama_base_url,
-    ai_api_key: str = settings.ollama_api_key,
+    ai_model: str = settings.ai_model,
+    ai_base_url: str = settings.ai_base_url,
+    ai_api_key: str = settings.ai_api_key,
     workers: int = 1,
     dry: bool = False,
 ) -> int:
@@ -957,12 +892,12 @@ def handle_interpret_blocks_command(
     if file_ref is not None and by_path:
         resolved_file_id = asyncio.run(get_file_id_by_source(file_ref))
         if not resolved_file_id:
-            out("Файл не найден в БД.")
+            print("Файл не найден в БД.")
             return constants.NOT_FOUND
 
     chat_url = _derive_ollama_chat_url(ai_base_url)
     normalized_context = " ".join(extra_context.split())
-    llm_timeout_seconds = settings.ollama_timeout_seconds
+    llm_timeout_seconds = settings.ai_timeout_seconds
 
     async def _run() -> dict[str, object]:
         blocks = await list_blocks_for_interpretation(
@@ -972,7 +907,7 @@ def handle_interpret_blocks_command(
         if not blocks:
             return {"rows": [], "failures": []}
         if not dry:
-            out(f"Выбрано блоков: {len(blocks)}")
+            print(f"Выбрано блоков: {len(blocks)}")
 
         semaphore = asyncio.Semaphore(workers)
 
@@ -1137,7 +1072,7 @@ def handle_interpret_blocks_command(
                         )
 
                 if not dry:
-                    out(
+                    print(
                         f"\nБлок {block_name or block_id or '-'} обработан за {duration_label}"
                     )
 
@@ -1171,14 +1106,14 @@ def handle_interpret_blocks_command(
             if failures:
                 logger.error("Не удалось интерпретировать ни одного блока. Ошибок: %d", len(failures))
                 return constants.ERROR
-            out("Нет блоков для интерпретации.")
+            print("Нет блоков для интерпретации.")
             return constants.OK
         if dry:
-            out(json.dumps(rows + failures, ensure_ascii=False, indent=2))
+            print(json.dumps(rows + failures, ensure_ascii=False, indent=2))
             return constants.OK
-        out(f"Интерпретировано блоков: {len(rows)}")
+        print(f"Интерпретировано блоков: {len(rows)}")
         if failures:
-            out(f"Ошибок: {len(failures)}")
+            print(f"Ошибок: {len(failures)}")
         return constants.OK
     except RuntimeError as e:
         logger.error("Ошибка AI-режима: %s", e)
@@ -1198,7 +1133,7 @@ def handle_verify_extraction_command(
 
     try:
         report = asyncio.run(verify_extraction(drawing_path, file_id=file_id))
-        out(format_verification_report(report))
+        print(format_verification_report(report))
         return constants.OK if report["ok"] else constants.ERROR
     except LookupError as e:
         logger.error("Файл не найден в БД: %s", e, exc_info=True)
@@ -1209,7 +1144,7 @@ def handle_verify_extraction_command(
 
 
 def _resolve_source_ref_to_drawing_path(source_ref: str, temp_dir: Path) -> Path:
-    from .process_tree import DWGTreeProcessor
+    from .process_source import DWGTreeProcessor
 
     if "::" not in source_ref:
         return Path(source_ref)
@@ -1245,7 +1180,7 @@ def _collect_mleader_nearest_rows(
     entities: list[dict[str, str]],
     search_types: tuple[str, ...] = ("LINE", "CIRCLE", "LWPOLYLINE"),
 ) -> list[dict[str, object]]:
-    from .process_tree import DWGTreeProcessor
+    from .process_source import DWGTreeProcessor
     from .utils import (
         find_closest_entity_in_entities,
         get_mleader_annotation_text,
@@ -1413,7 +1348,7 @@ def handle_find_mleader_nearest_command(
     if file_ref is not None and by_path:
         resolved_file_id = asyncio.run(get_file_id_by_source(file_ref))
         if not resolved_file_id:
-            out("Файл не найден в БД.")
+            print("Файл не найден в БД.")
             return constants.NOT_FOUND
 
     try:
@@ -1423,7 +1358,7 @@ def handle_find_mleader_nearest_command(
         return constants.ERROR
 
     if not entities:
-        out("Нет сущностей MULTILEADER для обработки.")
+        print("Нет сущностей MULTILEADER для обработки.")
         return constants.OK
 
     normalized_search_types = tuple(search_types) if search_types else (
@@ -1436,7 +1371,7 @@ def handle_find_mleader_nearest_command(
         "MTEXT",
     )
     rows = _collect_mleader_nearest_rows(entities, search_types=normalized_search_types)
-    out(json.dumps(rows, ensure_ascii=False, indent=2))
+    print(json.dumps(rows, ensure_ascii=False, indent=2))
     return constants.OK
 
 
@@ -1449,8 +1384,8 @@ def handle_project_add_command(
     from .db import create_project
 
     project = asyncio.run(create_project(name=name, description=description, created_by=created_by))
-    out(f"Проект создан: {project['id']}")
-    out(f"Название: {project['name']}")
+    print(f"Проект создан: {project['id']}")
+    print(f"Название: {project['name']}")
     return constants.OK
 
 
@@ -1472,11 +1407,11 @@ def handle_project_update_command(
         )
     )
     if project is None:
-        out("Проект не найден.")
+        print("Проект не найден.")
         return constants.NOT_FOUND
 
-    out(f"Проект обновлён: {project['id']}")
-    out(f"Название: {project['name']}")
+    print(f"Проект обновлён: {project['id']}")
+    print(f"Название: {project['name']}")
     return constants.OK
 
 
@@ -1489,15 +1424,15 @@ def handle_project_delete_command(project_id: str, yes: bool) -> int:
             f"Удалить проект {project_id}? Введите YES для подтверждения: "
         ).strip()
         if answer != "YES":
-            out("Удаление отменено.")
+            print("Удаление отменено.")
             return constants.ERROR
 
     deleted = asyncio.run(delete_project(project_id=project_id))
     if not deleted:
-        out("Проект не найден.")
+        print("Проект не найден.")
         return constants.NOT_FOUND
 
-    out(f"Проект удалён: {project_id}")
+    print(f"Проект удалён: {project_id}")
     return constants.OK
 
 
@@ -1512,10 +1447,10 @@ def handle_category_add_command(
     category = asyncio.run(
         create_category(name=name, description=description, parent_id=parent_id)
     )
-    out(f"Категория создана: {category['id']}")
-    out(f"Название: {category['name']}")
+    print(f"Категория создана: {category['id']}")
+    print(f"Название: {category['name']}")
     if category["parent_id"]:
-        out(f"Родитель: {category['parent_id']}")
+        print(f"Родитель: {category['parent_id']}")
     return constants.OK
 
 
@@ -1537,13 +1472,13 @@ def handle_category_update_command(
         )
     )
     if category is None:
-        out("Категория не найдена.")
+        print("Категория не найдена.")
         return constants.NOT_FOUND
 
-    out(f"Категория обновлена: {category['id']}")
-    out(f"Название: {category['name']}")
+    print(f"Категория обновлена: {category['id']}")
+    print(f"Название: {category['name']}")
     if category["parent_id"]:
-        out(f"Родитель: {category['parent_id']}")
+        print(f"Родитель: {category['parent_id']}")
     return constants.OK
 
 
@@ -1556,15 +1491,15 @@ def handle_category_delete_command(category_id: str, yes: bool) -> int:
             f"Удалить категорию {category_id}? Введите YES для подтверждения: "
         ).strip()
         if answer != "YES":
-            out("Удаление отменено.")
+            print("Удаление отменено.")
             return constants.ERROR
 
     deleted = asyncio.run(delete_category(category_id=category_id))
     if not deleted:
-        out("Категория не найдена.")
+        print("Категория не найдена.")
         return constants.NOT_FOUND
 
-    out(f"Категория удалена: {category_id}")
+    print(f"Категория удалена: {category_id}")
     return constants.OK
 
 
@@ -1583,7 +1518,7 @@ def handle_category_list_command(parent_id: str | None) -> int:
             }
         )
     if not rows:
-        out("Нет категорий.")
+        print("Нет категорий.")
         return constants.OK
 
     print_as_table(rows)
@@ -1605,14 +1540,14 @@ def handle_file_stat_from_db_command(
     from openpyxl.utils import get_column_letter
 
     from .db import async_session_factory
-    from .orm import Entity, EntityType
+    from .orm import Entity, EntityType, Primitive
 
     async def collect_db_stat():
         async with async_session_factory() as session:
             if by_path:
                 file_entity = await session.scalar(
                     sa.select(Entity).where(
-                        Entity.entity_type == EntityType.file,
+                        Entity.entity_type == EntityType.FILE,
                         Entity.data["source_ref"].astext == file_ref,
                     )
                 )
@@ -1639,7 +1574,7 @@ def handle_file_stat_from_db_command(
                 sa.select(Entity)
                 .where(
                     Entity.parent_id == file_entity.id,
-                    Entity.entity_type == EntityType.block,
+                    Entity.entity_type == EntityType.BLOCK,
                 )
                 .order_by(Entity.name.asc())
             )
@@ -1648,10 +1583,11 @@ def handle_file_stat_from_db_command(
             table_blocks = [block for block in blocks if block.is_table]
 
             primitives = await session.execute(
-                sa.select(Entity)
+                sa.select(Primitive)
                 .where(
-                    Entity.parent_id.in_([block.id for block in blocks]),
+                    Primitive.file_id == file_entity.id,
                 )
+                .order_by(Primitive.id.asc())
             )
             primitives = [primitive for (primitive,) in primitives.all()]
 
@@ -1666,7 +1602,7 @@ def handle_file_stat_from_db_command(
 
     stat, err = asyncio.run(collect_db_stat())
     if err:
-        out(f"Ошибка: {err}")
+        print(f"Ошибка: {err}")
         return constants.ERROR
     assert stat is not None
 
@@ -1774,7 +1710,7 @@ def handle_file_stat_from_db_command(
         else:
             output_path = Path(f"{file_ref}_dbstat.xlsx")
     wb.save(output_path)
-    out(f"Статистика по файлу из БД сохранена: {output_path}")
+    print(f"Статистика по файлу из БД сохранена: {output_path}")
     return constants.OK
 
 
@@ -1835,7 +1771,7 @@ def handle_export_blocks_xlsx_command(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
-    out(f"XLSX по блокам сохранён: {output_path}")
+    print(f"XLSX по блокам сохранён: {output_path}")
     return constants.OK
 
 
@@ -1850,7 +1786,7 @@ def _collect_block_export_rows(
     if by_path:
         file_id = asyncio.run(get_file_id_by_source(file_ref)) or ""
         if not file_id:
-            out("Ошибка: file-сущность не найдена")
+            print("Ошибка: file-сущность не найдена")
             return None
 
     try:
@@ -1905,17 +1841,17 @@ def handle_export_blocks_table_command(
     if block_rows is None:
         return constants.ERROR
     if not block_rows:
-        out("Нет блоков для экспорта.")
+        print("Нет блоков для экспорта.")
         return constants.OK
 
     table_text = as_table(block_rows)
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(table_text + "\n", encoding="utf-8")
-        out(f"Текстовая таблица по блокам сохранена: {output_path}")
+        print(f"Текстовая таблица по блокам сохранена: {output_path}")
         return constants.OK
 
-    out(table_text)
+    print(table_text)
     return constants.OK
 
 
@@ -1932,119 +1868,112 @@ def main(argv: list[str] | None = None) -> int:
         case "process":
             return_code = handle_process_command(
                 Path(args.path),
-                dry=args.dry,
                 project_name=args.project_name,
-                project_description=args.project_description,
-                created_by=args.created_by,
-                ai_name_tags=args.ai_name_tags,
-                ai_model=args.ai_model,
-                ai_base_url=args.ai_base_url,
-                ai_api_key=args.ai_api_key,
             )
 
-        case "extract-name-tags":
-            return_code = handle_extract_name_tags_command(
-                source_path=Path(args.path),
-                output_path=Path(args.output) if args.output else None,
-                ai_name_tags=args.ai_name_tags,
-                ai_model=args.ai_model,
-                ai_base_url=args.ai_base_url,
-                ai_api_key=args.ai_api_key,
-            )
+        # case "extract-name-tags":
+        #     return_code = handle_extract_name_tags_command(
+        #         source_path=Path(args.path),
+        #         output_path=Path(args.output) if args.output else None,
+        #         ai_name_tags=args.ai_name_tags,
+        #         ai_model=args.ai_model,
+        #         ai_base_url=args.ai_base_url,
+        #         ai_api_key=args.ai_api_key,
+        #     )
 
-        case "extract-token-tags":
-            return_code = handle_extract_token_tags_command(
-                tokens=args.tokens,
-                drawing_path=Path(args.drawing) if args.drawing else None,
-                ai_model=args.ai_model,
-                ai_base_url=args.ai_base_url,
-                ai_api_key=args.ai_api_key,
-                with_scores=args.with_scores,
-            )
+        # case "extract-token-tags":
+        #     return_code = handle_extract_token_tags_command(
+        #         tokens=args.tokens,
+        #         drawing_path=Path(args.drawing) if args.drawing else None,
+        #         ai_model=args.ai_model,
+        #         ai_base_url=args.ai_base_url,
+        #         ai_api_key=args.ai_api_key,
+        #         with_scores=args.with_scores,
+        #     )
 
-        case "extract-name-meaning":
-            return_code = handle_extract_name_meaning_command(
-                name=args.name,
-                entity_id=args.entity_id,
-                extra_context=args.extra_context,
-                ai_model=args.ai_model,
-                ai_base_url=args.ai_base_url,
-                ai_api_key=args.ai_api_key,
-            )
+        # case "extract-name-meaning":
+        #     return_code = handle_extract_name_meaning_command(
+        #         name=args.name,
+        #         entity_id=args.entity_id,
+        #         extra_context=args.extra_context,
+        #         ai_model=args.ai_model,
+        #         ai_base_url=args.ai_base_url,
+        #         ai_api_key=args.ai_api_key,
+        #     )
 
-        case "explain-block":
-            return_code = handle_explain_block_command(
-                block_id=args.block_id,
-                extra_context=args.extra_context,
-                ai_model=args.ai_model,
-                ai_base_url=args.ai_base_url,
-                ai_api_key=args.ai_api_key,
-            )
+        # case "explain-block":
+        #     return_code = handle_explain_block_command(
+        #         block_id=args.block_id,
+        #         extra_context=args.extra_context,
+        #         ai_model=args.ai_model,
+        #         ai_base_url=args.ai_base_url,
+        #         ai_api_key=args.ai_api_key,
+        #     )
 
-        case "categorize-entities":
-            return_code = handle_categorize_entities_command(
-                entity_ids=args.entity_ids,
-                entity_type=args.entity_type,
-                ai_model=args.ai_model,
-                ai_base_url=args.ai_base_url,
-                ai_api_key=args.ai_api_key,
-                workers=args.workers,
-                dry=args.dry,
-            )
+        # case "categorize-entities":
+        #     return_code = handle_categorize_entities_command(
+        #         entity_ids=args.entity_ids,
+        #         entity_type=args.entity_type,
+        #         ai_model=args.ai_model,
+        #         ai_base_url=args.ai_base_url,
+        #         ai_api_key=args.ai_api_key,
+        #         workers=args.workers,
+        #         dry=args.dry,
+        #     )
 
-        case "interpret-entities":
-            return_code = handle_interpret_entities_command(
-                entity_ids=args.entity_ids,
-                entity_type=args.entity_type,
-                extra_context=args.extra_context,
-                ai_model=args.ai_model,
-                ai_base_url=args.ai_base_url,
-                ai_api_key=args.ai_api_key,
-                workers=args.workers,
-                dry=args.dry,
-            )
+        # case "interpret-entities":
+        #     return_code = handle_interpret_entities_command(
+        #         entity_ids=args.entity_ids,
+        #         entity_type=args.entity_type,
+        #         extra_context=args.extra_context,
+        #         ai_model=args.ai_model,
+        #         ai_base_url=args.ai_base_url,
+        #         ai_api_key=args.ai_api_key,
+        #         workers=args.workers,
+        #         dry=args.dry,
+        #     )
 
-        case "interpret-blocks":
-            return_code = handle_interpret_blocks_command(
-                block_ids=args.block_ids,
-                file_ref=args.file_ref,
-                by_path=args.by_path,
-                extra_context=args.extra_context,
-                ai_model=args.ai_model,
-                ai_base_url=args.ai_base_url,
-                ai_api_key=args.ai_api_key,
-                workers=args.workers,
-                dry=args.dry,
-            )
+        # case "interpret-blocks":
+        #     return_code = handle_interpret_blocks_command(
+        #         block_ids=args.block_ids,
+        #         file_ref=args.file_ref,
+        #         by_path=args.by_path,
+        #         extra_context=args.extra_context,
+        #         ai_model=args.ai_model,
+        #         ai_base_url=args.ai_base_url,
+        #         ai_api_key=args.ai_api_key,
+        #         workers=args.workers,
+        #         dry=args.dry,
+        #     )
 
-        case "interpret-block":
-            return_code = handle_interpret_blocks_command(
-                block_ids=[args.entity_id],
-                file_ref=None,
-                by_path=False,
-                extra_context=args.extra_context,
-                ai_model=args.ai_model,
-                ai_base_url=args.ai_base_url,
-                ai_api_key=args.ai_api_key,
-                workers=1,
-                dry=args.dry,
-            )
+        # case "interpret-block":
+        #     return_code = handle_interpret_blocks_command(
+        #         block_ids=[args.entity_id],
+        #         file_ref=None,
+        #         by_path=False,
+        #         extra_context=args.extra_context,
+        #         ai_model=args.ai_model,
+        #         ai_base_url=args.ai_base_url,
+        #         ai_api_key=args.ai_api_key,
+        #         workers=1,
+        #         dry=args.dry,
+        #     )
 
-        case "find-mleader-nearest":
-            return_code = handle_find_mleader_nearest_command(
-                file_ref=args.file_ref,
-                by_path=args.by_path,
-                search_types=args.search_types,
-            )
+        # case "find-mleader-nearest":
+        #     return_code = handle_find_mleader_nearest_command(
+        #         file_ref=args.file_ref,
+        #         by_path=args.by_path,
+        #         search_types=args.search_types,
+        #     )
 
-        case "verify-extraction":
-            return_code = handle_verify_extraction_command(
-                drawing_path=Path(args.drawing),
-                file_id=args.file_id,
-            )
+        # case "verify-extraction":
+        #     return_code = handle_verify_extraction_command(
+        #         drawing_path=Path(args.drawing),
+        #         file_id=args.file_id,
+        #     )
 
-        case "ingest-docs" | "process-docs":
-            return_code = handle_process_docs_command(Path(args.path))
+        # case "ingest-docs" | "process-docs":
+        #     return_code = handle_process_docs_command(Path(args.path))
 
         case "project-add":
             return_code = handle_project_add_command(
@@ -2091,118 +2020,118 @@ def main(argv: list[str] | None = None) -> int:
         case "category-list":
             return_code = handle_category_list_command(parent_id=args.parent_id)
 
-        case "search":
-            output_path = Path(args.output) if args.output else None
-            return_code = handle_search_command(
-                query=args.query,
-                entity_type=args.type,
-                limit=args.limit,
-                output_path=output_path,
-                parent_id=args.parent_id,
-            )
+        # case "search":
+        #     output_path = Path(args.output) if args.output else None
+        #     return_code = handle_search_command(
+        #         query=args.query,
+        #         entity_type=args.type,
+        #         limit=args.limit,
+        #         output_path=output_path,
+        #         parent_id=args.parent_id,
+        #     )
 
-        case "index":
-            return_code = handle_index_command(
-                entity_type=args.type,
-                batch_size=args.batch_size,
-                reindex=args.reindex,
-            )
+        # case "index":
+        #     return_code = handle_index_command(
+        #         entity_type=args.type,
+        #         batch_size=args.batch_size,
+        #         reindex=args.reindex,
+        #     )
 
-        case "ask":
-            output_path = Path(args.output) if args.output else None
-            return_code = handle_ask_command(
-                question=args.question,
-                entity_type=args.type,
-                top_k=args.top_k,
-                output_path=output_path,
-            )
+        # case "ask":
+        #     output_path = Path(args.output) if args.output else None
+        #     return_code = handle_ask_command(
+        #         question=args.question,
+        #         entity_type=args.type,
+        #         top_k=args.top_k,
+        #         output_path=output_path,
+        #     )
 
-        case "extract-block":
-            explorer = DXFExplorer(args.drawing)
-            return_code = explorer.extract_block(args.block_name)
+        # case "extract-block":
+        #     explorer = DXFExplorer(args.file_path)
+        #     return_code = explorer.extract_block(args.block_name)
 
-        case "describe-block":
-            return_code = handle_describe_block_command(
-                drawing_path=Path(args.drawing),
-                block_name=args.block_name,
-                output_path=Path(args.output) if args.output else None,
-            )
+        # case "describe-block":
+        #     return_code = handle_describe_block_command(
+        #         drawing_path=Path(args.file_path),
+        #         block_name=args.block_name,
+        #         output_path=Path(args.output) if args.output else None,
+        #     )
 
-        case "export-block-png":
-            return_code = handle_export_block_png_command(
-                drawing_path=Path(args.drawing),
-                block_name=args.block_name,
-                output_path=Path(args.output) if args.output else None,
-                dpi=args.dpi,
-            )
+        # case "export-block-png":
+        #     return_code = handle_export_block_png_command(
+        #         drawing_path=Path(args.file_path),
+        #         block_name=args.block_name,
+        #         output_path=Path(args.output) if args.output else None,
+        #         dpi=args.dpi,
+        #     )
 
-        case "export-block-svg":
-            return_code = handle_export_block_svg_command(
-                drawing_path=Path(args.drawing),
-                block_name=args.block_name,
-                output_path=Path(args.output) if args.output else None,
-            )
+        # case "export-block-svg":
+        #     return_code = handle_export_block_svg_command(
+        #         drawing_path=Path(args.file_path),
+        #         block_name=args.block_name,
+        #         output_path=Path(args.output) if args.output else None,
+        #     )
 
-        case "export-block-dxf":
-            return_code = handle_export_block_dxf_command(
-                drawing_path=Path(args.drawing),
-                block_name=args.block_name,
-                output_path=Path(args.output) if args.output else None,
-            )
+        # case "export-block-dxf":
+        #     return_code = handle_export_block_dxf_command(
+        #         drawing_path=Path(args.file_path),
+        #         block_name=args.block_name,
+        #         output_path=Path(args.output) if args.output else None,
+        #     )
 
-        case "file-stat":
-            drawing_path = Path(args.drawing)
-            output_path = Path(args.output) if args.output else drawing_path.with_suffix(".xlsx")
-            project = args.project or ""
-            explorer = DXFExplorer(drawing_path)
-            explorer.export_file_stat(output_path, project=project)
+        # case "file-stat":
+        #     drawing_path = Path(args.drawing)
+        #     output_path = Path(args.output) if args.output else drawing_path.with_suffix(".xlsx")
+        #     project = args.project or ""
+        #     explorer = DXFExplorer(drawing_path)
+        #     explorer.export_file_stat(output_path, project=project)
 
 
-            if args.db_tables_by_id:
-                from .db import get_file_id_by_source, get_table_blocks_by_file_id
-                file_id = asyncio.run(get_file_id_by_source(str(drawing_path)))
-                if file_id:
-                    table_blocks = asyncio.run(get_table_blocks_by_file_id(file_id))
-                    exported_tables = explorer.export_tables_from_db(
-                        table_blocks=table_blocks,
-                        output_dir=output_path.parent,
-                    )
-                    out(f"Таблиц из БД по file_id выгружено: {len(exported_tables)}")
-                else:
-                    out("file_id не найден для данного файла (source_ref)")
+        #     if args.db_tables_by_id:
+        #         from .db import get_file_id_by_source, get_table_blocks_by_file_id
+        #         file_id = asyncio.run(get_file_id_by_source(str(drawing_path)))
+        #         if file_id:
+        #             table_blocks = asyncio.run(get_table_blocks_by_file_id(file_id))
+        #             exported_tables = explorer.export_tables_from_db(
+        #                 table_blocks=table_blocks,
+        #                 output_dir=output_path.parent,
+        #             )
+        #             out(f"Таблиц из БД по file_id выгружено: {len(exported_tables)}")
+        #         else:
+        #             out("file_id не найден для данного файла (source_ref)")
 
-            elif args.db_tables:
-                from .db import get_table_blocks_for_source
-                table_blocks = asyncio.run(get_table_blocks_for_source(str(drawing_path)))
-                exported_tables = explorer.export_tables_from_db(
-                    table_blocks=table_blocks,
-                    output_dir=output_path.parent,
-                )
-                out(f"Таблиц из БД по source_ref выгружено: {len(exported_tables)}")
+        #     elif args.db_tables:
+        #         from .db import get_table_blocks_for_source
+        #         table_blocks = asyncio.run(get_table_blocks_for_source(str(drawing_path)))
+        #         exported_tables = explorer.export_tables_from_db(
+        #             table_blocks=table_blocks,
+        #             output_dir=output_path.parent,
+        #         )
+        #         out(f"Таблиц из БД по source_ref выгружено: {len(exported_tables)}")
 
-            out(f"Статистика сохранена: {output_path}")
-            return_code = constants.OK
+        #     out(f"Статистика сохранена: {output_path}")
+        #     return_code = constants.OK
 
-        case "file-stat-from-db":
-            return_code = handle_file_stat_from_db_command(
-                file_ref=args.file_ref,
-                by_path=args.by_path,
-                output_path=Path(args.output) if args.output else None,
-            )
+        # case "file-stat-from-db":
+        #     return_code = handle_file_stat_from_db_command(
+        #         file_ref=args.file_ref,
+        #         by_path=args.by_path,
+        #         output_path=Path(args.output) if args.output else None,
+        #     )
 
-        case "export-blocks-xlsx":
-            return_code = handle_export_blocks_xlsx_command(
-                file_ref=args.file_ref,
-                by_path=args.by_path,
-                output_path=Path(args.output) if args.output else None,
-            )
+        # case "export-blocks-xlsx":
+        #     return_code = handle_export_blocks_xlsx_command(
+        #         file_ref=args.file_ref,
+        #         by_path=args.by_path,
+        #         output_path=Path(args.output) if args.output else None,
+        #     )
 
-        case "export-blocks-table":
-            return_code = handle_export_blocks_table_command(
-                file_ref=args.file_ref,
-                by_path=args.by_path,
-                output_path=Path(args.output) if args.output else None,
-            )
+        # case "export-blocks-table":
+        #     return_code = handle_export_blocks_table_command(
+        #         file_ref=args.file_ref,
+        #         by_path=args.by_path,
+        #         output_path=Path(args.output) if args.output else None,
+        #     )
 
 
     return return_code

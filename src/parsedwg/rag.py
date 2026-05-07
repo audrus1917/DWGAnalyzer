@@ -21,12 +21,12 @@ from .settings import settings
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_BASE_URL = settings.ollama_base_url
-EMBED_MODEL = settings.ollama_embed_model
-LLM_MODEL = settings.ollama_llm_model
+OLLAMA_BASE_URL = settings.ai_base_url
+EMBED_MODEL = settings.ai_embed_model
+LLM_MODEL = settings.ai_model
 EMBED_DIM = 768
 # Timeout for Ollama requests; generation may take a while.
-_TIMEOUT = httpx.Timeout(settings.ollama_timeout_seconds)
+_TIMEOUT = httpx.Timeout(settings.ai_timeout_seconds)
 _QUESTION_TERM_PATTERNS = (
     re.compile(
         (

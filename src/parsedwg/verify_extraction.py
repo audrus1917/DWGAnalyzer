@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import aliased
 
 from .db import async_session_factory
-from .orm import Entity, EntityToEntity, EntityType
+from .orm import Entity, EntityType, Primitive
 from .process_tree import collect_dxf_summary
 
 
@@ -108,6 +108,12 @@ def _safe_int(value: object) -> int:
         return 0
 
 
+def _entity_type_name(value: object) -> str:
+    if isinstance(value, EntityType):
+        return value.name
+    return str(value)
+
+
 def _collect_expected_layer_names(source_summary: dict[str, Any]) -> set[str]:
     layers_payload = source_summary.get("layers")
     if isinstance(layers_payload, list):
@@ -146,8 +152,8 @@ def build_verification_report(
     layouts = cast(list[Entity], db_snapshot["layouts"])
     layers = cast(list[Entity], db_snapshot["layers"])
     blocks = cast(list[Entity], db_snapshot["blocks"])
-    primitives = cast(list[Entity], db_snapshot["primitives"])
-    on_layer_links = cast(set[tuple[uuid.UUID, uuid.UUID]], db_snapshot["on_layer_links"])
+    primitives = cast(list[Primitive], db_snapshot["primitives"])
+    on_layer_links = cast(set[tuple[uuid.UUID, uuid.UUID]], db_snapshot.get("on_layer_links", set()))
 
     expected_layout_names = {
         str(layout.get("name", "")).strip()
@@ -202,7 +208,7 @@ def build_verification_report(
         [
             {
                 "block": (primitive.data or {}).get("block"),
-                "type": primitive.entity_type,
+                "type": _entity_type_name(primitive.entity_type),
             }
             for primitive in primitives
         ]
@@ -215,7 +221,7 @@ def build_verification_report(
     block_names = {block.name for block in blocks}
     unresolved_inserts: list[str] = []
     for primitive in primitives:
-        if primitive.entity_type != "INSERT":
+        if _entity_type_name(primitive.entity_type) != "INSERT":
             continue
         primitive_data = primitive.data or {}
         target_block = str(primitive_data.get("target_block", "")).strip()
@@ -237,17 +243,29 @@ def build_verification_report(
             )
             continue
 
-        if (primitive.id, layer_entity.id) not in on_layer_links:
+        primitive_layer_id = getattr(primitive, "layer_id", None)
+        if primitive_layer_id is not None:
+            has_layer_link = primitive_layer_id == layer_entity.id
+        else:
+            has_layer_link = (primitive.id, layer_entity.id) in on_layer_links
+
+        if not has_layer_link:
             missing_layer_links.append(
                 f"primitive={primitive.id} layer={layer_name!r}: missing on_layer link"
             )
 
     wrong_file_id_entities: list[str] = []
-    for entity in [*layouts, *layers, *blocks, *primitives]:
+    for entity in [*layouts, *layers, *blocks]:
         if entity.file_id == file_entity.id:
             continue
         wrong_file_id_entities.append(
             f"entity={entity.id} type={entity.entity_type} name={entity.name!r} file_id={entity.file_id}"
+        )
+    for primitive in primitives:
+        if primitive.file_id == file_entity.id:
+            continue
+        wrong_file_id_entities.append(
+            f"entity={primitive.id} type={primitive.entity_type} name={primitive.name!r} file_id={primitive.file_id}"
         )
 
     ok = not any(
@@ -391,8 +409,6 @@ async def _load_db_snapshot(file_entity: Entity) -> dict[str, object]:
         )
         blocks = block_result.scalars().all()
 
-        block_ids = [block.id for block in blocks]
-
         if file_entity.id is not None:
             layer_result = await session.execute(
                 select(Entity)
@@ -404,33 +420,12 @@ async def _load_db_snapshot(file_entity: Entity) -> dict[str, object]:
         else:
             layers = []
 
-        if block_ids:
-            parent_alias = aliased(Entity)
-            primitive_result = await session.execute(
-                select(Entity)
-                .join(parent_alias, Entity.parent_id == parent_alias.id)
-                .where(parent_alias.id.in_(block_ids))
-                .order_by(Entity.created_at.asc())
-            )
-            primitives = primitive_result.scalars().all()
-        else:
-            primitives = []
-
-        if primitives:
-            layer_ids = [layer.id for layer in layers]
-            link_result = await session.execute(
-                select(EntityToEntity.src_id, EntityToEntity.dst_id)
-                .join(Entity, Entity.id == EntityToEntity.src_id)
-                .where(
-                    EntityToEntity.link == "on_layer",
-                    Entity.is_primitive.is_(True),
-                    EntityToEntity.dst_id.in_(layer_ids),
-                )
-            )
-            on_layer_links = set(link_result.all())
-            logger.debug("Загружено %d связей on_layer", len(on_layer_links))
-        else:
-            on_layer_links = set()
+        primitive_result = await session.execute(
+            select(Primitive)
+            .where(Primitive.file_id == file_entity.id)
+            .order_by(Primitive.id.asc())
+        )
+        primitives = primitive_result.scalars().all()
 
     return {
         "file_entity": file_entity,
@@ -438,7 +433,6 @@ async def _load_db_snapshot(file_entity: Entity) -> dict[str, object]:
         "layers": layers,
         "blocks": blocks,
         "primitives": primitives,
-        "on_layer_links": on_layer_links,
     }
 
 

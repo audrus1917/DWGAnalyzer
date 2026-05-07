@@ -827,41 +827,12 @@ def build_args_parser() -> argparse.ArgumentParser:
     return parser
 
 
-class CustomFormatter(logging.Formatter):
-    """Log formatter that changes the message shape by log level."""
-
-    FORMATS = {
-        logging.DEBUG: "[DEBUG] %(name)s: %(message)s",
-        logging.INFO: "%(message)s",
-        logging.WARNING: "WARNING: %(message)s (%(filename)s:%(lineno)d)",
-        logging.ERROR: "ERROR!!! %(asctime)s - %(message)s",
-        logging.CRITICAL: "CRITICAL FAILURE: %(message)s"
-    }
-
-    def format(self, record):
-        log_fmt = self.FORMATS.get(record.levelno, "%(levelname)s: %(message)s")
-        formatter = logging.Formatter(log_fmt)
-        return formatter.format(record)
-    
-
-def out(value: Any) -> None:
-    """Write a value to stdout.
-
-    Alias for :func:`print` to keep call sites distinct from temporary debugging.
-    """
-
-    print(value)
-
-
 def safe_float(value: Any) -> float | None:
     try:
         return float(value)
     except (TypeError, ValueError):
         return None
 
-
-import ezdxf
-from ezdxf.math import Vec3
 
 def get_mleader_target_point(mleader):
     """Extract the point targeted by the first leader arrow."""

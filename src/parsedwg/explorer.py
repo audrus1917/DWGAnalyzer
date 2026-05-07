@@ -30,28 +30,27 @@ type ExplorerRow = dict[str, object]
 class DXFExplorer:
     """Inspect DWG/DXF files and perform related operations."""
 
-    def __init__(self, drawing: Path | str):
-        self.drawing = Path(drawing)
-        if not self.drawing.is_file():
-            logger.error("Файл %s не найден.", self.drawing)
-            raise FileNotFoundError(f"Файл {self.drawing} не найден.")
+    def __init__(self, file_path: Path | str):
+        self.file_path = Path(file_path)
+        if not self.file_path.is_file():
+            logger.error("Файл %s не найден.", self.file_path)
+            raise FileNotFoundError(f"Файл {self.file_path} не найден.")
 
-        size_mb = self.drawing.stat().st_size / (1024 * 1024)
-        logger.info("Обрабатываемый файл: %s", self.drawing)
-        logger.info("Размер файла: %.2f МБ", size_mb)
+        size_mb = self.file_path.stat().st_size / (1024 * 1024)
+        logger.debug("Обрабатываемый файл: %s", self.file_path)
+        logger.debug("Размер файла: %.2f МБ", size_mb)
 
-    def _read_document(self) -> Drawing:
+    def read_drawing(self) -> Drawing:
         """Read a DWG/DXF file and return an ezdxf document object."""
 
-        logger.debug("Читаем файл через ezdxf: %s", self.drawing)
-        if self.drawing.suffix.lower() == ".dwg":
-            logger.info(
+        if self.file_path.suffix.lower() == ".dwg":
+            logger.debug(
                 "Файл %s имеет формат DWG, сначала конвертируем его в DXF.",
-                self.drawing,
+                self.file_path,
             )
-            return read_odafc(self.drawing, "ACAD2018")
+            return read_odafc(self.file_path, "ACAD2018")
         else:
-            return readfile(self.drawing)
+            return readfile(self.file_path)
 
     @staticmethod
     def format_point(point: object | None) -> str:
@@ -227,12 +226,12 @@ class DXFExplorer:
         title: str,
         output_dir: Path | None = None,
     ) -> Path:
-        fallback_name = f"{self.drawing.stem}-{block_name}"
+        fallback_name = f"{self.file_path.stem}-{block_name}"
         file_stem = title or fallback_name
         safe_file_name = re.sub(r"[^0-9A-Za-zА-Яа-я._-]+", "_", file_stem).strip("_")
         safe_file_name = safe_file_name or fallback_name
         safe_sheet_name = re.sub(r"[^0-9A-Za-zА-Яа-я._-]+", "_", block_name).strip("_") or "block"
-        target_dir = output_dir or self.drawing.parent
+        target_dir = output_dir or self.file_path.parent
         target_dir.mkdir(parents=True, exist_ok=True)
         output_path = target_dir / f"{safe_file_name}.xlsx"
 
@@ -344,11 +343,11 @@ class DXFExplorer:
     def list_layouts(self) -> list[ExplorerRow]:
         """Return layouts for the current DXF/DWG file."""
 
-        logger.info("Считываем layout'ы для файла: %s", self.drawing)
-        doc = self._read_document()
+        logger.info("Считываем layout'ы для файла: %s", self.file_path)
+        doc = self.read_drawing()
         return [
             {
-                "drawing": str(self.drawing),
+                "drawing": str(self.file_path),
                 "layout": layout.name,
                 "layers": self._get_layout_layers(doc, layout),
             }
@@ -358,14 +357,14 @@ class DXFExplorer:
     def list_blocks(self) -> list[ExplorerRow]:
         """Return blocks for the current DXF/DWG file."""
 
-        logger.info("Считываем блоки для файла: %s", self.drawing)
-        doc = self._read_document()
+        logger.info("Считываем блоки для файла: %s", self.file_path)
+        doc = self.read_drawing()
         rows: list[ExplorerRow] = []
         for block in doc.blocks:
             logger.debug("Block: %s", block.name)
             rows.append(
                 {
-                    "drawing": str(self.drawing),
+                    "drawing": str(self.file_path),
                     "block": block.name,
                     "entity_count": sum(1 for _ in block),
                 }
@@ -436,8 +435,8 @@ class DXFExplorer:
     def describe_block(self, block_name: str) -> dict[str, Any]:
         """Return a JSON-serializable description of a block from the source file."""
 
-        logger.info("Собираем описание блока '%s' из файла: %s", block_name, self.drawing)
-        doc = self._read_document()
+        logger.info("Собираем описание блока '%s' из файла: %s", block_name, self.file_path)
+        doc = self.read_drawing()
         block = doc.blocks.get(block_name)
         if block is None:
             logger.error("Блок '%s' не найден в файле.", block_name)
@@ -449,8 +448,8 @@ class DXFExplorer:
     def list_layer_names(self) -> list[str]:
         """Return layer names for the current DXF/DWG file."""
 
-        logger.info("Считываем слои для файла: %s", self.drawing)
-        doc = self._read_document()
+        logger.info("Считываем слои для файла: %s", self.file_path)
+        doc = self.read_drawing()
         return sorted(
             str(layer.dxf.name)
             for layer in doc.layers
@@ -458,8 +457,8 @@ class DXFExplorer:
         )
 
     def extract_block(self, block_name: str) -> int:
-        logger.info("Извлекаем блок '%s' из файла: %s", block_name, self.drawing)
-        doc = self._read_document()
+        logger.info("Извлекаем блок '%s' из файла: %s", block_name, self.file_path)
+        doc = self.read_drawing()
         block = doc.blocks.get(block_name)
         if block is None:
             logger.error("Блок '%s' не найден в файле.", block_name)
@@ -521,8 +520,8 @@ class DXFExplorer:
     def export_block_dxf(self, block_name: str) -> str:
         """Return DXF text for the selected block."""
 
-        logger.info("Экспортируем DXF-текст блока '%s' из файла: %s", block_name, self.drawing)
-        doc = self._read_document()
+        logger.info("Экспортируем DXF-текст блока '%s' из файла: %s", block_name, self.file_path)
+        doc = self.read_drawing()
         block = doc.blocks.get(block_name)
         if block is None:
             logger.error("Блок '%s' не найден в файле.", block_name)
@@ -562,9 +561,9 @@ class DXFExplorer:
             "Экспортируем блок '%s' в %s из файла: %s",
             block_name,
             normalized_format.upper(),
-            self.drawing,
+            self.file_path,
         )
-        doc = self._read_document()
+        doc = self.read_drawing()
         block = doc.blocks.get(block_name)
         if block is None:
             logger.error("Блок '%s' не найден в файле.", block_name)
@@ -593,8 +592,8 @@ class DXFExplorer:
 
         if output_path is None:
             resolved_output_path = self._make_default_export_path(
-                self.drawing,
-                f"{self.drawing.stem}-{block_name}",
+                self.file_path,
+                f"{self.file_path.stem}-{block_name}",
                 f".{normalized_format}",
             )
         else:
@@ -673,8 +672,8 @@ class DXFExplorer:
 
     def export_file_stat(self, output_path: Path, project: str = "") -> Path:
         """Collect DXF/DWG file statistics and save them to an XLSX workbook."""
-        logger.info("Собираем статистику файла: %s", self.drawing)
-        doc = self._read_document()
+        logger.info("Собираем статистику файла: %s", self.file_path)
+        doc = self.read_drawing()
 
         wb = Workbook()
         # --- Sheet 1: File ---
@@ -682,9 +681,9 @@ class DXFExplorer:
         ws_file.title = "Файл"
         ws_file.append(["Параметр", "Значение"])
         self._apply_header_style(ws_file, 1)
-        md5 = self._md5_file(self.drawing)
-        parent_dirs = [str(p) for p in reversed(self.drawing.parents)]
-        ws_file.append(["Имя файла", self.drawing.name])
+        md5 = self._md5_file(self.file_path)
+        parent_dirs = [str(p) for p in reversed(self.file_path.parents)]
+        ws_file.append(["Имя файла", self.file_path.name])
         ws_file.append(["MD5", md5])
         ws_file.append(["Родительские каталоги", " / ".join(parent_dirs)])
         ws_file.append(["Проект", project])

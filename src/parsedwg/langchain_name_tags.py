@@ -679,12 +679,9 @@ def clean_cad_name(name):
     # 1. Try to fix a common encoding issue (cp1251 -> utf-8).
     # If the name looks like mojibake, this block may help.
     # If the data is already UTF-8, this step is skipped.
-    try:
-        # Check for symbols that usually indicate broken encoding.
-        if any(c in name for c in "РЎР"): 
-            name = name.encode('cp1252').decode('cp1251')
-    except Exception:
-        pass
+    # Check for symbols that usually indicate broken encoding.
+    if any(c in name for c in "РЎР"):
+        name = name.encode('cp1252', errors='ignore').decode('cp1251', errors='ignore')
 
     # 2. Remove service noise (RECOVER, COPY, and special symbols $, #, @, %).
     name = re.sub(r'^(RECOVER|COPY|TMP|TEMP)_+', '', name, flags=re.IGNORECASE)
@@ -749,15 +746,14 @@ def call_ollama_name_meaning(
     import urllib.error
     import urllib.request
 
-    content = build_name_meaning_prompt(name=name, extra_context=extra_context)
-    content = content
+    prompt_text = build_name_meaning_prompt(name=name, extra_context=extra_context)
     payload = json.dumps({
         "model": model,
-        "messages": [{"role": "user", "content": content}],
+        "messages": [{"role": "user", "content": prompt_text}],
         "stream": False,
     }).encode()
 
-    api_key = settings.ollama_api_key
+    api_key = settings.ai_api_key
 
     req = urllib.request.Request(
         chat_url,
