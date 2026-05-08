@@ -87,7 +87,7 @@ def _extract_dxf_text(path: Path) -> str:
 
 
 def convert_dwg(path: Path) -> Path:
-    """Convert DWG to DXF and return the path to the temporary DXF file."""
+    """Конвертирует DWG в DXF и возвращает путь к временному DXF-файлу."""
 
     converter = shutil.which("ODAFileConverter") or shutil.which("odafc")
     if converter is None:

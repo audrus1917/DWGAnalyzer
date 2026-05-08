@@ -1,4 +1,4 @@
-"""Verify that a DWG/DXF file is stored correctly in the current database."""
+"""Проверяет, что DWG/DXF-файл корректно сохранён в текущей базе данных."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from sqlalchemy.orm import aliased
 
 from .db import async_session_factory
 from .orm import Entity, EntityType, Primitive
-from .process_tree import collect_dxf_summary
+from .process_source import collect_dxf_summary
 
 
 type PrimitiveCountMap = dict[str, dict[str, int]]
@@ -146,7 +146,7 @@ def build_verification_report(
     source_summary: dict[str, Any],
     db_snapshot: dict[str, object],
 ) -> dict[str, object]:
-    """Build the final verification report from a file summary and DB snapshot."""
+    """Строит итоговый отчёт проверки по сводке файла и снимку БД."""
 
     file_entity = cast(Entity, db_snapshot["file_entity"])
     layouts = cast(list[Entity], db_snapshot["layouts"])
@@ -310,7 +310,7 @@ def build_verification_report(
 
 
 def format_verification_report(report: dict[str, object]) -> str:
-    """Format the report as CLI-friendly text."""
+    """Форматирует отчёт в текст, удобный для CLI."""
 
     layouts = cast(dict[str, object], report["layouts"])
     blocks = cast(dict[str, object], report["blocks"])
@@ -437,7 +437,7 @@ async def _load_db_snapshot(file_entity: Entity) -> dict[str, object]:
 
 
 async def verify_extraction(path: Path, file_id: str | None = None) -> dict[str, object]:
-    """Compare a DWG/DXF file with what is stored in the current database."""
+    """Сравнивает DWG/DXF-файл с тем, что сохранено в текущей базе данных."""
 
     resolved_path = path.expanduser().resolve()
     if not resolved_path.exists():

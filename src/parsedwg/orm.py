@@ -1,4 +1,4 @@
-"""The main models."""
+"""Основные модели."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def _get_now() -> datetime:
 
 
 class Project(Base):
-    """A project is a collection of entities, typically representing a single document or data source."""
+    """Проект — это набор сущностей, обычно представляющий один документ или источник данных."""
 
     __tablename__ = "project"
 
@@ -83,7 +83,7 @@ class Category(Base):
 
 
 class Entity(Base):
-    """An entity represents a piece of information extracted from documents."""
+    """Сущность представляет единицу информации, извлечённую из документов."""
 
     __tablename__ = "entity"
 
@@ -211,7 +211,7 @@ class Primitive(Base):
 
 
 class EntityEmbedding(Base):
-    """Embeddings and AI interpretations for an entity."""
+    """Эмбеддинги и AI-интерпретации для сущности."""
     __tablename__ = "entity_embedding"
 
     entity_id: Mapped[int] = mapped_column(

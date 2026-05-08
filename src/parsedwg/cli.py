@@ -1,4 +1,4 @@
-"""Console entry point for working with DWG/DXF."""
+"""Консольная точка входа для работы с DWG/DXF."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import sys
-import tempfile
 import time
 
 from pathlib import Path
@@ -15,15 +14,21 @@ from src.parsedwg.langchain_name_tags import LangChainAgentConfig, LangChainName
 
 
 from src.parsedwg import constants
-from src.parsedwg.dxf_analyzer import DXFAnalyzer
 from src.parsedwg.settings import settings, get_ai_settings
 from src.parsedwg.explorer import DXFExplorer
 from src.parsedwg.docs_ingest import run_documents_ingest
+from src.parsedwg.utils import (
+    print_as_table,
+    _write_progress_line,
+    _finish_progress_line,
+    _format_duration_seconds,
+    _save_rows_to_json,
+    _save_payload_to_json
+)
 from src.parsedwg.utils.args import build_args_parser
 from src.parsedwg.commands.process import handle_process_command
+from src.parsedwg.constants import ResultRow
 
-
-type ResultRow = dict[str, object]
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -35,77 +40,6 @@ logging.getLogger('matplotlib.font_manager').disabled = True
 logger = logging.getLogger(__name__)
 
 
-def _write_progress_line(message: str, previous_width: int = 0) -> int:
-    """Update a single progress line in stdout."""
-
-    width = max(previous_width, len(message))
-    sys.stdout.write("\r" + message.ljust(width))
-    sys.stdout.flush()
-    return width
-
-
-def _finish_progress_line(width: int) -> None:
-    """Finish the progress line with a newline."""
-
-    if width <= 0:
-        return
-    sys.stdout.write("\n")
-    sys.stdout.flush()
-
-
-def _format_duration_seconds(duration_seconds: float) -> str:
-    """Format processing duration in seconds."""
-
-    return f"{duration_seconds:.2f} c"
-
-def _save_rows_to_json(output_path: Path, rows: list[ResultRow]) -> None:
-    """Save result rows to a JSON file."""
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(rows, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-
-def _save_payload_to_json(output_path: Path, payload: object) -> None:
-    """Save any JSON-serializable payload to a file."""
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-
-def as_table(rows: list[ResultRow]) -> str:
-    """Format result rows as a simple ASCII table."""
-
-    if not rows:
-        return "Нет данных."
-
-    columns = list(rows[0].keys())
-    prepared_rows = [[str(row.get(column, "")) for column in columns] for row in rows]
-    widths = {
-        column: max(len(column), *(len(values[index]) for values in prepared_rows))
-        for index, column in enumerate(columns)
-    }
-
-    header = " | ".join(column.ljust(widths[column]) for column in columns)
-    separator = "-+-".join("-" * widths[column] for column in columns)
-    body = [
-        " | ".join(values[index].ljust(widths[column]) for index, column in enumerate(columns))
-        for values in prepared_rows
-    ]
-    return "\n".join([header, separator, *body])
-
-
-def print_as_table(rows: list[ResultRow]) -> None:
-    """Print result rows as a table."""
-
-    print(as_table(rows))
-
-
 def handle_search_command(
     query: str,
     entity_type: str | None,
@@ -113,13 +47,13 @@ def handle_search_command(
     output_path: Path | None,
     parent_id: str | None = None,
 ) -> int:
-    """Run full-text search against the PostgreSQL entity table."""
+    """Выполняет полнотекстовый поиск по таблице сущностей PostgreSQL."""
     from .db import search_entities
 
     rows: list[ResultRow] = asyncio.run(search_entities(query, entity_type, limit, parent_id))
 
     if not rows:
-        print("Нет результатов.")
+        logger.warning("Нет результатов.")
         return constants.OK
 
     if output_path is not None:
@@ -136,7 +70,7 @@ def handle_index_command(
     batch_size: int,
     reindex: bool,
 ) -> int:
-    """Generate and store embeddings for DB entities."""
+    """Генерирует и сохраняет эмбеддинги для сущностей из БД."""
     from .rag import index_entities
 
     count = asyncio.run(index_entities(entity_type, batch_size, reindex))
@@ -150,7 +84,7 @@ def handle_ask_command(
     top_k: int,
     output_path: Path | None,
 ) -> int:
-    """RAG request: vector search plus answer generation via llama."""
+    """Выполняет RAG-запрос: векторный поиск и генерацию ответа через llama."""
     from .rag import ask
 
     result: ResultRow = asyncio.run(ask(question, entity_type, top_k))
@@ -168,7 +102,7 @@ def handle_ask_command(
 
 
 def handle_process_docs_command(source_path: Path) -> int:
-    """Recursively index PDF/DOCX/XLSX/CSV documents into the entity table."""
+    """Рекурсивно индексирует PDF/DOCX/XLSX/CSV-документы в таблицу сущностей."""
 
     summary = run_documents_ingest(source_path)
     print(f"Найдено документов: {summary['doc_count']}")
@@ -183,7 +117,7 @@ def handle_export_block_png_command(
     output_path: Path | None,
     dpi: int,
 ) -> int:
-    """Export the selected block to PNG."""
+    """Экспортирует выбранный блок в PNG."""
 
     try:
         explorer = DXFExplorer(drawing_path)
@@ -200,7 +134,7 @@ def handle_export_block_svg_command(
     block_name: str,
     output_path: Path | None,
 ) -> int:
-    """Export the selected block to SVG."""
+    """Экспортирует выбранный блок в SVG."""
 
     try:
         explorer = DXFExplorer(drawing_path)
@@ -217,7 +151,7 @@ def handle_export_block_dxf_command(
     block_name: str,
     output_path: Path | None,
 ) -> int:
-    """Return DXF text for the selected block."""
+    """Возвращает DXF-текст для выбранного блока."""
 
     try:
         explorer = DXFExplorer(drawing_path)
@@ -244,7 +178,7 @@ def handle_describe_block_command(
     block_name: str,
     output_path: Path | None,
 ) -> int:
-    """Read a drawing file and return a description of the selected block."""
+    """Читает файл чертежа и возвращает описание выбранного блока."""
 
     try:
         explorer = DXFExplorer(drawing_path)
@@ -270,7 +204,7 @@ def handle_extract_name_tags_command(
     ai_base_url: str = "http://localhost:11434/v1",
     ai_api_key: str = "ollama",
 ) -> int:
-    """Extract semantic tags from file and directory names."""
+    """Извлекает семантические теги из имён файлов и каталогов."""
     from .name_tags import collect_name_tags
 
     try:
@@ -316,7 +250,7 @@ def handle_extract_token_tags_command(
     ai_api_key: str = "ollama",
     with_scores: bool = False,
 ) -> int:
-    """Extract a JSON mapping of meanings via LLM for a token list."""
+    """Извлекает через LLM JSON-отображение смыслов для списка токенов."""
     token_context = "строительство, чертеж"
 
     try:
@@ -372,7 +306,7 @@ def handle_extract_token_tags_command(
 
 
 def _derive_ollama_chat_url(base_url: str) -> str:
-    """Build an Ollama /api/chat URL from an OpenAI-compatible base URL."""
+    """Строит URL Ollama /api/chat из OpenAI-совместимого base URL."""
     stripped = base_url.rstrip("/")
     if stripped.endswith("/v1"):
         stripped = stripped[:-3]
@@ -387,7 +321,7 @@ def handle_extract_name_meaning_command(
     ai_base_url: str = "http://localhost:11434/v1",
     ai_api_key: str = "ollama",
 ) -> int:
-    """Analyze a title or DB entity name via LLM."""
+    """Анализирует заголовок или имя сущности из БД через LLM."""
     from .db import get_entity_name_by_id
     from .langchain_name_tags import call_ollama_name_meaning
 
@@ -436,7 +370,7 @@ def handle_explain_block_command(
     ai_base_url: str = "http://localhost:11434/v1",
     ai_api_key: str = "ollama",
 ) -> int:
-    """Fetch a block name by UUID from the DB and analyze it via LLM."""
+    """Получает имя блока по UUID из БД и анализирует его через LLM."""
     _ = ai_api_key  # Ollama /api/chat не требует авторизации
 
     from .db import get_entity_name_by_id
@@ -472,7 +406,7 @@ def handle_categorize_entities_command(
     workers: int = 1,
     dry: bool = False,
 ) -> int:
-    """Extract semantic categories for entities and link them in the DB."""
+    """Извлекает семантические категории для сущностей и связывает их в БД."""
     extra_context = "строительство, чертеж"
 
     from .db import assign_semantic_category, list_entities_for_semantic_categorization
@@ -654,9 +588,9 @@ def handle_interpret_entities_command(
     workers: int = 1,
     dry: bool = False,
 ) -> int:
-    """Request LLM name interpretations for entities by id or type.
+    """Запрашивает у LLM интерпретации имён сущностей по id или типу.
 
-    Save the result into entity embedding interpretation fields.
+    Сохраняет результат в поля интерпретации entity embedding.
     """
 
     logger.info("Стартуем")
@@ -868,7 +802,7 @@ def handle_interpret_blocks_command(
     workers: int = 1,
     dry: bool = False,
 ) -> int:
-    """Interpret blocks and save short/full interpretations."""
+    """Интерпретирует блоки и сохраняет краткие и полные интерпретации."""
 
     from .db import (
         get_file_id_by_source,
@@ -1127,7 +1061,7 @@ def handle_verify_extraction_command(
     drawing_path: Path,
     file_id: str | None = None,
 ) -> int:
-    """Compare DWG/DXF file contents with what is already stored in the DB."""
+    """Сравнивает содержимое DWG/DXF-файла с тем, что уже сохранено в БД."""
 
     from .verify_extraction import format_verification_report, verify_extraction
 
@@ -1176,211 +1110,12 @@ def _format_point_payload(point: object | None) -> list[float] | None:
     return [float(x), float(y), float(z)]
 
 
-def _collect_mleader_nearest_rows(
-    entities: list[dict[str, str]],
-    search_types: tuple[str, ...] = ("LINE", "CIRCLE", "LWPOLYLINE"),
-) -> list[dict[str, object]]:
-    from .process_source import DWGTreeProcessor
-    from .utils import (
-        find_closest_entity_in_entities,
-        get_mleader_annotation_text,
-        get_mleader_target_point,
-    )
-
-    by_source: dict[str, list[dict[str, str]]] = {}
-    for entity in entities:
-        source_ref = str(entity.get("source_ref", "")).strip()
-        by_source.setdefault(source_ref, []).append(entity)
-
-    rows: list[dict[str, object]] = []
-    for source_ref, source_entities in by_source.items():
-        if not source_ref:
-            for entity in source_entities:
-                rows.append(
-                    {
-                        "status": "error",
-                        "entity_id": entity["id"],
-                        "file_id": entity.get("file_id", ""),
-                        "source_ref": source_ref,
-                        "block": entity.get("block", ""),
-                        "layer": entity.get("layer", ""),
-                        "matching_strategy": "source_ref+block+ordinal",
-                        "error": "У MULTILEADER отсутствует source_ref исходного файла.",
-                    }
-                )
-            continue
-
-        grouped_by_block: dict[str, list[dict[str, str]]] = {}
-        for entity in source_entities:
-            grouped_by_block.setdefault(str(entity.get("block", "")), []).append(entity)
-
-        try:
-            with tempfile.TemporaryDirectory(prefix="parsedwg-mleader-") as temp_dir_name:
-                temp_dir = Path(temp_dir_name)
-                drawing_path = _resolve_source_ref_to_drawing_path(source_ref, temp_dir)
-                doc = DWGTreeProcessor.read_drawing(drawing_path)
-                for block_name, block_entities in grouped_by_block.items():
-                    layout = _get_block_layout_by_name(doc, block_name)
-                    if layout is None:
-                        for entity in block_entities:
-                            rows.append(
-                                {
-                                    "status": "error",
-                                    "entity_id": entity["id"],
-                                    "file_id": entity.get("file_id", ""),
-                                    "source_ref": source_ref,
-                                    "block": block_name,
-                                    "layer": entity.get("layer", ""),
-                                    "matching_strategy": "source_ref+block+ordinal",
-                                    "error": f"Блок {block_name!r} не найден в исходном чертеже.",
-                                }
-                            )
-                        continue
-
-                    mleader_objects = [
-                        drawing_entity
-                        for drawing_entity in layout
-                        if str(drawing_entity.dxftype()) == "MULTILEADER"
-                    ]
-                    for ordinal, entity in enumerate(block_entities):
-                        base_row = {
-                            "entity_id": entity["id"],
-                            "file_id": entity.get("file_id", ""),
-                            "source_ref": source_ref,
-                            "block": block_name,
-                            "layer": entity.get("layer", ""),
-                            "matching_strategy": "source_ref+block+ordinal",
-                            "match_ordinal": ordinal,
-                        }
-                        if ordinal >= len(mleader_objects):
-                            rows.append(
-                                {
-                                    **base_row,
-                                    "status": "error",
-                                    "error": "В исходном чертеже меньше MULTILEADER, чем в БД для этого блока.",
-                                }
-                            )
-                            continue
-
-                        mleader = mleader_objects[ordinal]
-                        annotation_text = get_mleader_annotation_text(mleader)
-                        target_point = get_mleader_target_point(mleader)
-                        matched_row = {
-                            **base_row,
-                            "annotation_text": annotation_text,
-                        }
-                        if target_point is None:
-                            rows.append(
-                                {
-                                    **matched_row,
-                                    "status": "error",
-                                    "error": "Не удалось извлечь точку стрелки MULTILEADER.",
-                                }
-                            )
-                            continue
-
-                        nearest_entity, distance = find_closest_entity_in_entities(
-                            target_point,
-                            layout,
-                            search_types=search_types,
-                        )
-                        if nearest_entity is None or distance == float("inf"):
-                            rows.append(
-                                {
-                                    **matched_row,
-                                    "status": "error",
-                                    "target_point": _format_point_payload(target_point),
-                                    "error": "Ближайшая сущность не найдена.",
-                                }
-                            )
-                            continue
-
-                        nearest_text = ""
-                        if nearest_entity.dxftype() == "TEXT" and nearest_entity.dxf.hasattr("text"):
-                            nearest_text = str(nearest_entity.dxf.text)
-                        elif nearest_entity.dxftype() == "MTEXT":
-                            nearest_text = DXFAnalyzer.get_text(nearest_entity)
-
-                        rows.append(
-                            {
-                                **matched_row,
-                                "status": "ok",
-                                "target_point": _format_point_payload(target_point),
-                                "nearest_type": str(nearest_entity.dxftype()),
-                                "nearest_handle": (
-                                    str(nearest_entity.dxf.handle)
-                                    if nearest_entity.dxf.hasattr("handle")
-                                    else ""
-                                ),
-                                "nearest_layer": str(getattr(nearest_entity.dxf, "layer", "") or ""),
-                                "nearest_text": nearest_text,
-                                "distance": round(float(distance), 6),
-                            }
-                        )
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
-            for entity in source_entities:
-                rows.append(
-                    {
-                        "status": "error",
-                        "entity_id": entity["id"],
-                        "file_id": entity.get("file_id", ""),
-                        "source_ref": source_ref,
-                        "block": entity.get("block", ""),
-                        "layer": entity.get("layer", ""),
-                        "matching_strategy": "source_ref+block+ordinal",
-                        "error": str(exc),
-                    }
-                )
-
-    return rows
-
-
-def handle_find_mleader_nearest_command(
-    file_ref: str | None = None,
-    by_path: bool = False,
-    search_types: list[str] | None = None,
-) -> int:
-    """Find nearest objects for MULTILEADER entities from the DB."""
-
-    from .db import get_file_id_by_source, list_multileaders_for_nearest_lookup
-
-    resolved_file_id = file_ref
-    if file_ref is not None and by_path:
-        resolved_file_id = asyncio.run(get_file_id_by_source(file_ref))
-        if not resolved_file_id:
-            print("Файл не найден в БД.")
-            return constants.NOT_FOUND
-
-    try:
-        entities = asyncio.run(list_multileaders_for_nearest_lookup(file_id=resolved_file_id))
-    except (LookupError, OSError, RuntimeError, ValueError) as e:
-        logger.error("Ошибка чтения MULTILEADER из БД: %s", e)
-        return constants.ERROR
-
-    if not entities:
-        print("Нет сущностей MULTILEADER для обработки.")
-        return constants.OK
-
-    normalized_search_types = tuple(search_types) if search_types else (
-        "LINE",
-        "CIRCLE",
-        "LWPOLYLINE",
-        "POLYLINE",
-        "INSERT",
-        "TEXT",
-        "MTEXT",
-    )
-    rows = _collect_mleader_nearest_rows(entities, search_types=normalized_search_types)
-    print(json.dumps(rows, ensure_ascii=False, indent=2))
-    return constants.OK
-
-
 def handle_project_add_command(
     name: str,
     description: str | None,
     created_by: str | None,
 ) -> int:
-    """Create a project."""
+    """Создаёт проект."""
     from .db import create_project
 
     project = asyncio.run(create_project(name=name, description=description, created_by=created_by))
@@ -1395,7 +1130,7 @@ def handle_project_update_command(
     description: str | None,
     created_by: str | None,
 ) -> int:
-    """Update a project."""
+    """Обновляет проект."""
     from .db import update_project
 
     project = asyncio.run(
@@ -1416,7 +1151,7 @@ def handle_project_update_command(
 
 
 def handle_project_delete_command(project_id: str, yes: bool) -> int:
-    """Delete a project with confirmation."""
+    """Удаляет проект с подтверждением."""
     from .db import delete_project
 
     if not yes:
@@ -1441,7 +1176,7 @@ def handle_category_add_command(
     description: str | None,
     parent_id: str | None,
 ) -> int:
-    """Create a category."""
+    """Создаёт категорию."""
     from .db import create_category
 
     category = asyncio.run(
@@ -1460,7 +1195,7 @@ def handle_category_update_command(
     description: str | None,
     parent_id: str | None,
 ) -> int:
-    """Update a category."""
+    """Обновляет категорию."""
     from .db import update_category
 
     category = asyncio.run(
@@ -1483,7 +1218,7 @@ def handle_category_update_command(
 
 
 def handle_category_delete_command(category_id: str, yes: bool) -> int:
-    """Delete a category with confirmation."""
+    """Удаляет категорию с подтверждением."""
     from .db import delete_category
 
     if not yes:
@@ -1504,7 +1239,7 @@ def handle_category_delete_command(category_id: str, yes: bool) -> int:
 
 
 def handle_category_list_command(parent_id: str | None) -> int:
-    """Show the category list."""
+    """Показывает список категорий."""
     from .db import list_categories
 
     rows: list[ResultRow] = []
@@ -1530,7 +1265,7 @@ def handle_file_stat_from_db_command(
     by_path: bool,
     output_path: Path | None,
 ) -> int:
-    """Collect XLSX statistics for a file already loaded into the DB."""
+    """Собирает XLSX-статистику для файла, уже загруженного в БД."""
 
     import uuid as _uuid
 
@@ -1719,7 +1454,7 @@ def handle_export_blocks_xlsx_command(
     by_path: bool,
     output_path: Path | None,
 ) -> int:
-    """Export a summary table of file blocks from the DB to XLSX."""
+    """Экспортирует сводную таблицу блоков файла из БД в XLSX."""
 
     import openpyxl
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -1836,7 +1571,7 @@ def handle_export_blocks_table_command(
     by_path: bool,
     output_path: Path | None,
 ) -> int:
-    """Print a summary text table of file blocks from the DB."""
+    """Печатает сводную текстовую таблицу блоков файла из БД."""
     block_rows = _collect_block_export_rows(file_ref=file_ref, by_path=by_path, multiline=False)
     if block_rows is None:
         return constants.ERROR
@@ -1856,7 +1591,7 @@ def handle_export_blocks_table_command(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry point."""
+    """Точка входа CLI."""
 
     parser = build_args_parser()
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -1868,7 +1603,7 @@ def main(argv: list[str] | None = None) -> int:
         case "process":
             return_code = handle_process_command(
                 Path(args.path),
-                project_name=args.project_name,
+                project_name=args.project,
             )
 
         # case "extract-name-tags":
@@ -1957,13 +1692,6 @@ def main(argv: list[str] | None = None) -> int:
         #         ai_api_key=args.ai_api_key,
         #         workers=1,
         #         dry=args.dry,
-        #     )
-
-        # case "find-mleader-nearest":
-        #     return_code = handle_find_mleader_nearest_command(
-        #         file_ref=args.file_ref,
-        #         by_path=args.by_path,
-        #         search_types=args.search_types,
         #     )
 
         # case "verify-extraction":

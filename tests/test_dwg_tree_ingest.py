@@ -9,7 +9,7 @@ from parsedwg.process_source import DWGTreeProcessor
 from parsedwg.process_source import collect_dxf_summary
 from parsedwg.process_source import collect_drawing_summary
 from parsedwg.process_source import process_source
-from parsedwg.process_source import save_tree_to_db
+from parsedwg.process_source import drawing_to_db
 from parsedwg.dxf_analyzer import DXFAnalyzer
 from parsedwg.orm import Entity
 from parsedwg.orm import EntityType
@@ -297,8 +297,8 @@ def test_save_tree_to_db_keeps_layout_primitives_without_block_entity(
     )
 
     asyncio.run(
-        save_tree_to_db(
-            root_path=str(tmp_path),
+        drawing_to_db(
+            sources_path=str(tmp_path),
             processed_entries=[processed_entry],
             project_name="Test Project",
         )
@@ -427,8 +427,8 @@ def test_save_tree_to_db_sets_file_id_for_all_descendants(
     monkeypatch.setattr("parsedwg.process_tree.async_session_factory", fake_async_session_factory)
 
     asyncio.run(
-        save_tree_to_db(
-            root_path=str(tmp_path),
+        drawing_to_db(
+            sources_path=str(tmp_path),
             processed_entries=[processed_entry],
             project_name="Test Project",
         )
@@ -526,8 +526,8 @@ def test_save_tree_to_db_commits_primitives_in_batches(
     monkeypatch.setattr("parsedwg.process_tree.async_session_factory", fake_async_session_factory)
 
     asyncio.run(
-        save_tree_to_db(
-            root_path=str(tmp_path),
+        drawing_to_db(
+            sources_path=str(tmp_path),
             processed_entries=[processed_entry],
             project_name="Test Project",
         )
@@ -618,8 +618,8 @@ def test_save_tree_to_db_uses_tqdm_for_primitives(
     monkeypatch.setattr("parsedwg.process_tree.async_session_factory", fake_async_session_factory)
 
     asyncio.run(
-        save_tree_to_db(
-            root_path=str(tmp_path),
+        drawing_to_db(
+            sources_path=str(tmp_path),
             processed_entries=[processed_entry],
             project_name="Test Project",
         )

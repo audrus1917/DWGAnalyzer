@@ -1,6 +1,6 @@
-"""LangChain-based tag extractor for names and texts.
+"""Извлекатель тегов для имён и текстов на базе LangChain.
 
-The module is imported only when AI mode is enabled explicitly.
+Модуль импортируется только при явном включении AI-режима.
 """
 
 from __future__ import annotations
@@ -217,7 +217,7 @@ class LangChainAgentConfig:
 
 
 class LangChainNameTagsExtractor:
-    """Extract semantic tags via an LLM wrapped with LangChain."""
+    """Извлекает семантические теги через LLM, обёрнутую в LangChain."""
 
     def __init__(
         self,
@@ -370,7 +370,7 @@ class LangChainNameTagsExtractor:
         tokens: list[str],
         extra_context: str = "",
     ) -> dict[str, list[dict[str, object]]]:
-        """Return a mapping of token -> list[{"meaning": str, "score": float | None}]."""
+        """Возвращает отображение token -> list[{"meaning": str, "score": float | None}]."""
         
         cleaned_tokens = [token.strip() for token in tokens if isinstance(token, str) and token.strip()]
         if not cleaned_tokens:
@@ -588,7 +588,7 @@ class LangChainNameTagsExtractor:
 
 
 def extract_semantic_token_meanings_json(tokens: list[str], config: LangChainAgentConfig) -> str:
-    """Return a JSON mapping of token -> list[str] for the given tokens."""
+    """Возвращает JSON-отображение token -> list[str] для переданных токенов."""
 
     extractor = LangChainNameTagsExtractor.from_config(config)
     return extractor.extract_token_meanings_json(tokens)
@@ -710,7 +710,7 @@ def build_name_meaning_human_prompt(
     name: str,
     extra_context: str = "",
 ) -> str:
-    """Build the user prompt used to analyze an entity name."""
+    """Строит пользовательский prompt для анализа имени сущности."""
     context_line = (
         f"Дополнительный контекст: {extra_context.strip()}\n"
         if extra_context.strip()
@@ -727,7 +727,7 @@ def build_name_meaning_prompt(
     name: str,
     extra_context: str = "",
 ) -> str:
-    """Build the full prompt text for backward compatibility."""
+    """Строит полный текст prompt для обратной совместимости."""
     return (
         f"{build_name_meaning_system_prompt()}\n\n"
         f"{build_name_meaning_human_prompt(name=name, extra_context=extra_context)}"
@@ -742,7 +742,7 @@ def call_ollama_name_meaning(
     timeout_seconds: float = 60.0,
 ) -> str:
     
-    """Call Ollama /api/chat and return a free-form name interpretation."""
+    """Вызывает Ollama /api/chat и возвращает свободную интерпретацию имени."""
     import urllib.error
     import urllib.request
 
@@ -785,7 +785,7 @@ def call_openai_chat_completions_name_meaning(
     timeout_seconds: float = 60.0,
     api_key: str = "",
 ) -> str:
-    """Call an OpenAI-compatible v1/chat/completions endpoint and return a text interpretation."""
+    """Вызывает OpenAI-совместимый endpoint v1/chat/completions и возвращает текстовую интерпретацию."""
     import urllib.error
     import urllib.request
 

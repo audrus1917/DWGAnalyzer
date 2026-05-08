@@ -1,4 +1,4 @@
-"""Database operations."""
+"""Операции работы с базой данных."""
 
 from typing import Any, cast
 
@@ -7,22 +7,29 @@ import tempfile
 from collections.abc import AsyncGenerator, Sequence
 from pathlib import Path
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, create_engine, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import aliased, selectinload
+from sqlalchemy.orm import Session, aliased, selectinload, sessionmaker
 
 from .settings import settings
 from .orm import Category, Entity, EntityEmbedding, EntityToEntity, EntityType, Project
 
+
+def _to_sync_database_url(database_url: str) -> str:
+    return database_url.replace("+asyncpg", "+psycopg")
+
+
 engine = create_async_engine(settings.database_url, echo=settings.database_echo)
+sync_engine = create_engine(_to_sync_database_url(settings.database_url), echo=settings.database_echo)
 
 async_session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
     engine, expire_on_commit=False
 )
+session_factory: sessionmaker[Session] = sessionmaker(sync_engine, expire_on_commit=False)
 
 
 def _parse_id(raw_id: str | int) -> int:
-    """Normalize external id input to integer primary key."""
+    """Нормализует внешний id к целочисленному первичному ключу."""
 
     if isinstance(raw_id, int):
         return raw_id
@@ -83,7 +90,7 @@ async def _get_entity_with_embedding(session: AsyncSession, entity_id: str | int
 
 
 async def get_file_id_by_source(source_ref: str) -> str | None:
-    """Return the id of a file entity by its source_ref path."""
+    """Возвращает id файловой сущности по пути source_ref."""
     stmt = (
         select(Entity.id)
         .where(Entity.entity_type == EntityType.FILE)
@@ -98,14 +105,14 @@ async def get_file_id_by_source(source_ref: str) -> str | None:
 
 
 async def get_entity_name_by_id(entity_id: str) -> str | None:
-    """Return the entity name by id, or None if it is missing."""
+    """Возвращает имя сущности по id или None, если сущность не найдена."""
     async with async_session_factory() as session:
         entity = await session.get(Entity, _parse_id(entity_id))
     return entity.name if entity is not None else None
 
 
 async def save_short_interpretation(entity_id: str, text: str) -> None:
-    """Persist short_interpretation for an entity identified by id."""
+    """Сохраняет short_interpretation для сущности по её id."""
     async with async_session_factory() as session:
         entity = await _get_entity_with_embedding(session, entity_id)
         if entity is None:
@@ -117,7 +124,7 @@ async def save_short_interpretation(entity_id: str, text: str) -> None:
 
 
 async def save_block_description(block_id: str, description: str) -> None:
-    """Persist a block description by id."""
+    """Сохраняет описание блока по id."""
     async with async_session_factory() as session:
         entity = await session.get(Entity, _parse_id(block_id))
         if entity is None:
@@ -132,7 +139,7 @@ async def save_block_interpretations(
     full_interpretation: str,
     description: str,
 ) -> None:
-    """Persist block interpretations by id."""
+    """Сохраняет интерпретации блока по id."""
     async with async_session_factory() as session:
         entity = await _get_entity_with_embedding(session, block_id)
         if entity is None:
@@ -149,7 +156,7 @@ async def list_blocks_for_interpretation(
     block_ids: list[str] | None = None,
     file_id: str | None = None,
 ) -> list[dict[str, str]]:
-    """Return blocks prepared for batch interpretation."""
+    """Возвращает блоки, подготовленные для пакетной интерпретации."""
 
     if bool(block_ids) == bool(file_id):
         raise ValueError("Нужно указать либо block_ids, либо file_id.")
@@ -189,7 +196,7 @@ async def list_blocks_for_interpretation(
 async def list_multileaders_for_nearest_lookup(
     file_id: str | None = None,
 ) -> list[dict[str, str]]:
-    """Return MULTILEADER entities together with the source_ref of the source file."""
+    """Возвращает сущности MULTILEADER вместе с source_ref исходного файла."""
 
     file_entity = aliased(Entity)
     stmt = (
@@ -257,7 +264,7 @@ def _collect_annotation_texts_from_rows(rows: Sequence[Sequence[object]]) -> lis
 
 
 def _resolve_source_ref_to_drawing_path(source_ref: str, temp_dir: Path) -> Path:
-    from .process_tree import DWGTreeProcessor
+    from .process_source import DWGTreeProcessor
 
     if "::" not in source_ref:
         return Path(source_ref)
@@ -279,8 +286,8 @@ def _get_block_layout_by_name(doc, block_name: str):
 
 
 def _collect_block_annotation_texts_from_source(block_name: str, source_ref: str) -> list[str]:
-    from .process_tree import DWGTreeProcessor
-    from .utils import get_mleader_annotation_text
+    from .process_source import DWGTreeProcessor
+    from src.parsedwg.utils import get_mleader_annotation_text
 
     if not source_ref.strip():
         return []
@@ -313,10 +320,10 @@ async def get_full_description(
     block_name: str,
     file_id: str | None = None,
 ) -> dict[str, object] | None:
-    """Return the full description of a BLOCK entity.
+    """Возвращает полное описание сущности BLOCK.
 
-    Includes its name, layers (name + short_interpretation), attributes of
-    INSERT primitives, and INSERT entities whose name matches the block name.
+    Включает имя, слои (name + short_interpretation), атрибуты INSERT-примитивов
+    и INSERT-сущности, имя которых совпадает с именем блока.
     """
     async with async_session_factory() as session:
         block_stmt = (
@@ -430,7 +437,7 @@ async def get_full_description(
 
 
 async def get_full_description_by_id(block_id: str) -> dict[str, object] | None:
-    """Return the full block description by id."""
+    """Возвращает полное описание блока по id."""
 
     async with async_session_factory() as session:
         block = await session.get(Entity, _parse_id(block_id))
@@ -440,7 +447,7 @@ async def get_full_description_by_id(block_id: str) -> dict[str, object] | None:
 
 
 async def list_blocks_for_export(file_id: str) -> list[dict[str, object]]:
-    """Return BLOCK entity data for XLSX export."""
+    """Возвращает данные сущностей BLOCK для экспорта в XLSX."""
     file_entity_id = _parse_id(file_id)
     stmt = (
         select(Entity.name)
@@ -462,7 +469,7 @@ async def list_blocks_for_export(file_id: str) -> list[dict[str, object]]:
 
 
 async def get_table_blocks_by_file_id(file_id: str) -> list[dict[str, object]]:
-    """Return table blocks from the DB whose parent_id equals file_id."""
+    """Возвращает табличные блоки из БД, у которых parent_id равен file_id."""
     stmt = (
         select(Entity.name, Entity.data)
         .where(Entity.entity_type == EntityType.BLOCK)
@@ -487,7 +494,7 @@ async def get_table_blocks_by_file_id(file_id: str) -> list[dict[str, object]]:
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    """FastAPI / dependency-injection compatible session provider."""
+    """Провайдер session, совместимый с FastAPI и dependency injection."""
     async with async_session_factory() as session:
         yield session
 
@@ -498,10 +505,10 @@ async def search_entities(
     limit: int = 20,
     parent_id: str | None = None,
 ) -> list[dict]:
-    """Run full-text search on entity_text with fallback to name and description.
+    """Выполняет полнотекстовый поиск по entity_text с запасным поиском по name и description.
 
-    Uses PostgreSQL websearch_to_tsquery, which supports quotes, minus, and OR,
-    together with to_tsvector configured for Russian.
+    Использует PostgreSQL websearch_to_tsquery с поддержкой кавычек, минуса и OR
+    вместе с to_tsvector, настроенным для русского языка.
     """
 
     tsquery = func.websearch_to_tsquery("russian", query)
@@ -556,7 +563,7 @@ async def search_entities(
 
 
 async def create_all() -> None:
-    """Create all tables (dev/test helper; prefer Alembic for production)."""
+    """Создаёт все таблицы (хелпер для dev/test; для production предпочтителен Alembic)."""
     from .orm import Base  # local import to avoid circular deps
 
     async with engine.begin() as conn:
@@ -568,7 +575,7 @@ async def create_project(
     description: str | None = None,
     created_by: str | None = None,
 ) -> dict[str, str]:
-    """Create a project and return its main fields."""
+    """Создаёт проект и возвращает его основные поля."""
 
     async with async_session_factory() as session:
         project = Project(
@@ -670,7 +677,7 @@ async def list_entities_for_semantic_categorization(
     entity_ids: list[str] | None = None,
     entity_type: str | None = None,
 ) -> list[dict[str, str]]:
-    """Return entities for AI categorization by id or entity_type."""
+    """Возвращает сущности для AI-категоризации по id или entity_type."""
 
     if bool(entity_ids) == bool(entity_type):
         raise ValueError("Нужно указать либо entity_ids, либо entity_type.")
@@ -716,7 +723,7 @@ async def assign_semantic_category(
     entity_id: str,
     meanings: list[dict[str, object]],
 ) -> dict[str, object]:
-    """Create or find a category from AI meanings and link it to the entity."""
+    """Создаёт или находит категорию по AI-смыслам и связывает её с сущностью."""
 
     entity_pk = _parse_id(entity_id)
 
@@ -791,7 +798,7 @@ async def assign_semantic_category(
 async def assign_semantic_categories(
     categorizations: list[dict[str, object]],
 ) -> list[dict[str, object]]:
-    """Create or find categories from AI meanings and link them to entities."""
+    """Создаёт или находит категории по AI-смыслам и связывает их с сущностями."""
 
     if not categorizations:
         return []
@@ -818,7 +825,7 @@ async def create_category(
     description: str | None = None,
     parent_id: str | None = None,
 ) -> dict[str, str]:
-    """Create a category and return its main fields."""
+    """Создаёт категорию и возвращает её основные поля."""
 
     parent_entity_id = _parse_id(parent_id) if parent_id is not None else None
 
@@ -846,7 +853,7 @@ async def update_category(
     description: str | None = None,
     parent_id: str | None = None,
 ) -> dict[str, str] | None:
-    """Update a category by id. Return None if the category is not found."""
+    """Обновляет категорию по id. Возвращает None, если категория не найдена."""
 
     category_entity_id = _parse_id(category_id)
     parent_entity_id = _parse_id(parent_id) if parent_id is not None else None
@@ -874,7 +881,7 @@ async def update_category(
 
 
 async def delete_category(category_id: str) -> bool:
-    """Delete a category by id. Return True if deletion happened."""
+    """Удаляет категорию по id. Возвращает True, если удаление произошло."""
 
     category_entity_id = _parse_id(category_id)
 
@@ -889,7 +896,7 @@ async def delete_category(category_id: str) -> bool:
 
 
 async def list_categories(parent_id: str | None = None) -> list[dict[str, str]]:
-    """Return categories, optionally filtered by parent_id."""
+    """Возвращает категории, при необходимости отфильтрованные по parent_id."""
 
     stmt = select(Category).order_by(Category.name.asc())
     if parent_id is not None:
@@ -916,7 +923,7 @@ async def update_project(
     description: str | None = None,
     created_by: str | None = None,
 ) -> dict[str, str] | None:
-    """Update a project by id. Return None if the project is not found."""
+    """Обновляет проект по id. Возвращает None, если проект не найден."""
     async with async_session_factory() as session:
         project = await session.get(Project, _parse_id(project_id))
         if project is None:
@@ -940,7 +947,7 @@ async def update_project(
 
 
 async def delete_project(project_id: str) -> bool:
-    """Delete a project by id. Return True if deletion happened."""
+    """Удаляет проект по id. Возвращает True, если удаление произошло."""
     async with async_session_factory() as session:
         project = await session.get(Project, _parse_id(project_id))
         if project is None:
@@ -952,7 +959,7 @@ async def delete_project(project_id: str) -> bool:
 
 
 async def get_table_blocks_for_source(source_ref: str) -> list[dict[str, object]]:
-    """Return table blocks from the DB for the given file source_ref."""
+    """Возвращает табличные блоки из БД для указанного file source_ref."""
     file_id_subquery = (
         select(Entity.id)
         .where(Entity.entity_type == EntityType.FILE)
@@ -987,7 +994,7 @@ async def get_table_blocks_for_source(source_ref: str) -> list[dict[str, object]
 
 
 def get_block_full_description(block: dict[str, object]) -> str:
-    """Generate a text description of a block for AI based on its data."""
+    """Генерирует текстовое описание блока для AI на основе его данных."""
 
     name = str(block.get("name", "") or "")
     description = str(block.get("description", "") or "")

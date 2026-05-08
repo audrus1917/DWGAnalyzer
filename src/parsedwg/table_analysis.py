@@ -1,4 +1,4 @@
-"""Helpers for detecting table-like text layouts in DXF blocks."""
+"""Вспомогательные средства для поиска табличной текстовой структуры в DXF-блоках."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ type TextEntity = tuple[float, float, str]
 
 @dataclass(slots=True)
 class AxisCluster:
-    """A cluster of close coordinates on one axis."""
+    """Кластер близких координат на одной оси."""
 
     center: float
     count: int
@@ -18,7 +18,7 @@ class AxisCluster:
 
 @dataclass(slots=True)
 class TableAnalysis:
-    """Result of analyzing a block for table-like text structure."""
+    """Результат анализа блока на наличие табличной текстовой структуры."""
 
     total_texts: int
     table_like_texts: int
@@ -31,7 +31,7 @@ class TableAnalysis:
 
 
 class TextClusterAnalyzer:
-    """Analyze text entities in a block and detect table-like structure."""
+    """Анализирует текстовые сущности блока и выявляет табличную структуру."""
 
     @staticmethod
     def _get_text_content(entity) -> str:

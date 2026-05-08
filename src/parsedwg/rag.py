@@ -1,6 +1,6 @@
-"""RAG utilities: embeddings via nomic-embed-text and answer generation via llama3.2.
+"""Утилиты RAG: эмбеддинги через nomic-embed-text и генерация ответа через llama3.2.
 
-Ollama must be running locally at http://localhost:11434.
+Для работы Ollama должен быть запущен локально на http://localhost:11434.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ _TERM_CONTEXT_SPLIT_RE = re.compile(
 
 
 async def _embed(text_input: str) -> list[float]:
-    """Get a text embedding via Ollama /api/embed."""
+    """Получает текстовый эмбеддинг через Ollama /api/embed."""
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         response = await client.post(
             f"{OLLAMA_BASE_URL}/api/embed",
@@ -72,7 +72,7 @@ async def _embed(text_input: str) -> list[float]:
 
 
 async def _generate(prompt: str, context_docs: list[str]) -> str:
-    """Ask the LLM a question with context from retrieved documents."""
+    """Задаёт LLM вопрос с контекстом из найденных документов."""
     full_prompt = _build_generation_prompt(prompt, context_docs)
     system = (
         "Ты — ассистент по технической документации и чертежам. "
@@ -92,7 +92,7 @@ async def _generate(prompt: str, context_docs: list[str]) -> str:
 
 
 def _extract_target_term(question: str) -> tuple[str | None, str | None]:
-    """Extract the target term and additional context from a term-related question."""
+    """Извлекает целевой термин и дополнительный контекст из вопроса о термине."""
     cleaned_question = question.strip()
     for pattern in _QUESTION_TERM_PATTERNS:
         match = pattern.match(cleaned_question)
@@ -119,7 +119,7 @@ def _extract_target_term(question: str) -> tuple[str | None, str | None]:
 
 
 def _build_generation_prompt(question: str, context_docs: list[str]) -> str:
-    """Build a prompt that separates the target term from the rest of the context."""
+    """Строит prompt, отделяющий целевой термин от остального контекста."""
     target_term, extra_question_context = _extract_target_term(question)
     context = "\n\n".join(
         f"[{i + 1}] {doc}" for i, doc in enumerate(context_docs)
@@ -177,7 +177,7 @@ def _extract_table_rows_text(data: Any) -> str | None:
 
 
 def _entity_text(entity: Entity) -> str:
-    """Build embedding text from entity fields."""
+    """Строит текст для эмбеддинга из полей сущности."""
     parts = [entity.name]
     if entity.description:
         parts.append(entity.description)
@@ -201,15 +201,15 @@ async def index_entities(
     batch_size: int = 50,
     reindex: bool = False,
 ) -> int:
-    """Generate embeddings for DB entities and persist them.
+    """Генерирует эмбеддинги для сущностей из БД и сохраняет их.
 
     Args:
-        entity_type: if provided, index only this entity type.
-        batch_size: batch size for Ollama requests.
-        reindex: rebuild embeddings even for already indexed entities.
+        entity_type: если указан, индексирует только этот тип сущностей.
+        batch_size: размер пакета для запросов к Ollama.
+        reindex: пересоздаёт эмбеддинги даже для уже индексированных сущностей.
 
     Returns:
-        Number of indexed records.
+        Количество проиндексированных записей.
     """
     async with async_session_factory() as session:
         stmt = select(Entity).options(selectinload(Entity.embedding_data))
@@ -273,9 +273,9 @@ async def similarity_search(
     entity_type: str | None = None,
     top_k: int = 5,
 ) -> list[dict]:
-    """Vector search for nearest entities by cosine distance.
+    """Выполняет векторный поиск ближайших сущностей по косинусному расстоянию.
 
-    Requires the pgvector extension and stored embeddings.
+    Требует расширение pgvector и сохранённые эмбеддинги.
     """
     vec = await _embed(query)
     # pgvector expects a literal like '[1.0,2.0,...]'.
@@ -327,16 +327,16 @@ async def hybrid_search(
     top_k: int = 5,
     alpha: float = 0.5,
 ) -> list[dict]:
-    """Hybrid search: BM25 + vector search with merged ranking.
+    """Выполняет гибридный поиск: BM25 + векторный поиск с объединённым ранжированием.
 
     Args:
-        query: search text.
-        entity_type: entity type filter.
-        top_k: number of results.
-        alpha: BM25 weight (0..1); vector weight = 1 - alpha. Default is 0.5.
+        query: текст запроса.
+        entity_type: фильтр по типу сущности.
+        top_k: число результатов.
+        alpha: вес BM25 (0..1); вес векторного поиска равен 1 - alpha.
 
     Returns:
-        Results sorted by the combined score.
+        Результаты, отсортированные по объединённой оценке.
     """
     from .db import search_entities
 
@@ -398,7 +398,7 @@ async def ask(
     entity_type: str | None = None,
     top_k: int = 5,
 ) -> dict:
-    """RAG request: find relevant entities and generate an answer.
+    """Выполняет RAG-запрос: ищет релевантные сущности и генерирует ответ.
 
     Returns:
         {"answer": str, "sources": list[dict]}
