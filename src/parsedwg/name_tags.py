@@ -1,4 +1,4 @@
-"""Extract semantic tags from file and directory names."""
+"""Извлекает семантические теги из имён файлов и каталогов."""
 
 from __future__ import annotations
 

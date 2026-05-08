@@ -1,4 +1,4 @@
-"""Utility helpers."""
+"""Вспомогательные утилиты."""
 
 from typing import Any
 
@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 
 def get_workers_number(requested_workers: int) -> int:
-    """Return the optimal number of worker processes for conversion.
+    """Возвращает оптимальное число рабочих процессов для конвертации.
 
-    The value depends on machine capacity and the requested worker count.
+    Значение зависит от ресурсов машины и запрошенного числа workers.
     """
 
     logical_cpus = max(1, mp.cpu_count())
@@ -41,7 +41,7 @@ def get_workers_number(requested_workers: int) -> int:
 
 
 def build_args_parser() -> argparse.ArgumentParser:
-    """Build and return the command-line argument parser."""
+    """Создаёт и возвращает парсер аргументов командной строки."""
 
     extract_common = argparse.ArgumentParser(add_help=False)
     extract_common.add_argument("drawing", help="Путь к DWG или DXF файлу")
@@ -827,32 +827,6 @@ def build_args_parser() -> argparse.ArgumentParser:
     return parser
 
 
-class CustomFormatter(logging.Formatter):
-    """Log formatter that changes the message shape by log level."""
-
-    FORMATS = {
-        logging.DEBUG: "[DEBUG] %(name)s: %(message)s",
-        logging.INFO: "%(message)s",
-        logging.WARNING: "WARNING: %(message)s (%(filename)s:%(lineno)d)",
-        logging.ERROR: "ERROR!!! %(asctime)s - %(message)s",
-        logging.CRITICAL: "CRITICAL FAILURE: %(message)s"
-    }
-
-    def format(self, record):
-        log_fmt = self.FORMATS.get(record.levelno, "%(levelname)s: %(message)s")
-        formatter = logging.Formatter(log_fmt)
-        return formatter.format(record)
-    
-
-def out(value: Any) -> None:
-    """Write a value to stdout.
-
-    Alias for :func:`print` to keep call sites distinct from temporary debugging.
-    """
-
-    print(value)
-
-
 def safe_float(value: Any) -> float | None:
     try:
         return float(value)
@@ -860,11 +834,8 @@ def safe_float(value: Any) -> float | None:
         return None
 
 
-import ezdxf
-from ezdxf.math import Vec3
-
 def get_mleader_target_point(mleader):
-    """Extract the point targeted by the first leader arrow."""
+    """Извлекает точку, на которую указывает первая стрелка MULTILEADER."""
     try:
         # MLeader may have multiple leaders; use the first one.
         context = mleader.context
@@ -877,7 +848,7 @@ def get_mleader_target_point(mleader):
 
 
 def get_mleader_annotation_text(mleader) -> str:
-    """Return MULTILEADER annotation text, if present."""
+    """Возвращает текст аннотации MULTILEADER, если он присутствует."""
     try:
         context = mleader.context
         mtext = getattr(context, "mtext", None)
@@ -948,7 +919,7 @@ def find_closest_entity_in_entities(
     entities,
     search_types=('LINE', 'CIRCLE', 'LWPOLYLINE', 'POLYLINE', 'INSERT', 'TEXT', 'MTEXT'),
 ):
-    """Find the nearest entity within an already iterated DXF entity set."""
+    """Ищет ближайшую сущность в уже подготовленном наборе DXF-сущностей."""
 
     if not target_point:
         return None, float('inf')

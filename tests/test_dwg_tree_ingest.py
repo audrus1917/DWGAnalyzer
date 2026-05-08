@@ -5,11 +5,11 @@ from zipfile import ZipFile
 
 from ezdxf.filemanagement import new
 
-from parsedwg.process_tree import DWGTreeProcessor
-from parsedwg.process_tree import collect_dxf_summary
-from parsedwg.process_tree import collect_drawing_summary
-from parsedwg.process_tree import run_process_tree
-from parsedwg.process_tree import save_tree_to_db
+from parsedwg.process_source import DWGTreeProcessor
+from parsedwg.process_source import collect_dxf_summary
+from parsedwg.process_source import collect_drawing_summary
+from parsedwg.process_source import process_source
+from parsedwg.process_source import drawing_to_db
 from parsedwg.dxf_analyzer import DXFAnalyzer
 from parsedwg.orm import Entity
 from parsedwg.orm import EntityType
@@ -251,7 +251,7 @@ def test_save_tree_to_db_keeps_layout_primitives_without_block_entity(
         },
     }
 
-    added_entities = []
+    added_primitives: list[Entity] = []
 
     class _FakeScalarResult:
         def scalar_one_or_none(self):
@@ -262,7 +262,10 @@ def test_save_tree_to_db_keeps_layout_primitives_without_block_entity(
             if isinstance(obj, Entity):
                 if obj.id is None:
                     obj.id = uuid.uuid4()
-                added_entities.append(obj)
+            if isinstance(obj, Entity) and obj.entity_type == EntityType.MLEADER:
+                if obj.id is None:
+                    obj.id = uuid.uuid4()
+                added_primitives.append(obj)
 
         def add_all(self, objects):
             for obj in objects:
@@ -293,14 +296,14 @@ def test_save_tree_to_db_keeps_layout_primitives_without_block_entity(
     )
 
     asyncio.run(
-        save_tree_to_db(
-            root_path=str(tmp_path),
+        drawing_to_db(
+            sources_path=str(tmp_path),
             processed_entries=[processed_entry],
             project_name="Test Project",
         )
     )
 
-    assert any(entity.entity_type == "MULTILEADER" for entity in added_entities)
+    assert any(primitive.entity_type == EntityType.MLEADER for primitive in added_primitives)
 
 
 def test_collect_dxf_summary_marks_table_blocks_and_keeps_table_data(tmp_path: Path) -> None:
@@ -380,6 +383,7 @@ def test_save_tree_to_db_sets_file_id_for_all_descendants(
     }
 
     added_entities: list[Entity] = []
+    added_primitives: list[Entity] = []
 
     class _FakeScalarResult:
         def scalar_one_or_none(self):
@@ -391,6 +395,18 @@ def test_save_tree_to_db_sets_file_id_for_all_descendants(
                 if obj.id is None:
                     obj.id = uuid.uuid4()
                 added_entities.append(obj)
+            if isinstance(obj, Entity) and obj.entity_type not in {
+                EntityType.FILE,
+                EntityType.LAYOUT,
+                EntityType.LAYER,
+                EntityType.BLOCK,
+                EntityType.FOLDER,
+                EntityType.ZIPFILE,
+                EntityType.ZIPPED_FILE,
+            }:
+                if obj.id is None:
+                    obj.id = uuid.uuid4()
+                added_primitives.append(obj)
 
         def add_all(self, objects):
             for obj in objects:
@@ -418,28 +434,29 @@ def test_save_tree_to_db_sets_file_id_for_all_descendants(
     monkeypatch.setattr("parsedwg.process_tree.async_session_factory", fake_async_session_factory)
 
     asyncio.run(
-        save_tree_to_db(
-            root_path=str(tmp_path),
+        drawing_to_db(
+            sources_path=str(tmp_path),
             processed_entries=[processed_entry],
             project_name="Test Project",
         )
     )
 
-    file_entity = next(entity for entity in added_entities if entity.entity_type == EntityType.file)
+    file_entity = next(entity for entity in added_entities if entity.entity_type == EntityType.FILE)
 
     descendants = [
         entity
         for entity in added_entities
         if entity.entity_type in {
-            EntityType.layout,
-            EntityType.layer,
-            EntityType.block,
-            "TEXT",
+            EntityType.LAYOUT,
+            EntityType.LAYER,
+            EntityType.BLOCK,
         }
     ]
 
     assert descendants
     assert all(entity.file_id == file_entity.id for entity in descendants)
+    assert added_primitives
+    assert all(primitive.file_id == file_entity.id for primitive in added_primitives)
 
 
 def test_save_tree_to_db_commits_primitives_in_batches(
@@ -516,8 +533,8 @@ def test_save_tree_to_db_commits_primitives_in_batches(
     monkeypatch.setattr("parsedwg.process_tree.async_session_factory", fake_async_session_factory)
 
     asyncio.run(
-        save_tree_to_db(
-            root_path=str(tmp_path),
+        drawing_to_db(
+            sources_path=str(tmp_path),
             processed_entries=[processed_entry],
             project_name="Test Project",
         )
@@ -608,8 +625,8 @@ def test_save_tree_to_db_uses_tqdm_for_primitives(
     monkeypatch.setattr("parsedwg.process_tree.async_session_factory", fake_async_session_factory)
 
     asyncio.run(
-        save_tree_to_db(
-            root_path=str(tmp_path),
+        drawing_to_db(
+            sources_path=str(tmp_path),
             processed_entries=[processed_entry],
             project_name="Test Project",
         )
@@ -659,7 +676,7 @@ def test_run_process_tree_uses_single_process_pipeline(tmp_path: Path, monkeypat
     monkeypatch.setattr("parsedwg.process_tree.process_batch", fake_process_batch)
     monkeypatch.setattr("parsedwg.process_tree.save_tree_to_db", fake_save_tree_to_db)
 
-    result = run_process_tree(
+    result = process_source(
         source,
         project_name="Sequential Project",
     )
@@ -704,7 +721,7 @@ def test_run_process_tree_dry_mode_skips_db_save(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr("parsedwg.process_tree.process_batch", fake_process_batch)
     monkeypatch.setattr("parsedwg.process_tree.save_tree_to_db", fail_save_tree_to_db)
 
-    result = run_process_tree(
+    result = process_source(
         source,
         project_name="Sequential Project",
         dry_run=True,

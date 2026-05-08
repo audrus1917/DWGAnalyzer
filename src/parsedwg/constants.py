@@ -1,4 +1,4 @@
-"""Constant values used across the package."""
+"""Константы, используемые во всём пакете."""
 
 import enum
 
@@ -12,7 +12,7 @@ BUFFER_SIZE = 40
 
 
 class EntityType(int, enum.Enum):
-    """The type of the `File` and `DXF` entity."""
+    """Типы файловых и DXF-сущностей."""
 
     # Folders and files
     FOLDER = 0
@@ -71,6 +71,8 @@ class EntityType(int, enum.Enum):
     WIPEOUT = 51
     XLINE = 52
     PRIMITIVE= 53
+    ACAD_TABLE = 54
+    MULTILEADER = 55
 
 ENTITY_TYPES = {e.name: e for e in EntityType}
 
@@ -87,3 +89,4 @@ ANSI_MAP = {
     'ANSI38': 'Алюминий'
 }
 
+type ResultRow = dict[str, object]

@@ -1,41 +1,35 @@
-"""Walk DWG/DXF directories and persist the entity tree to the database."""
+"""Обходит каталоги DWG/DXF и сохраняет дерево сущностей в базу данных."""
 
 from __future__ import annotations
 
-from typing import Any, Generator, Protocol, Callable, Iterator, cast
+from typing import Any, Generator, Protocol, cast
 
-import asyncio
 import hashlib
 import logging
-import sys
-import uuid
 import tempfile
 import zipfile
 
 from pathlib import Path
 
 from ezdxf.document import Drawing
-from ezdxf.layouts.blocklayout import BlockLayout
 from ezdxf.addons.odafc import readfile as read_odafc
 from ezdxf.filemanagement import readfile
 from sqlalchemy import func, select
 
-from .db import async_session_factory
-from .orm import Entity, EntityEmbedding, EntityGeom, EntityToEntity, EntityType, Project
-from .table_analysis import TextClusterAnalyzer
-from .dxf_analyzer import DXFAnalyzer
-from .utils import safe_float
-
-try:
-    from tqdm.auto import tqdm as _tqdm
-except ImportError:
-    def _tqdm(iterable, **kwargs):
-        _ = kwargs
-        return iterable
+from src.parsedwg.constants import ENTITY_TYPES, EntityType
+from src.parsedwg.db import session_factory
+from src.parsedwg.orm import Entity, EntityEmbedding, Project, EntityToEntity
+from src.parsedwg.dxf_analyzer import DXFAnalyzer
+from src.parsedwg.utils import safe_float
+from src.parsedwg.table_analysis import TextClusterAnalyzer
+from src.parsedwg import errors
 
 logger = logging.getLogger(__name__)
 
 PRIMITIVE_BATCH_SIZE = 1000
+ENTITY_TYPE_ALIASES = {
+    "MULTILEADER": "MLEADER",
+}
 
 type JobEntry = dict[str, str]
 type ProcessedEntry = dict[str, object]
@@ -47,7 +41,7 @@ class NameTagsExtractor(Protocol):
 
 
 class DWGTreeProcessor:
-    """Walk a directory and collect DWG/DXF processing jobs."""
+    """Обходит каталог и собирает задания на обработку DWG/DXF."""
 
     def __init__(self, source_path: Path, root_path: Path | None = None):
         self.source_path = source_path
@@ -57,7 +51,7 @@ class DWGTreeProcessor:
 
     @staticmethod
     def file_md5(path: Path) -> str:
-        """Return the MD5 hash of a file to identify its contents."""
+        """Возвращает MD5-хэш файла для идентификации содержимого."""
 
         digest = hashlib.md5(usedforsecurity=False)
         with path.open("rb") as stream:
@@ -65,17 +59,17 @@ class DWGTreeProcessor:
                 digest.update(chunk)
         return digest.hexdigest()
 
-    def walk(self, root_path: Path) -> Generator[JobEntry, None, None]:
-        """Walk a directory and yield DWG/DXF parsing jobs."""
+    def walk(self, sources_path: Path) -> Generator[JobEntry, None, None]:
+        """Обходит каталог и выдаёт задания на разбор DWG/DXF."""
 
-        for file_path in sorted(path for path in root_path.rglob("*") if path.is_file()):
+        for file_path in sorted(path for path in sources_path.rglob("*") if path.is_file()):
             suffix = file_path.suffix.lower()
             if suffix in {".dwg", ".dxf", ".dxb"}:
-                parent_rel = file_path.parent.relative_to(root_path)
+                parent_rel = file_path.parent.relative_to(sources_path)
                 parent_rel_str = "" if str(parent_rel) == "." else parent_rel.as_posix()
                 yield {
                     "kind": "file",
-                    "root": str(root_path),
+                    "root": str(sources_path),
                     "source": str(file_path),
                     "name": file_path.name,
                     "file_type": suffix,
@@ -86,7 +80,7 @@ class DWGTreeProcessor:
             if suffix != ".zip":
                 continue
 
-            zip_parent_rel = file_path.parent.relative_to(root_path)
+            zip_parent_rel = file_path.parent.relative_to(sources_path)
             zip_parent_rel_str = "" if str(zip_parent_rel) == "." else zip_parent_rel.as_posix()
             try:
                 with zipfile.ZipFile(file_path) as archive:
@@ -98,7 +92,7 @@ class DWGTreeProcessor:
                             continue
                         yield {
                             "kind": "zipped_file",
-                            "root": str(root_path),
+                            "root": str(sources_path),
                             "source": str(file_path),
                             "member": member_name,
                             "name": Path(member_name).name,
@@ -111,7 +105,7 @@ class DWGTreeProcessor:
 
     @staticmethod
     def split_to_batches(entries: list[JobEntry], workers: int) -> list[list[JobEntry]]:
-        """Split jobs into batches for parallel processing."""
+        """Разбивает задания на пачки для параллельной обработки."""
 
         normalized_workers = max(1, workers)
         batches: list[list[JobEntry]] = [[] for _ in range(normalized_workers)]
@@ -121,7 +115,7 @@ class DWGTreeProcessor:
 
     @staticmethod
     def extract_from_zip(zip_path: Path, member: str, temp_dir: Path) -> Path:
-        """Extract a file from a ZIP archive into a temp directory and return its path."""
+        """Извлекает файл из ZIP-архива во временный каталог и возвращает его путь."""
 
         target_path = temp_dir / Path(member).name
         with zipfile.ZipFile(zip_path) as archive:
@@ -131,28 +125,12 @@ class DWGTreeProcessor:
 
     @staticmethod
     def read_drawing(path: Path):
-        """Read a DWG/DXF file via ezdxf or ODAFC and return a Drawing object."""
+        """Читает DWG/DXF-файл через ezdxf или ODAFC и возвращает Drawing."""
 
         suffix = path.suffix.lower()
         if suffix == ".dwg":
             return read_odafc(path, "ACAD2018")
         return readfile(path)
-
-
-def _build_name_tags_extractor_from_config(
-    name_tags_config: NameTagsAIConfig | None,
-) -> NameTagsExtractor | None:
-    if name_tags_config is None:
-        return None
-
-    from .langchain_name_tags import LangChainAgentConfig, LangChainNameTagsExtractor
-
-    config = LangChainAgentConfig(
-        model=name_tags_config["model"],
-        base_url=name_tags_config["base_url"],
-        api_key=name_tags_config["api_key"],
-    )
-    return LangChainNameTagsExtractor.from_config(config)
 
 
 def _build_entity_text(text_value: str | None):
@@ -168,10 +146,20 @@ def _build_entity_embedding(text_value: str | None) -> EntityEmbedding | None:
     return EntityEmbedding(entity_text=entity_text)
 
 
-def _build_entity_geom(geom_value: str | None) -> EntityGeom | None:
-    if not geom_value:
-        return None
-    return EntityGeom(geom=geom_value)
+def _coerce_entity_type(value: object) -> EntityType:
+    if isinstance(value, EntityType):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().upper()
+        if normalized:
+            normalized = ENTITY_TYPE_ALIASES.get(normalized, normalized)
+            return ENTITY_TYPES.get(normalized, EntityType.PRIMITIVE)
+    if isinstance(value, int):
+        try:
+            return EntityType(value)
+        except ValueError:
+            return EntityType.PRIMITIVE
+    return EntityType.PRIMITIVE
 
 
 def collect_entity_layers(doc, entity, seen_blocks: set[str] | None = None) -> set[str]:
@@ -199,82 +187,36 @@ def collect_entity_layers(doc, entity, seen_blocks: set[str] | None = None) -> s
     return layers
 
 
-def iter_blocks(drawing: Drawing) -> Iterator[BlockLayout]:
-    """Iterate over document blocks with optional progress reporting."""
-
-    blocks = list(drawing.blocks)
-    return iter(
-        _tqdm(
-            blocks,
-            total=len(blocks),
-            desc="Blocks",
-            unit="block",
-            disable=not sys.stderr.isatty(),
-        )
-    )
+def _is_layout_block(block) -> bool:
+    block_name = block.name.lower()
+    return block_name.startswith("*model_space") or block_name.startswith("*paper_space")
 
 
-def _is_layout_block(block_name: str) -> bool:
-    return block_name.startswith("*Model_Space") or block_name.startswith("*Paper_Space")
-
-
-def _collect_layout_primitives(doc) -> list[dict[str, object]]:
-    primitives: list[dict[str, object]] = []
+def collect_layout_entities(doc) -> Generator[dict[str, Any] | None, None, None]:
+    """Итерирует все сущности во всех layout и возвращает их данные."""
 
     for layout in doc.layouts:
-        layout_name = str(layout.name)
-        for entity in layout:
-            primitive = DXFAnalyzer.get_entity_data(entity)
-            primitive["layout"] = layout_name
-            primitive["parent_block"] = layout_name
-
-            primitive_block = str(primitive.get("block", "") or "").strip()
-            if not primitive_block:
-                primitive["block"] = layout_name
-
-            if primitive.get("type") == "INSERT":
-                target_block = str(getattr(entity.dxf, "name", "") or "").strip()
-                if target_block:
-                    primitive["target_block"] = target_block
-                    primitive["text"] = target_block
-                location = ""
-                if entity.dxf.hasattr("insert"):
-                    point = DXFAnalyzer.format_point(getattr(entity.dxf, "insert"))
-                    if point is not None:
-                        location = str(point)
-                primitive["location"] = location
-
-            primitives.append(primitive)
-
-    return primitives
+        logger.debug(f"Обрабатываем layout: {layout.name}, количество сущностей: {len(layout)}")
+        for dxf_entity in layout:
+            yield DXFAnalyzer.get_entity_data(
+                dxf_entity, 
+                parent=layout,
+                layout=layout
+            )
 
 
-def _enrich_primitives_with_name_tags(
-    primitives: list[dict[str, object]],
-    name_tags_extractor: NameTagsExtractor,
-) -> list[dict[str, object]]:
-    enriched: list[dict[str, object]] = []
-    for primitive in primitives:
-        payload: dict[str, object] = dict(primitive)
-        if primitive.get("type") not in {"TEXT", "MTEXT"}:
-            enriched.append(payload)
-            continue
+def collect_drawing_summary(drawing: Drawing) -> dict[str, Any]:
+    """Собирает данные layout, блоков и примитивов из чертежа."""
 
-        text = str(primitive.get("text", "")).strip()
-        if text:
-            tags = [tag.strip() for tag in name_tags_extractor.extract(text) if tag.strip()]
-            if tags:
-                payload["ai_name_tags"] = sorted(set(tags))
-        enriched.append(payload)
-    return enriched
+    # Предварительный вывод статистики
+    logger.debug(f"Количество layout'ов: {len(drawing.layouts)}")
+    logger.debug(f"Количество блоков: {len(drawing.blocks)}")
+    logger.debug(f"Количество слоев: {len(drawing.layers)}")
+    total_primitives: int = 0
+    for laout in drawing.layouts:
+        total_primitives += len(laout)
+    logger.debug(f"Количество примитивов в layout'ах: {total_primitives}")
 
-
-def collect_drawing_summary(
-    drawing: Drawing,
-    name_tags_extractor: NameTagsExtractor | None = None,
-) -> dict[str, Any]:
-    """Collect layout, block, and primitive data from a drawing."""
-    
     layouts: list[dict[str, object]] = []
     for layout in drawing.layouts:
         layouts.append({
@@ -301,63 +243,63 @@ def collect_drawing_summary(
         })
 
     blocks: list[dict[str, object]] = []
-    primitives: list[dict[str, object]] = []
-    for block in iter_blocks(drawing):
-        if _is_layout_block(str(block.name)):
+    block_links = {}
+    block_layers = {}    
+    for block in drawing.blocks:
+        if _is_layout_block(block):
             continue
-
-        # table_stats = TextClusterAnalyzer.analyze_table(block)
         block_description = DXFAnalyzer.get_block_decsription(drawing, block.name)
-        blocks.append(
-            {
-                "name": block.name,
-                "entity_count": sum(1 for _ in block),
-                "description": block_description or '',
-                # "is_table": table_stats.is_table,
-                # "table": {
-                #     "title": table_stats.title,
-                #     "rows": table_stats.rows,
-                #     "total_texts": table_stats.total_texts,
-                #     "table_like_texts": table_stats.table_like_texts,
-                #     "x_clusters": len(table_stats.x_clusters),
-                #     "y_clusters": len(table_stats.y_clusters),
-                # },
+        table_stats = TextClusterAnalyzer.analyze_table(block)
+        blocks_def = {
+            "name": block.name,
+            "entity_count": sum(1 for _ in block),
+            "description": block_description or '',
+            "is_table": table_stats.is_table,
+        }
+        if table_stats.is_table:
+            blocks_def["table"] = {
+                "title": table_stats.title,
+                "rows": table_stats.rows,
+                "total_texts": table_stats.total_texts,
+                "table_like_texts": table_stats.table_like_texts,
+                "x_clusters": len(table_stats.x_clusters),
+                "y_clusters": len(table_stats.y_clusters),
             }
-        )
+        blocks.append(blocks_def)
+
+        if block_description and "primitives_layers" in block_description:
+            block_layers[block.name] = block_description["primitives_layers"]
 
         for entity in block:
-            primitives.append(DXFAnalyzer.get_entity_data(entity, block=block))
+            if entity.dxftype() == "INSERT":
+                block_links.setdefault(block.name, set()).add(entity.dxf.name)
 
-    primitives.extend(_collect_layout_primitives(drawing))
+    primitives: list[dict[str, object]] = []
+    for entity_data in collect_layout_entities(drawing):
+        if entity_data is not None:
+            primitives.append(entity_data)
 
-    if name_tags_extractor is not None:
-        primitives_payload = _enrich_primitives_with_name_tags(primitives, name_tags_extractor)
-    else:
-        primitives_payload = cast(list[dict[str, object]], primitives)
+    primitives_payload = cast(list[dict[str, object]], primitives)
 
     return {
         "layouts": layouts,
         "layers": layers,
         "blocks": blocks,
         "primitives": primitives_payload,
+        "block_links": block_links,
+        "block_layers": block_layers,
     }
 
 
-def collect_dxf_summary(
-    drawing_path: Path,
-    name_tags_extractor: NameTagsExtractor | None = None,
-) -> dict[str, Any]:
-    """Collect layout, block, and primitive data from a DWG/DXF file."""
+def collect_dxf_summary(drawing_path: Path) -> dict[str, Any]:
+    """Собирает данные layout, блоков и примитивов из DWG/DXF-файла."""
 
     # Read the DWG/DXF file.
     doc = DWGTreeProcessor.read_drawing(drawing_path)
-    return collect_drawing_summary(doc, name_tags_extractor=name_tags_extractor)
+    return collect_drawing_summary(doc)
 
 
-def process_entry(
-    entry: JobEntry,
-    name_tags_extractor: NameTagsExtractor | None = None,
-) -> ProcessedEntry:
+def process_entry(entry: JobEntry) -> ProcessedEntry:
     source = Path(entry["source"])
 
     with tempfile.TemporaryDirectory(prefix="parsedwg-process-") as temp_dir_name:
@@ -373,13 +315,13 @@ def process_entry(
             member_name = entry.get("member")
             if member_name is None:
                 raise ValueError("Для zipped_file не указан member.")
-            
+
             working_path = DWGTreeProcessor.extract_from_zip(source, member_name, temp_dir)
             source_ref = f"{entry['source']}::{member_name}"
             entity_md5 = DWGTreeProcessor.file_md5(working_path)
 
         logger.info("Обрабатываем файл: %s%s", source_ref, is_zip)
-        summary = collect_dxf_summary(working_path, name_tags_extractor=name_tags_extractor)
+        summary = collect_dxf_summary(working_path)
 
     processed_entry: ProcessedEntry = {
         **entry,
@@ -390,22 +332,14 @@ def process_entry(
     return processed_entry
 
 
-def process_batch(
-    batch: list[JobEntry],
-    name_tags_config: NameTagsAIConfig | None = None,
-) -> list[ProcessedEntry]:
-    """Process a batch of files sequentially and return ready summaries."""
+def process_batch(batch: list[JobEntry]) -> Generator[ProcessedEntry, None, None]:
+    """Последовательно обрабатывает пачку файлов и возвращает готовые сводки."""
 
-    processed: list[ProcessedEntry] = []
-
-    name_tags_extractor = _build_name_tags_extractor_from_config(name_tags_config)
     for entry in batch:
-        processed.append(process_entry(entry, name_tags_extractor=name_tags_extractor))
-
-    return processed
+        yield process_entry(entry)
 
 
-async def _create_folders_tree(
+def create_folders_tree(
     session,
     root_path: Path,
     project_id,
@@ -419,7 +353,7 @@ async def _create_folders_tree(
         embedding_data=_build_entity_embedding(f"Источник сканирования: {root_path}"),
     )
     session.add(root_entity)
-    await session.flush()
+    session.flush()
 
     folders: dict[str, Entity] = {"": root_entity}
     created = 1
@@ -439,22 +373,22 @@ async def _create_folders_tree(
             embedding_data=_build_entity_embedding(f"Каталог: {dir_path}"),
         )
         session.add(folder_entity)
-        await session.flush()
+        session.flush()
         folders[rel] = folder_entity
         created += 1
 
     return folders, created
 
 
-async def _flush_primitives_batch(
+def flush_primitives_batch(
     session,
-    primitive_entities_batch: list[Entity],
-    primitive_layer_links_batch: list[tuple[Entity, Entity]],
+    primitive_batch: list[Entity],
+    primitive_layer_links: list[tuple[Entity, Entity]],
     processed_count: int,
     primitives_total: int,
     final: bool = False,
 ) -> int:
-    if not primitive_entities_batch:
+    if not primitive_batch:
         return 0
 
     if final:
@@ -470,61 +404,40 @@ async def _flush_primitives_batch(
             primitives_total,
         )
 
-    session.add_all(primitive_entities_batch)
-    await session.flush()
+    session.add_all(primitive_batch)
+    session.flush()
 
-    if primitive_layer_links_batch:
-        session.add_all(
-            [
-                EntityToEntity(
-                    dst_id=layer_entity.id,
-                    src_id=primitive_entity.id,
-                    link="on_layer",
-                )
-                for primitive_entity, layer_entity in primitive_layer_links_batch
-            ]
+    for primitive_entity, layer_entity in primitive_layer_links:
+        session.add(
+            EntityToEntity(
+                dst_id=layer_entity.id,
+                src_id=primitive_entity.id,
+                link="on_layer",
+            )
         )
-        await session.flush()
 
-    created_count = len(primitive_entities_batch)
-    await session.commit()
-    primitive_entities_batch.clear()
-    primitive_layer_links_batch.clear()
+    created_count = len(primitive_batch)
+    session.commit()
+    primitive_batch.clear()
+    primitive_layer_links.clear()
     return created_count
 
 
-async def save_tree_to_db(
-    root_path: str,
-    processed_entries: list[ProcessedEntry],
-    project_name: str,
-    project_description: str | None = None,
-    created_by: str | None = None,
-) -> tuple[str, int]:
-    """Persist an entity tree to the database from already processed files.
+def drawing_to_db(
+    sources_path: str | Path,
+    processed_entries: Generator[ProcessedEntry, None, None],
+    project_id: int,
+) -> int:
+    """Сохраняет дерево сущностей в базу данных по уже обработанным файлам.
 
-    Returns the project ID and the number of created entities.
+    Возвращает количество созданных сущностей.
     """
 
     logger.info("Сохраняем результаты в БД")
-    async with async_session_factory() as session:
-        # Reuse an existing project or create a new one.
-        result = await session.execute(
-            select(Project.id).where(Project.name == project_name)
-        )
-        project_id = result.scalar_one_or_none()
+    with session_factory() as session:
 
-        if project_id is None:
-            project = Project(
-                name=project_name,
-                description=project_description,
-                created_by=created_by,
-            )
-            session.add(project)
-            await session.flush()
-            project_id = project.id
-
-        root = Path(root_path)
-        folders, created_entities = await _create_folders_tree(session, root, project_id)
+        root = Path(sources_path)
+        folders, created_entities = create_folders_tree(session, root, project_id)
 
         zip_entities: dict[str, Entity] = {}
 
@@ -539,7 +452,7 @@ async def save_tree_to_db(
                 zip_parent_rel = str(entry.get("zip_parent_rel", ""))
                 zip_parent_entity = folders.get(zip_parent_rel)
                 if zip_parent_entity is None:
-                    raise RuntimeError(f"Не найден родительский каталог для ZIP: {zip_parent_rel}")
+                    raise errors.FolderNotFound(f"Не найден родительский каталог для ZIP: {zip_parent_rel}")
 
                 zip_entity = zip_entities.get(zip_source)
                 if zip_entity is None:
@@ -553,7 +466,7 @@ async def save_tree_to_db(
                         embedding_data=_build_entity_embedding(f"ZIP-архив: {zip_source}"),
                     )
                     session.add(zip_entity)
-                    await session.flush()
+                    session.flush()
                     zip_entities[zip_source] = zip_entity
                     created_entities += 1
                 parent_entity = zip_entity
@@ -561,7 +474,7 @@ async def save_tree_to_db(
                 parent_rel = str(entry.get("parent_rel", ""))
                 parent_entity = folders.get(parent_rel)
                 if parent_entity is None:
-                    raise RuntimeError(f"Не найден родительский каталог для файла: {parent_rel}")
+                    raise errors.FolderNotFound(f"Не найден родительский каталог для файла: {parent_rel}")
 
             file_entity = Entity(
                 parent_id=parent_entity.id,
@@ -574,7 +487,7 @@ async def save_tree_to_db(
                 embedding_data=_build_entity_embedding(f"Исходный файл: {source_ref}"),
             )
             session.add(file_entity)
-            await session.flush()
+            session.flush()
             created_entities += 1
 
             summary = cast(dict[str, list[dict[str, object]]], entry["summary"])
@@ -594,7 +507,7 @@ async def save_tree_to_db(
                     embedding_data=_build_entity_embedding(f"Layout {entry['name']}"),
                 )
                 session.add(layout_entity)
-                await session.flush()
+                session.flush()
                 layout_entities_by_name[layout_name] = layout_entity.id
                 created_entities += 1
 
@@ -612,18 +525,19 @@ async def save_tree_to_db(
                     embedding_data=_build_entity_embedding(f"Layer {layer_name}"),
                 )
                 session.add(layer_entity)
-                await session.flush()
+                session.flush()
                 layer_entities_by_key[layer_name] = layer_entity
                 created_entities += 1
 
             block_entities_by_name: dict[str, int] = {}
             logger.info("Блоки (%d шт.)", len(summary.get("blocks", [])))
             for block in summary["blocks"]:
+                logger.debug(block)
                 block_name = str(block["name"])
 
-                block_data: dict[str, object] = {
-                    "entity_count": block["entity_count"],
-                }
+                block_data = block.get("data", {})
+                if not isinstance(block_data, dict):
+                    block_data = {}
                 if block.get("is_table"):
                     block_data["table"] = block["table"]
 
@@ -637,172 +551,201 @@ async def save_tree_to_db(
                     description=str(block_description),
                     entity_type=EntityType.BLOCK,
                     data=block_data,
-                    # is_table=cast(bool, block["is_table"]),
+                    is_table=bool(block.get("is_table")),
                     embedding_data=_build_entity_embedding(f"Block {block_name}"),
                 )
                 session.add(block_entity)
-                await session.flush()
+                session.flush()
                 block_entities_by_name[block_name] = block_entity.id
+                logger.debug(f"Block {block_name!r} {block_data} (ID={block_entity.id})")
                 created_entities += 1
 
+            block_links = summary.get("block_links", {})
+            if not isinstance(block_links, dict):
+                block_links = {}
+            for block_name, linked_blocks in block_links.items():
+                block_entity_id = block_entities_by_name.get(block_name)
+                if block_entity_id:
+                    for linked_block in linked_blocks:
+                        linked_block_entity_id = block_entities_by_name.get(linked_block) or layout_entities_by_name.get(linked_block)
+                        if linked_block_entity_id:
+                            session.add(
+                                EntityToEntity(
+                                    dst_id=linked_block_entity_id,
+                                    src_id=block_entity_id,
+                                    link="contains",
+                                )
+                            )
+
+            block_layers = summary.get("block_layers", {})
+            if not isinstance(block_layers, dict):
+                block_layers = {}
+            for block_name, layers in block_layers.items():
+                block_entity_id = block_entities_by_name.get(block_name)
+                if block_entity_id:
+                    for layer_name in layers:
+                        layer_entity = layer_entities_by_key.get(layer_name)
+                        if layer_entity:
+                            session.add(
+                                EntityToEntity(
+                                    dst_id=layer_entity.id,
+                                    src_id=block_entity_id,
+                                    link="has_layer",
+                                )
+                            )
+
             primitives = summary.get("primitives", [])
-            primitive_entities_batch: list[Entity] = []
-            primitive_layer_links_batch: list[tuple[Entity, Entity]] = []
+            for item in primitives:
+                if not isinstance(item, dict):
+                    continue
+                e_children = item.pop("children", [])
+                if e_children:
+                    for x in e_children:
+                        x["is_virtual"] = True
+                        primitives.append(x)
+
+            primitive_batch: list[Entity] = []
+            primitive_layer_links: list[tuple[Entity, Entity]] = []
 
             logger.info("Примитивы (%d шт.)", len(primitives))
-            primitive_iterable = _tqdm(
-                primitives,
-                total=len(primitives),
-                desc="Primitives",
-                unit="primitive",
-                disable=not sys.stderr.isatty(),
-            )
-            for idx, primitive in enumerate(primitive_iterable, start=1):
-                block_name = str(primitive["block"])
-                parent_block_name = str(primitive.get("parent_block", block_name))
-                parent_block_entity_id = (
-                    block_entities_by_name.get(parent_block_name)
-                    or layout_entities_by_name.get(parent_block_name)
-                )
-                if parent_block_entity_id is None:
-                    logger.warning(
-                        "Пропускаем примитив %s: не найден parent entity %s",
-                        primitive.get("text", ""),
-                        block_name,
-                    )
-                    if idx % PRIMITIVE_BATCH_SIZE == 0:
-                        created_entities += await _flush_primitives_batch(
-                            session,
-                            primitive_entities_batch,
-                            primitive_layer_links_batch,
-                            processed_count=idx,
-                            primitives_total=len(primitives),
-                        )
-                    continue
 
-                if "name" in primitive and isinstance(primitive["name"], str):
-                    name = str(primitive.pop("name")).strip()
-                else:
-                    name = str(primitive.get("type", ""))
-                
-                geom = primitive.pop("geom", None)
+            for idx, primitive in enumerate(primitives, start=1):
+                primitive_payload = dict(primitive)
+                name = None
+                if "name" in primitive_payload:
+                    name = str(primitive_payload.pop("name")).strip()
+
+                layer_name = primitive_payload.get("layer")
+                layer_entity = (
+                    layer_entities_by_key.get(layer_name)
+                    if isinstance(layer_name, str)
+                    else None
+                )
+                parent = primitive_payload.pop("parent", None)
+                layout_entity = primitive_payload.pop("layout", None)
+
+                parent_entity_id = None
+                _block_name = None
+                if hasattr(parent, "name") and isinstance(parent.name, str):
+                    _block_name = parent.name
+                elif hasattr(parent, "dxf") and parent.dxf.hasattr("name") and isinstance(parent.dxf.name, str):
+                    _block_name = parent.dxf.name
+                    
+                if _block_name:
+                    parent_entity_id = (
+                        block_entities_by_name.get(_block_name)
+                        if isinstance(_block_name, str)
+                        else None
+                    )
+ 
+                if parent_entity_id is None:
+                    parent_entity_id = file_entity.id
+
                 primitive_entity = Entity(
-                    parent_id=parent_block_entity_id,
+                    parent_id=parent_entity_id,
                     file_id=file_entity.id,
                     project_id=project_id,
                     name=name,
-                    description=str(primitive.get("text", "")),
-                    entity_type=primitive.get("type", EntityType.PRIMITIVE),
-                    data=primitive,
-                    is_primitive=True,
-                    embedding_data=_build_entity_embedding(str(primitive.get("text", ""))),
-                    geom_data=_build_entity_geom(geom),
+                    description=str(primitive_payload.get("text", "") or "") or None,
+                    entity_type=_coerce_entity_type(primitive_payload.get("type")),
+                    data=primitive_payload,
+                    embedding_data=_build_entity_embedding(
+                        str(primitive_payload.get("text", "") or name)
+                    ),
                 )
-                primitive_entities_batch.append(primitive_entity)
+                primitive_batch.append(primitive_entity)
 
-                layer_name = primitive.get("layer")
-                if isinstance(layer_name, str):
-                    layer_entity = layer_entities_by_key.get(layer_name)
-                    if layer_entity is not None:
-                        primitive_layer_links_batch.append((primitive_entity, layer_entity))
+                if layer_entity is not None:
+                    primitive_layer_links.append((primitive_entity, layer_entity))
 
                 if idx % PRIMITIVE_BATCH_SIZE == 0:
-                    created_entities += await _flush_primitives_batch(
+                    created_entities += flush_primitives_batch(
                         session,
-                        primitive_entities_batch,
-                        primitive_layer_links_batch,
+                        primitive_batch,
+                        primitive_layer_links,
                         processed_count=idx,
                         primitives_total=len(primitives),
                     )
 
-            if primitive_entities_batch:
-                created_entities += await _flush_primitives_batch(
+            if primitive_batch:
+                created_entities += flush_primitives_batch(
                     session,
-                    primitive_entities_batch,
-                    primitive_layer_links_batch,
+                    primitive_batch,
+                    primitive_layer_links,
                     processed_count=len(primitives),
                     primitives_total=len(primitives),
                     final=True,
                 )
             else:
-                await session.commit()
+                session.commit()
 
-    return str(project_id), created_entities
+    return created_entities
 
 
-def run_process_tree(
-    source_path: Path,
+def process_source(
+    sources_path: Path,
     project_name: str | None = None,
-    project_description: str | None = None,
-    created_by: str | None = None,
-    name_tags_config: NameTagsAIConfig | None = None,
-    dry_run: bool = False,
 ) -> dict[str, object]:
-    """Walk a directory or file, parse DWG/DXF content, and save the tree to the DB."""
+    """Обходит каталог или файл, разбирает DWG/DXF и сохраняет дерево в БД."""
 
-    root_path = source_path if source_path.is_dir() else source_path.parent
     logger.info("Старт обработки")
-    if source_path.is_file():
-        logger.info("Обрабатываем файл: %s", source_path)
-        suffix = source_path.suffix.lower()
+
+    project_id = None
+    with session_factory() as session:
+        # Reuse an existing project or create a new one.
+        result = session.execute(
+            select(Project.id).where(Project.name == project_name)
+        )
+        project_id = result.scalar_one_or_none()
+
+    if project_id is None:
+        raise RuntimeError(f"Проект с именем '{project_name}' не найден.")
+
+    if sources_path.is_file():
+        logger.info("Обрабатываем файл: %s", sources_path)
+        suffix = sources_path.suffix.lower()
         if suffix not in {".dwg", ".dxf", ".dxb"}:
             raise ValueError("Поддерживаются только файлы DWG, DXF, DXB.")
-        entries = [
+
+        drawing_files = [
             {
                 "kind": "file",
-                "root": str(root_path),
-                "source": str(source_path),
-                "name": source_path.name,
+                "source": str(sources_path),
+                "name": sources_path.name,
                 "file_type": suffix,
                 "parent_rel": "",
             }
         ]
-    elif source_path.is_dir():
-        logger.info("Обрабатываем каталог: %s", source_path)
-        entries = list(DWGTreeProcessor(source_path).walk(source_path))
-        if not entries:
-            raise ValueError(
-                f"В каталоге {source_path} не найдено DWG / DXF / DXB-файлов (включая ZIP)."
+    elif sources_path.is_dir():
+        logger.info("Обрабатываем каталог: %s", sources_path)
+        drawing_files = list(DWGTreeProcessor(sources_path).walk(sources_path))
+        if not drawing_files:
+            raise errors.FileNotFound(
+                f"В каталоге {sources_path} не найдено DWG / DXF / DXB-файлов (включая ZIP)."
             )
     else:
-        raise ValueError(f"Путь {source_path} не найден.")
+        raise errors.FileNotFound(f"Путь {sources_path} не найден.")
 
-    logger.info("Найдено файлов для обработки: %d", len(entries))
-    processed_entries = process_batch(entries, name_tags_config=name_tags_config)
+    logger.info("Найдено файлов для обработки: %d", len(drawing_files))
 
-    project_id: str | None = None
+    processed_entries = process_batch(drawing_files)
+
     created_entities = 0
-    if dry_run:
-        project_id, created_entities = None, 0
-    else:
-        project_id, created_entities = asyncio.run(
-            save_tree_to_db(
-                root_path=str(root_path),
-                processed_entries=processed_entries,
-                project_name=project_name or root_path.name or str(root_path),
-                project_description=project_description,
-                created_by=created_by,
-            )
-        )
-
-    processed_entries.sort(key=lambda item: str(item.get("source_ref", "")))
-    logger.info(
-        "Обработка завершена: files=%d",
-        len(processed_entries),
+    created_entities = drawing_to_db(
+        sources_path,
+        processed_entries,
+        project_id=project_id,
     )
 
-    mode = "direct"
-
+    logger.info("Обработка завершена")
     return {
         "job_id": None,
         "project_id": project_id,
-        "file_count": len(entries),
-        "processed_count": len(processed_entries),
+        "file_count": len(drawing_files),
         "workers": 1,
-        "mode": mode,
-        "dry_run": dry_run,
+        "mode": "direct",
         "created_entities": created_entities,
     }
 
 
-__all__ = ["DWGTreeProcessor", "collect_dxf_summary", "run_process_tree"]
+__all__ = ["DWGTreeProcessor", "collect_dxf_summary", "process_source"]

@@ -1,18 +1,18 @@
-"""The main models."""
+"""Основные модели."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
-from pgvector.sqlalchemy import Vector
-
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Table, Text, Column, Integer, Enum
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Table, Text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from pgvector.sqlalchemy import Vector
 from geoalchemy2 import Geometry
 
 from .constants import EntityType
+from .settings import settings
 
 
 class Base(DeclarativeBase):
@@ -29,12 +29,13 @@ category_to_entity = Table(
 )
 
 
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+def _get_now() -> datetime:
+    return datetime.now((settings.tz))
 
 
 class Project(Base):
+    """Проект — это набор сущностей, обычно представляющий один документ или источник данных."""
+
     __tablename__ = "project"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -42,7 +43,7 @@ class Project(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(256), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=_utcnow
+        DateTime(timezone=True), nullable=False, default=_get_now
     )
 
     entities: Mapped[list[Entity]] = relationship("Entity", back_populates="project")
@@ -81,6 +82,8 @@ class Category(Base):
 
 
 class Entity(Base):
+    """Сущность представляет единицу информации, извлечённую из документов."""
+
     __tablename__ = "entity"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -100,15 +103,19 @@ class Entity(Base):
         nullable=True,
     )
     entity_type: Mapped[EntityType] = mapped_column(Enum(EntityType), nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(512), nullable=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    is_table: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    is_primitive: Mapped[bool | None] = mapped_column(Boolean, default=True, index=True)
+    is_table: Mapped[bool | None] = mapped_column(nullable=True)
     entity_md5: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=_utcnow,
+        DateTime(timezone=True), nullable=False, default=_get_now,
         index=True
+    )
+    geom: Mapped[str | None] = mapped_column(
+        Geometry("GEOMETRY", srid=4326),
+        nullable=True,
+        index=True,
     )
 
     parent: Mapped[Entity | None] = relationship(
@@ -147,16 +154,9 @@ class Entity(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
-    geom_data: Mapped[EntityGeom | None] = relationship(
-        "EntityGeom",
-        back_populates="entity",
-        cascade="all, delete-orphan",
-        uselist=False,
-    )
-
 
 class EntityEmbedding(Base):
-    """Embeddings and AI interpretations for an entity."""
+    """Эмбеддинги и AI-интерпретации для сущности."""
     __tablename__ = "entity_embedding"
 
     entity_id: Mapped[int] = mapped_column(
@@ -170,23 +170,6 @@ class EntityEmbedding(Base):
     short_interpretation: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     entity: Mapped[Entity] = relationship("Entity", back_populates="embedding_data")
-
-
-class EntityGeom(Base):
-    __tablename__ = "entity_geom"
-
-    entity_id: Mapped[int] = mapped_column(
-        Integer,
-        ForeignKey("entity.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    geom: Mapped[str | None] = mapped_column(
-        Geometry("GEOMETRY", srid=4326),
-        nullable=True,
-        index=True,
-    )
-
-    entity: Mapped[Entity] = relationship("Entity", back_populates="geom_data")
 
 
 class EntityToEntity(Base):

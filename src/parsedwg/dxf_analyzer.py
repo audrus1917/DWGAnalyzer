@@ -1,4 +1,4 @@
-"""DXF analysis and data extraction utilities."""
+"""Утилиты для анализа DXF и извлечения данных."""
 
 from typing import Any, Optional
 
@@ -6,22 +6,23 @@ import logging
 import re
 
 from ezdxf.document import Drawing
+from ezdxf import path
 from ezdxf.math import area as math_area
 
-from .constants import EntityType, ENTITY_TYPES
+from .constants import ENTITY_TYPES
 
 logger = logging.getLogger(__name__)
 
 
 class DXFAnalyzer:
-    """Analyze and extract data from DXF content."""
+    """Анализирует DXF-содержимое и извлекает данные."""
 
     def __init__(self, drawing: Drawing):
         self.drawing = drawing
 
     @staticmethod
     def is_point_like(value: object) -> bool:
-        """Determine if a value is point-like."""
+        """Проверяет, похоже ли значение на точку."""
 
         if hasattr(value, "x") and hasattr(value, "y"):
             return True
@@ -38,7 +39,7 @@ class DXFAnalyzer:
 
     @staticmethod
     def format_point(point: object | None) -> object | None:
-        """Format a point-like value into a consistent representation."""
+        """Приводит точечное значение к согласованному виду."""
 
         if point is None:
             return None
@@ -62,7 +63,7 @@ class DXFAnalyzer:
 
     @staticmethod
     def get_text(entity) -> str:
-        """Extract text content from TEXT or MTEXT entities, if available."""
+        """Извлекает текст из сущностей TEXT или MTEXT, если он есть."""
 
         entity_type = entity.dxftype()
         if entity_type == "TEXT":
@@ -74,54 +75,68 @@ class DXFAnalyzer:
         return ""
 
     @classmethod
-    def get_entity_data(
-        cls, 
-        entity, 
-        block: Optional[Any] = None
-    ) -> dict[str, Any]:
-        """Return DXF entity data."""
+    def get_virtual_entities(cls, entity):
+        children = []
+        for ch in entity.virtual_entities():
+            if ch.dxftype() == "INSERT":
+                ch_data = cls.get_virtual_entities(ch)
+                if ch_data is not None:
+                    children += ch_data
+            else:
+                children.append(ch)
+        return children
+
+
+    @classmethod
+    def get_entity_data(cls, entity, parent, layout: Any | None = None) -> dict[str, Any] | None:
+        """Возвращает данные DXF-сущности."""
 
         # Collect the entity type and base attributes.
         dxftype = entity.dxftype()
 
         # Generic handling shared by all entity types.
+        if dxftype not in ENTITY_TYPES:
+            logger.warning(f"Неизвестный тип сущности: {dxftype}. Будет обработан как PRIMITIVE.")
+            return None
+        
         entity_data = {
-            "type": ENTITY_TYPES.get(dxftype, EntityType.PRIMITIVE),
-            "block": getattr(block, "name", None) if block is not None else None,
+            "type": ENTITY_TYPES[dxftype],
+            "parent": parent,
             "layer": entity.dxf.layer if hasattr(entity.dxf, "layer") else None,
+            "layout": layout,
         }
+
+        # Если есть текст
         if text_value := cls.get_text(entity):
             entity_data["text"] = re.sub(r"\s+", " ", text_value).strip()
 
-        attribs: dict[str, Any] = {}
+
+        dxf_attribs: dict[str, Any] = {}
         for attr_name, value in entity.dxf.all_existing_dxf_attribs().items():
             if cls.is_point_like(value):
-                attribs[attr_name] = cls.format_point(value)
+                dxf_attribs[attr_name] = cls.format_point(value)
             else:
-                attribs[attr_name] = value
-        if attribs:
-            entity_data["attribs"] = attribs
+                dxf_attribs[attr_name] = value
+        if dxf_attribs:
+            entity_data["dxf_attribs"] = dxf_attribs
             
         match dxftype:
             case "INSERT":
-                entity_data["block"] = entity.dxf.name
-                entity_data["name"] = entity.dxf.name
                 entity_data["target_block"] = entity.dxf.name
-                entity_data["geom"] = "SRID=4326;POINT({} {})".format(
-                    entity.dxf.insert.x, entity.dxf.insert.y
-                )
-                entity_data["parent_block"] = getattr(block, "name", None) if block is not None else None
-                insert_attribs = dict(entity_data.get("attribs", {}))
-                for attr in entity.attribs:
-                    attr_name = attr.dxf.tag
-                    value = attr.dxf.text
+                # entity_data["geom"] = "SRID=4326;POINT({} {})".format(
+                #     entity.dxf.insert.x, entity.dxf.insert.y
+                # )
+                entity_data["attribs"] = {
+                    attr.dxf.tag: cls.format_point(attr.dxf.text) 
+                    if cls.is_point_like(attr.dxf.text) else attr.dxf.text
+                    for attr in entity.attribs
+                }
 
-                    if cls.is_point_like(value):
-                        insert_attribs[attr_name] = cls.format_point(value)
-                    else:
-                        insert_attribs[attr_name] = value
-                if insert_attribs:
-                    entity_data["attribs"] = insert_attribs
+                children = cls.get_virtual_entities(entity)
+                if children:
+                    entity_data["children"] = [
+                        cls.get_entity_data(ch, parent=entity, layout=layout) for ch in children
+                    ]
 
             case "LWPOLYLINE":
                 points = entity.get_points("xy")
@@ -164,20 +179,15 @@ class DXFAnalyzer:
                 )
             case "HATCH":
                 try:
-                    hatch_path = entity.get_path()
+                    hatch_path = path.make_path(entity)
                     vertices = list(hatch_path.flattening(distance=0.01))
-                    entity_data["hatch_points"] = [cls.format_point(point) for point in vertices]
-                    entity_data["hatch_area"] = math_area(vertices)
+                    entity_data["area"] = math_area(vertices)
+                    entity_data["points"] = [DXFAnalyzer.format_point(x) for x in vertices]
                 except Exception as e:
-                    logger.error(f"Ошибка при обработке HATCH: {e}")
-                    entity_data["hatch_points"] = []    
+                    entity_data["points"] = []    
+            case "MULTILEADER":
+                print('Here')
 
-        rendered: list[str] = []
-        for key, value in entity_data.items():
-            if key in {"block", "text"}:
-                rendered.append(f"{key}={value!r}")
-            else:
-                rendered.append(f"{key}={value}")
         return entity_data
     
     @classmethod
@@ -243,7 +253,7 @@ class DXFAnalyzer:
         doc: Drawing, 
         block_name: str
     ) -> dict[str, Any]:
-        """Returns the DXF block description."""
+        """Возвращает описание DXF-блока."""
 
         msp = doc.modelspace()
         block = doc.blocks.get(block_name)
@@ -272,14 +282,12 @@ class DXFAnalyzer:
         for entity in inserts:
             if entity.dxf.layer:
                 insert_layers.append(entity.dxf.layer)
-            if entity.attribs:
+            if entity.attribs and idx < 3:  # Собираем атрибуты максимум из 3 вставок для примера
                 sample_attribs = {}
                 for attr in entity.attribs:
                     sample_attribs[attr.dxf.tag] = attr.dxf.text
                 insert_samples.append(sample_attribs)
                 idx += 1
-                if idx > 2:
-                    continue
 
         if insert_samples:
             block_info["insert_samples"] = insert_samples

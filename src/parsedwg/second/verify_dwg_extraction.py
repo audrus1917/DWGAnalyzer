@@ -43,7 +43,7 @@ def open_drawing(path: Path):
 
 
 def count_from_file(doc) -> dict[str, dict[str, int]]:
-    """block_name → {entity_type → count}"""
+    """Возвращает block_name → {entity_type → count}."""
     counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for block in doc.blocks:
         block_name = str(block.name)
@@ -53,7 +53,7 @@ def count_from_file(doc) -> dict[str, dict[str, int]]:
 
 
 def count_attribs_from_file(doc) -> dict[str, int]:
-    """handle_of_insert → attrib_count"""
+    """Возвращает handle_of_insert → attrib_count."""
     result: dict[str, int] = {}
     for block in doc.blocks:
         for entity in block:
@@ -68,7 +68,7 @@ def count_attribs_from_file(doc) -> dict[str, int]:
 
 
 async def count_from_db(session: AsyncSession, file_id: str) -> dict[str, dict[str, int]]:
-    """Return block_name -> {entity_type -> count} from the DB."""
+    """Возвращает block_name -> {entity_type -> count} из БД."""
     rows = await session.execute(
         text("""
             SELECT b.name as block_name, e.entity_type, COUNT(*) as cnt
@@ -109,7 +109,7 @@ async def check_missing_layers(session: AsyncSession, file_id: str) -> int:
 
 
 async def count_attribs_from_db(session: AsyncSession, file_id: str) -> dict[str, int]:
-    """Return handle -> attrib_count from the DB."""
+    """Возвращает handle -> attrib_count из БД."""
     rows = await session.execute(
         text("""
             SELECT e.handle, COUNT(a.id) as cnt

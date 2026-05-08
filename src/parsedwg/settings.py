@@ -1,7 +1,11 @@
+"""Настройки приложения ParsedWG."""
+
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+
+import pytz
 
 from dotenv import load_dotenv
 
@@ -25,11 +29,37 @@ def _as_float(value: str | None, default: float) -> float:
 class Settings:
     database_url: str
     database_echo: bool
-    ollama_base_url: str
-    ollama_embed_model: str
-    ollama_llm_model: str
-    ollama_timeout_seconds: float
-    ollama_api_key: str
+    ai_base_url: str
+    ai_embed_model: str
+    ai_model: str
+    ai_timeout_seconds: float
+    ai_api_key: str
+    tz_name: str = "UTC"
+
+    @property
+    def tz(self) -> pytz.BaseTzInfo:
+        return pytz.timezone(self.tz_name)
+
+
+def get_ai_settings(
+    enabled: bool,
+    model: str,
+    base_url: str,
+    api_key: str,
+) -> dict | None:
+    """Возвращает конфигурацию AI для извлечения тегов из имён или None."""
+
+    if not enabled:
+        return None
+
+    from src.parsedwg.langchain_name_tags import ensure_langchain_available
+
+    ensure_langchain_available()
+    return {
+        "model": model,
+        "base_url": base_url,
+        "api_key": api_key,
+    }
 
 
 load_dotenv()
@@ -37,12 +67,12 @@ load_dotenv()
 settings = Settings(
     database_url=os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres@localhost:5432/parsedwg_db"),
     database_echo=_as_bool(os.getenv("DATABASE_ECHO"), default=False),
-    ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/"),
-    ollama_embed_model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
-    ollama_llm_model=os.getenv("OLLAMA_LLM_MODEL", "llama3.1:8b"),
-    ollama_timeout_seconds=_as_float(os.getenv("OLLAMA_TIMEOUT_SECONDS"), default=120.0),
-    ollama_api_key=os.getenv("OLLAMA_API_KEY", "ollama")
+    ai_base_url=os.getenv("AI_BASE_URL", "http://localhost:11434").rstrip("/"),
+    ai_embed_model=os.getenv("AI_EMBED_MODEL", "nomic-embed-text"),
+    ai_model=os.getenv("AI_MODEL", "llama3.1:8b"),
+    ai_timeout_seconds=_as_float(os.getenv("AI_TIMEOUT_SECONDS"), default=120.0),
+    ai_api_key=os.getenv("AI_API_KEY", "ollama")
 )
 
 
-__all__ = ["Settings", "settings"]
+__all__ = ["Settings", "settings", "get_ai_settings"]
