@@ -4,7 +4,7 @@ class ObjectNotFound(Exception):
     """Исключение, выбрасываемое при отсутствии объекта в БД."""
 
 
-class FileNoptFound(Exception):
+class FileNotFound(Exception):
     """Исключение, выбрасываемое при отсутствии файла."""
 
 class FolderNotFound(Exception):

@@ -5,12 +5,6 @@ import json
 
 from pathlib import Path
 
-from .geom import (
-    find_closest_entity_in_entities,
-    get_mleader_annotation_text,
-    get_mleader_target_point,
-)
-
 from typing import Any
 
 import logging

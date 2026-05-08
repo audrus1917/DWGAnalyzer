@@ -47,7 +47,7 @@ def upgrade() -> None:
     sa.Column('parent_id', sa.Integer(), nullable=True),
     sa.Column('file_id', sa.Integer(), nullable=True),
     sa.Column('project_id', sa.Integer(), nullable=True),
-    sa.Column('entity_type', sa.Enum('FOLDER', 'FILE', 'ZIPFILE', 'ZIPPED_FILE', 'BLOCK', 'LAYOUT', 'LAYER', '_3DFACE', '_3DSOLID', 'ACAD_PROXY_ENTITY', 'ARC', 'ATTDEF', 'ATTRIB', 'BODY', 'CIRCLE', 'COORDINATION_MODEL', 'DIMENSION', 'ELLIPSE', 'HATCH', 'HELIX', 'IMAGE', 'INSERT', 'LEADER', 'LIGHT', 'LINE', 'LWPOLYLINE', 'MESH', 'MLEADER', 'MLEADERSTYLE', 'MLINE', 'MTEXT', 'OLEFRAME', 'OLE2FRAME', 'POINT', 'POLYLINE', 'RAY', 'REGION', 'SECTION', 'SEQEND', 'SHAPE', 'SOLID', 'SPLINE', 'SUN', 'SURFACE', 'TABLE', 'TEXT', 'TOLERANCE', 'TRACE', 'UNDERLAY', 'VERTEX', 'VIEWPORT', 'WIPEOUT', 'XLINE', 'PRIMITIVE', name='entitytype'), nullable=False),
+    sa.Column('entity_type', sa.Enum('FOLDER', 'FILE', 'ZIPFILE', 'ZIPPED_FILE', 'BLOCK', 'LAYOUT', 'LAYER', '_3DFACE', '_3DSOLID', 'ACAD_PROXY_ENTITY', 'ARC', 'ATTDEF', 'ATTRIB', 'BODY', 'CIRCLE', 'COORDINATION_MODEL', 'DIMENSION', 'ELLIPSE', 'HATCH', 'HELIX', 'IMAGE', 'INSERT', 'LEADER', 'LIGHT', 'LINE', 'LWPOLYLINE', 'MESH', 'MLEADER', 'MLEADERSTYLE', 'MLINE', 'MTEXT', 'OLEFRAME', 'OLE2FRAME', 'POINT', 'POLYLINE', 'RAY', 'REGION', 'SECTION', 'SEQEND', 'SHAPE', 'SOLID', 'SPLINE', 'SUN', 'SURFACE', 'TABLE', 'TEXT', 'TOLERANCE', 'TRACE', 'UNDERLAY', 'VERTEX', 'VIEWPORT', 'WIPEOUT', 'XLINE', 'PRIMITIVE', 'ACAD_TABLE', 'MULTILEADER', name='entitytype'), nullable=False),
     sa.Column('name', sa.String(length=512), nullable=False),
     sa.Column('description', sa.Text(), nullable=True),
     sa.Column('data', postgresql.JSONB(astext_type=sa.Text()), nullable=True),

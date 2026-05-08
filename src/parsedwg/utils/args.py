@@ -389,5 +389,12 @@ def build_args_parser() -> argparse.ArgumentParser:
         "path",
         help="Путь к файлу или каталогу для рекурсивного обхода.",
     )
+
+    export_interpreted_blocks_xlsx_parser = subparsers.add_parser(
+        "export-interpreted-blocks-xlsx",
+        parents=[output_common],
+        help="Выгрузить в XLSX все блоки с непустой short_interpretation.",
+    )
+
     return parser
 

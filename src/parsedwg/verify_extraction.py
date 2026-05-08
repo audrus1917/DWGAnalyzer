@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import aliased
 
 from .db import async_session_factory
-from .orm import Entity, EntityType, Primitive
+from .orm import Entity, EntityType
 from .process_source import collect_dxf_summary
 
 
@@ -152,7 +152,7 @@ def build_verification_report(
     layouts = cast(list[Entity], db_snapshot["layouts"])
     layers = cast(list[Entity], db_snapshot["layers"])
     blocks = cast(list[Entity], db_snapshot["blocks"])
-    primitives = cast(list[Primitive], db_snapshot["primitives"])
+    primitives = cast(list[Entity], db_snapshot["primitives"])
     on_layer_links = cast(set[tuple[uuid.UUID, uuid.UUID]], db_snapshot.get("on_layer_links", set()))
 
     expected_layout_names = {
@@ -421,9 +421,10 @@ async def _load_db_snapshot(file_entity: Entity) -> dict[str, object]:
             layers = []
 
         primitive_result = await session.execute(
-            select(Primitive)
-            .where(Primitive.file_id == file_entity.id)
-            .order_by(Primitive.id.asc())
+            select(Entity)
+            .where(Entity.file_id == file_entity.id)
+            .where(Entity.entity_type == EntityType.PRIMITIVE)
+            .order_by(Entity.id.asc())
         )
         primitives = primitive_result.scalars().all()
 

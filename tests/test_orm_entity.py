@@ -1,7 +1,7 @@
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import ARRAY
 
-from parsedwg.orm import Category, Entity, EntityEmbedding, Primitive, Project, category_to_entity
+from parsedwg.orm import Category, Entity, EntityEmbedding, Project, category_to_entity
 
 
 def test_entity_has_parent_id_self_fk() -> None:
@@ -52,32 +52,28 @@ def test_entity_embedding_has_entity_fk() -> None:
     assert fk.target_fullname == "entity.id"
 
 
-def test_primitive_has_entity_fks() -> None:
-    parent_id_column = Primitive.__table__.c.parent_id
-    file_id_column = Primitive.__table__.c.file_id
-    layer_id_column = Primitive.__table__.c.layer_id
+def test_entity_uses_self_fks_for_hierarchy_and_file_scope() -> None:
+    parent_id_column = Entity.__table__.c.parent_id
+    file_id_column = Entity.__table__.c.file_id
 
-    assert parent_id_column.nullable is False
+    assert parent_id_column.nullable is True
     assert next(iter(parent_id_column.foreign_keys)).target_fullname == "entity.id"
-    assert file_id_column.nullable is False
+    assert file_id_column.nullable is True
     assert next(iter(file_id_column.foreign_keys)).target_fullname == "entity.id"
-    assert layer_id_column.nullable is True
-    assert next(iter(layer_id_column.foreign_keys)).target_fullname == "entity.id"
 
 
-def test_entity_has_embedding_and_primitives_relationships() -> None:
+def test_entity_has_embedding_relationship_only() -> None:
     assert "embedding_data" in Entity.__mapper__.relationships
-    assert "primitives" in Entity.__mapper__.relationships
+    assert "primitives" not in Entity.__mapper__.relationships
 
 
-def test_primitive_has_required_columns() -> None:
-    columns = Primitive.__table__.c
+def test_entity_has_required_columns() -> None:
+    columns = Entity.__table__.c
 
     assert "id" in columns
     assert "entity_type" in columns
     assert "name" in columns
     assert "data" in columns
-    assert "geom" in columns
     assert "created_at" in columns
 
 

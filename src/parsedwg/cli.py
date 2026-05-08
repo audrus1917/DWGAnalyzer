@@ -40,6 +40,26 @@ logging.getLogger('matplotlib.font_manager').disabled = True
 logger = logging.getLogger(__name__)
 
 
+def _as_table(rows: list[ResultRow]) -> str:
+    if not rows:
+        return "Нет данных."
+
+    columns = list(rows[0].keys())
+    prepared_rows = [[str(row.get(column, "")) for column in columns] for row in rows]
+    widths = {
+        column: max(len(column), *(len(values[index]) for values in prepared_rows))
+        for index, column in enumerate(columns)
+    }
+
+    header = " | ".join(column.ljust(widths[column]) for column in columns)
+    separator = "-+-".join("-" * widths[column] for column in columns)
+    body = [
+        " | ".join(values[index].ljust(widths[column]) for index, column in enumerate(columns))
+        for values in prepared_rows
+    ]
+    return "\n".join([header, separator, *body])
+
+
 def handle_search_command(
     query: str,
     entity_type: str | None,
@@ -74,7 +94,7 @@ def handle_index_command(
     from .rag import index_entities
 
     count = asyncio.run(index_entities(entity_type, batch_size, reindex))
-    print(f"Проиндексировано: {count}")
+    logger.debug(f"Проиндексировано: {count}")
     return constants.OK
 
 
@@ -94,8 +114,8 @@ def handle_ask_command(
         logger.info("JSON сохранён: %s", output_path)
         return constants.OK
 
-    print(result["answer"])
-    print("")
+    logger.debug(result["answer"])
+    logger.debug("")
     print("Источники:")
     print_as_table(result["sources"])  # type: ignore[arg-type]
     return constants.OK
@@ -166,7 +186,7 @@ def handle_export_block_dxf_command(
             print(f"DXF сохранён: {resolved_output_path}")
             return constants.OK
 
-        print(dxf_text)
+        logger.debug(dxf_text)
         return constants.OK
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         logger.error("Не удалось экспортировать DXF-текст блока: %s", exc)
@@ -189,7 +209,7 @@ def handle_describe_block_command(
             logger.info("JSON сохранён: %s", output_path)
             return constants.OK
 
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        logger.debug(json.dumps(payload, ensure_ascii=False, indent=2))
         return constants.OK
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         logger.error("Не удалось получить описание блока: %s", exc)
@@ -232,7 +252,7 @@ def handle_extract_name_tags_command(
             logger.info("JSON сохранён: %s", output_path)
             return constants.OK
 
-        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        logger.debug(json.dumps(rows, ensure_ascii=False, indent=2))
         return constants.OK
     except RuntimeError as e:
         logger.error("Ошибка AI-режима: %s", e)
@@ -582,9 +602,9 @@ def handle_interpret_entities_command(
     entity_ids: list[str] | None,
     entity_type: str | None,
     extra_context: str = "",
-    ai_model: str = "llama3.1:8b",
-    ai_base_url: str = "http://localhost:11434/v1",
-    ai_api_key: str = "ollama",
+    ai_model: str = settings.ai_model,
+    ai_base_url: str = settings.ai_base_url,
+    ai_api_key: str = settings.ai_api_key,
     workers: int = 1,
     dry: bool = False,
 ) -> int:
@@ -1275,7 +1295,7 @@ def handle_file_stat_from_db_command(
     from openpyxl.utils import get_column_letter
 
     from .db import async_session_factory
-    from .orm import Entity, EntityType, Primitive
+    from .orm import Entity, EntityType
 
     async def collect_db_stat():
         async with async_session_factory() as session:
@@ -1318,11 +1338,12 @@ def handle_file_stat_from_db_command(
             table_blocks = [block for block in blocks if block.is_table]
 
             primitives = await session.execute(
-                sa.select(Primitive)
+                sa.select(Entity)
                 .where(
-                    Primitive.file_id == file_entity.id,
+                    Entity.file_id == file_entity.id,
+                    Entity.entity_type == EntityType.PRIMITIVE,
                 )
-                .order_by(Primitive.id.asc())
+                .order_by(Entity.id.asc())
             )
             primitives = [primitive for (primitive,) in primitives.all()]
 
@@ -1510,6 +1531,67 @@ def handle_export_blocks_xlsx_command(
     return constants.OK
 
 
+def handle_export_interpreted_blocks_xlsx_command(output_path: Path | None) -> int:
+    """Экспортирует в XLSX все блоки с непустой short_interpretation."""
+
+    import openpyxl
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    from .db import list_interpreted_blocks_for_export
+
+    try:
+        rows = asyncio.run(list_interpreted_blocks_for_export())
+    except (LookupError, OSError, RuntimeError, ValueError) as exc:
+        logger.error("Не удалось собрать интерпретированные блоки: %s", exc)
+        return constants.ERROR
+
+    if not rows:
+        print("Нет блоков с непустой short_interpretation.")
+        return constants.OK
+
+    if output_path is None:
+        output_path = Path("interpreted_blocks.xlsx")
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "Blocks"
+
+    headers = [
+        "id",
+        "name",
+        "description",
+        "short_interpretation",
+        "full_interpretation",
+    ]
+    ws.append(headers)
+
+    fill = PatternFill(fill_type="solid", fgColor="D9D9D9")
+    font = Font(bold=True)
+    for cell in ws[1]:
+        cell.fill = fill
+        cell.font = font
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    for row in rows:
+        ws.append([row[column] for column in headers])
+
+    ws.freeze_panes = "A2"
+    for row in ws.iter_rows(min_row=2):
+        for cell in row:
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+    for col_idx, col_cells in enumerate(ws.iter_cols(), start=1):
+        values = [str(cell.value) for cell in col_cells if cell.value is not None]
+        width = max((len(line) for value in values for line in value.splitlines()), default=10)
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(width + 2, 80)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(output_path)
+    print(f"XLSX по интерпретированным блокам сохранён: {output_path}")
+    return constants.OK
+
+
 def _collect_block_export_rows(
     file_ref: str,
     by_path: bool,
@@ -1579,7 +1661,7 @@ def handle_export_blocks_table_command(
         print("Нет блоков для экспорта.")
         return constants.OK
 
-    table_text = as_table(block_rows)
+    table_text = _as_table(block_rows)
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(table_text + "\n", encoding="utf-8")
@@ -1656,43 +1738,43 @@ def main(argv: list[str] | None = None) -> int:
         #         dry=args.dry,
         #     )
 
-        # case "interpret-entities":
-        #     return_code = handle_interpret_entities_command(
-        #         entity_ids=args.entity_ids,
-        #         entity_type=args.entity_type,
-        #         extra_context=args.extra_context,
-        #         ai_model=args.ai_model,
-        #         ai_base_url=args.ai_base_url,
-        #         ai_api_key=args.ai_api_key,
-        #         workers=args.workers,
-        #         dry=args.dry,
-        #     )
+        case "interpret-entities":
+            return_code = handle_interpret_entities_command(
+                entity_ids=args.entity_ids,
+                entity_type=args.entity_type,
+                extra_context=args.extra_context,
+                ai_model=args.ai_model,
+                ai_base_url=args.ai_base_url,
+                ai_api_key=args.ai_api_key,
+                workers=args.workers,
+                dry=args.dry,
+            )
 
-        # case "interpret-blocks":
-        #     return_code = handle_interpret_blocks_command(
-        #         block_ids=args.block_ids,
-        #         file_ref=args.file_ref,
-        #         by_path=args.by_path,
-        #         extra_context=args.extra_context,
-        #         ai_model=args.ai_model,
-        #         ai_base_url=args.ai_base_url,
-        #         ai_api_key=args.ai_api_key,
-        #         workers=args.workers,
-        #         dry=args.dry,
-        #     )
+        case "interpret-blocks":
+            return_code = handle_interpret_blocks_command(
+                block_ids=args.block_ids,
+                file_ref=args.file_ref,
+                by_path=args.by_path,
+                extra_context=args.extra_context,
+                ai_model=args.ai_model,
+                ai_base_url=args.ai_base_url,
+                ai_api_key=args.ai_api_key,
+                workers=args.workers,
+                dry=args.dry,
+            )
 
-        # case "interpret-block":
-        #     return_code = handle_interpret_blocks_command(
-        #         block_ids=[args.entity_id],
-        #         file_ref=None,
-        #         by_path=False,
-        #         extra_context=args.extra_context,
-        #         ai_model=args.ai_model,
-        #         ai_base_url=args.ai_base_url,
-        #         ai_api_key=args.ai_api_key,
-        #         workers=1,
-        #         dry=args.dry,
-        #     )
+        case "interpret-block":
+            return_code = handle_interpret_blocks_command(
+                block_ids=[args.entity_id],
+                file_ref=None,
+                by_path=False,
+                extra_context=args.extra_context,
+                ai_model=args.ai_model,
+                ai_base_url=args.ai_base_url,
+                ai_api_key=args.ai_api_key,
+                workers=1,
+                dry=args.dry,
+            )
 
         # case "verify-extraction":
         #     return_code = handle_verify_extraction_command(
@@ -1853,6 +1935,11 @@ def main(argv: list[str] | None = None) -> int:
         #         by_path=args.by_path,
         #         output_path=Path(args.output) if args.output else None,
         #     )
+
+        case "export-interpreted-blocks-xlsx":
+            return_code = handle_export_interpreted_blocks_xlsx_command(
+                output_path=Path(args.output) if args.output else None,
+            )
 
         # case "export-blocks-table":
         #     return_code = handle_export_blocks_table_command(

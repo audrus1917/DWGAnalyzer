@@ -7,7 +7,7 @@ import tempfile
 from collections.abc import AsyncGenerator, Sequence
 from pathlib import Path
 
-from sqlalchemy import case, create_engine, func, or_, select
+from sqlalchemy import case, create_engine, func, or_, select, desc
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, aliased, selectinload, sessionmaker
 
@@ -163,8 +163,17 @@ async def list_blocks_for_interpretation(
 
     stmt = (
         select(Entity.id, Entity.name, Entity.description, Entity.file_id)
+        .select_from(Entity)
+        .outerjoin(EntityEmbedding, EntityEmbedding.entity_id == Entity.id)
         .where(Entity.entity_type == EntityType.BLOCK)
-    )
+        .where(
+            or_(
+                EntityEmbedding.entity_id.is_(None),
+                EntityEmbedding.short_interpretation.is_(None),
+                func.length(func.trim(EntityEmbedding.short_interpretation)) == 0,
+            )
+        )
+    ).order_by(desc(func.length(Entity.name)))
     id_order: dict[int, int] = {}
 
     if block_ids:
@@ -172,6 +181,7 @@ async def list_blocks_for_interpretation(
         id_order = {block_id: index for index, block_id in enumerate(parsed_ids)}
         stmt = stmt.where(Entity.id.in_(parsed_ids))
     else:
+        assert file_id is not None
         file_entity_id = _parse_id(file_id)
         stmt = stmt.where(Entity.parent_id == file_entity_id).order_by(Entity.name.asc(), Entity.id.asc())
 
@@ -285,35 +295,35 @@ def _get_block_layout_by_name(doc, block_name: str):
     return None
 
 
-def _collect_block_annotation_texts_from_source(block_name: str, source_ref: str) -> list[str]:
-    from .process_source import DWGTreeProcessor
-    from src.parsedwg.utils import get_mleader_annotation_text
+# def _collect_block_annotation_texts_from_source(block_name: str, source_ref: str) -> list[str]:
+#     from .process_source import DWGTreeProcessor
+#     from src.parsedwg.utils import get_mleader_annotation_text
 
-    if not source_ref.strip():
-        return []
+#     if not source_ref.strip():
+#         return []
 
-    try:
-        with tempfile.TemporaryDirectory(prefix="parsedwg-block-annotations-") as temp_dir_name:
-            temp_dir = Path(temp_dir_name)
-            drawing_path = _resolve_source_ref_to_drawing_path(source_ref, temp_dir)
-            doc = DWGTreeProcessor.read_drawing(drawing_path)
-            layout = _get_block_layout_by_name(doc, block_name)
-            if layout is None:
-                return []
+#     try:
+#         with tempfile.TemporaryDirectory(prefix="parsedwg-block-annotations-") as temp_dir_name:
+#             temp_dir = Path(temp_dir_name)
+#             drawing_path = _resolve_source_ref_to_drawing_path(source_ref, temp_dir)
+#             doc = DWGTreeProcessor.read_drawing(drawing_path)
+#             layout = _get_block_layout_by_name(doc, block_name)
+#             if layout is None:
+#                 return []
 
-            seen: set[str] = set()
-            annotation_texts: list[str] = []
-            for entity in layout:
-                if str(entity.dxftype()) != "MULTILEADER":
-                    continue
-                text = get_mleader_annotation_text(entity)
-                if not text or text in seen:
-                    continue
-                seen.add(text)
-                annotation_texts.append(text)
-            return annotation_texts
-    except (FileNotFoundError, OSError, RuntimeError, ValueError):
-        return []
+#             seen: set[str] = set()
+#             annotation_texts: list[str] = []
+#             for entity in layout:
+#                 if str(entity.dxftype()) != "MULTILEADER":
+#                     continue
+#                 text = get_mleader_annotation_text(entity)
+#                 if not text or text in seen:
+#                     continue
+#                 seen.add(text)
+#                 annotation_texts.append(text)
+#             return annotation_texts
+#     except (FileNotFoundError, OSError, RuntimeError, ValueError):
+#         return []
 
 
 async def get_full_description(
@@ -325,6 +335,7 @@ async def get_full_description(
     Включает имя, слои (name + short_interpretation), атрибуты INSERT-примитивов
     и INSERT-сущности, имя которых совпадает с именем блока.
     """
+
     async with async_session_factory() as session:
         block_stmt = (
             select(Entity)
@@ -339,101 +350,7 @@ async def get_full_description(
         block = block_result.scalar_one_or_none()
         if block is None:
             return None
-
-        layer_stmt = (
-            select(Entity.name, EntityEmbedding.short_interpretation)
-            .select_from(Entity)
-            .outerjoin(EntityEmbedding, EntityEmbedding.entity_id == Entity.id)
-            .where(Entity.entity_type == EntityType.LAYER)
-        )
-        if block.file_id is not None:
-            layer_stmt = layer_stmt.where(Entity.file_id == block.file_id)
-        elif getattr(block, "parent_id", None) is not None:
-            layer_stmt = layer_stmt.where(Entity.parent_id == block.parent_id)
-        layer_stmt = layer_stmt.order_by(Entity.name.asc(), Entity.id.asc())
-        layer_rows = await session.execute(layer_stmt)
-        layers = []
-        for row in layer_rows:
-            name = _row_value(row, 0, "name")
-            short_interpretation = _row_value(row, 1, "short_interpretation")
-            layers.append(
-                {
-                    "name": str(name),
-                    "short_interpretation": (
-                        str(short_interpretation) if short_interpretation is not None else None
-                    ),
-                }
-            )
-
-        attrib_stmt = select(Entity.data).where(Entity.data["block"].astext == block_name)
-        if block.file_id is not None:
-            attrib_stmt = attrib_stmt.where(Entity.file_id == block.file_id)
-        attrib_rows = await session.execute(attrib_stmt)
-        attributes: dict[str, object] = {}
-        for row in attrib_rows:
-            row_data = _row_value(row, 0, "data")
-            if not isinstance(row_data, dict):
-                continue
-            row_attribs = row_data.get("attribs")
-            if isinstance(row_attribs, dict):
-                attributes.update(row_attribs)
-
-        inserts_stmt = (
-            select(Entity.id, Entity.parent_id, Entity.file_id, Entity.data)
-            .where(Entity.name == block_name)
-        )
-        if block.file_id is not None:
-            inserts_stmt = inserts_stmt.where(Entity.file_id == block.file_id)
-        insert_rows = await session.execute(inserts_stmt)
-        inserts = []
-        for row in insert_rows:
-            row_id = _row_value(row, 0, "id")
-            row_parent_id = _row_value(row, 1, "parent_id")
-            row_file_id = _row_value(row, 2, "file_id")
-            row_data = _row_value(row, 3, "data")
-            if row_id == block.id:
-                continue
-            inserts.append(
-                {
-                    "id": str(row_id),
-                    "parent_id": str(row_parent_id) if row_parent_id is not None else None,
-                    "file_id": str(row_file_id) if row_file_id is not None else None,
-                    "data": row_data if isinstance(row_data, dict) else {},
-                }
-            )
-
-        multileader_stmt = (
-            select(Entity.description, Entity.data)
-            .where(Entity.file_id == block.file_id)
-            .where(Entity.entity_type == EntityType.MLEADER)
-        )
-        multileader_rows = await session.execute(multileader_stmt)
-        annotation_texts = _collect_annotation_texts_from_rows(multileader_rows)
-
-        if not annotation_texts and block.file_id is not None:
-            source_ref_stmt = (
-                select(Entity.data["source_ref"].astext)
-                .where(Entity.id == block.file_id)
-                .limit(1)
-            )
-            source_ref_result = await session.execute(source_ref_stmt)
-            source_ref_row = source_ref_result.first()
-            source_ref = str(source_ref_row[0] or "") if source_ref_row else ""
-            if source_ref:
-                annotation_texts = _collect_block_annotation_texts_from_source(block_name, source_ref)
-
-    return {
-        "id": str(block.id),
-        "name": block.name,
-        "description": block.description,
-        "short_interpretation": _get_short_interpretation(block),
-        "full_interpretation": _get_full_interpretation(block),
-        "layers": layers,
-        "attributes": attributes,
-        "inserts": inserts,
-        "insert_count": len(inserts),
-        "annotation_texts": annotation_texts,
-    }
+        return block.description if block.description else {}
 
 
 async def get_full_description_by_id(block_id: str) -> dict[str, object] | None:
@@ -466,6 +383,34 @@ async def list_blocks_for_export(file_id: str) -> list[dict[str, object]]:
         if block_data is not None:
             payload.append(block_data)
     return payload
+
+
+async def list_interpreted_blocks_for_export() -> list[dict[str, str]]:
+    """Возвращает все блоки с непустой short_interpretation для экспорта в XLSX."""
+
+    stmt = (
+        select(Entity, EntityEmbedding)
+        .join(EntityEmbedding, EntityEmbedding.entity_id == Entity.id)
+        .where(Entity.entity_type == EntityType.BLOCK)
+        .where(EntityEmbedding.short_interpretation.is_not(None))
+        .where(func.length(func.trim(EntityEmbedding.short_interpretation)) > 0)
+        .order_by(Entity.name.asc(), Entity.id.asc())
+    )
+
+    async with async_session_factory() as session:
+        result = await session.execute(stmt)
+        rows = result.all()
+
+    return [
+        {
+            "id": str(entity.id),
+            "name": entity.name,
+            "description": entity.description or "",
+            "short_interpretation": embedding.short_interpretation or "",
+            "full_interpretation": embedding.full_interpretation or "",
+        }
+        for entity, embedding in rows
+    ]
 
 
 async def get_table_blocks_by_file_id(file_id: str) -> list[dict[str, object]]:

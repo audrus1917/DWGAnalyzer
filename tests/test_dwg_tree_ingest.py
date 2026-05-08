@@ -13,7 +13,6 @@ from parsedwg.process_source import drawing_to_db
 from parsedwg.dxf_analyzer import DXFAnalyzer
 from parsedwg.orm import Entity
 from parsedwg.orm import EntityType
-from parsedwg.orm import Primitive
 
 
 def test_discover_dwg_sources_finds_regular_and_zipped_dwg(tmp_path: Path) -> None:
@@ -252,7 +251,7 @@ def test_save_tree_to_db_keeps_layout_primitives_without_block_entity(
         },
     }
 
-    added_primitives = []
+    added_primitives: list[Entity] = []
 
     class _FakeScalarResult:
         def scalar_one_or_none(self):
@@ -263,7 +262,7 @@ def test_save_tree_to_db_keeps_layout_primitives_without_block_entity(
             if isinstance(obj, Entity):
                 if obj.id is None:
                     obj.id = uuid.uuid4()
-            if isinstance(obj, Primitive):
+            if isinstance(obj, Entity) and obj.entity_type == EntityType.MLEADER:
                 if obj.id is None:
                     obj.id = uuid.uuid4()
                 added_primitives.append(obj)
@@ -384,7 +383,7 @@ def test_save_tree_to_db_sets_file_id_for_all_descendants(
     }
 
     added_entities: list[Entity] = []
-    added_primitives: list[Primitive] = []
+    added_primitives: list[Entity] = []
 
     class _FakeScalarResult:
         def scalar_one_or_none(self):
@@ -396,7 +395,15 @@ def test_save_tree_to_db_sets_file_id_for_all_descendants(
                 if obj.id is None:
                     obj.id = uuid.uuid4()
                 added_entities.append(obj)
-            if isinstance(obj, Primitive):
+            if isinstance(obj, Entity) and obj.entity_type not in {
+                EntityType.FILE,
+                EntityType.LAYOUT,
+                EntityType.LAYER,
+                EntityType.BLOCK,
+                EntityType.FOLDER,
+                EntityType.ZIPFILE,
+                EntityType.ZIPPED_FILE,
+            }:
                 if obj.id is None:
                     obj.id = uuid.uuid4()
                 added_primitives.append(obj)
@@ -500,7 +507,7 @@ def test_save_tree_to_db_commits_primitives_in_batches(
             objects = list(objects)
             for obj in objects:
                 self.add(obj)
-            if objects and all(isinstance(obj, Primitive) for obj in objects):
+            if objects and all(isinstance(obj, Entity) for obj in objects):
                 primitive_entity_batch_sizes.append(len(objects))
 
         async def flush(self):

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from geoalchemy2 import Geometry
-from pgvector.sqlalchemy import Vector
 from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Table, Text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+from pgvector.sqlalchemy import Vector
+from geoalchemy2 import Geometry
 
 from .constants import EntityType
 from .settings import settings
@@ -16,8 +17,6 @@ from .settings import settings
 
 class Base(DeclarativeBase):
     pass
-
-
 
 
 category_to_entity = Table(
@@ -104,7 +103,7 @@ class Entity(Base):
         nullable=True,
     )
     entity_type: Mapped[EntityType] = mapped_column(Enum(EntityType), nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(512), nullable=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     is_table: Mapped[bool | None] = mapped_column(nullable=True)
@@ -112,6 +111,11 @@ class Entity(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_get_now,
         index=True
+    )
+    geom: Mapped[str | None] = mapped_column(
+        Geometry("GEOMETRY", srid=4326),
+        nullable=True,
+        index=True,
     )
 
     parent: Mapped[Entity | None] = relationship(
@@ -150,65 +154,6 @@ class Entity(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
-    primitives: Mapped[list[Primitive]] = relationship(
-        "Primitive",
-        back_populates="parent",
-        cascade="all, delete-orphan",
-        foreign_keys="Primitive.parent_id",
-    )
-
-
-class Primitive(Base):
-    __tablename__ = "primitives"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    parent_id: Mapped[int] = mapped_column(
-        Integer,
-        ForeignKey("entity.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    file_id: Mapped[int] = mapped_column(
-        Integer,
-        ForeignKey("entity.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    project_id: Mapped[int | None] = mapped_column(
-        Integer,
-        ForeignKey("project.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    layer_id: Mapped[int | None] = mapped_column(
-        Integer,
-        ForeignKey("entity.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    entity_type: Mapped[EntityType] = mapped_column(Enum(EntityType), nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(512), nullable=True, index=True)
-    data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    geom: Mapped[str | None] = mapped_column(
-        Geometry("GEOMETRY", srid=4326),
-        nullable=True,
-        index=True,
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=_get_now,
-        index=True,
-    )
-
-    parent: Mapped[Entity] = relationship(
-        "Entity",
-        back_populates="primitives",
-        foreign_keys=[parent_id],
-    )
-    file: Mapped[Entity] = relationship("Entity", foreign_keys=[file_id])
-    project: Mapped[Project | None] = relationship("Project")
-    layer: Mapped[Entity | None] = relationship("Entity", foreign_keys=[layer_id])
-
-
 
 class EntityEmbedding(Base):
     """Эмбеддинги и AI-интерпретации для сущности."""

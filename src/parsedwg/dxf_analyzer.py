@@ -75,6 +75,19 @@ class DXFAnalyzer:
         return ""
 
     @classmethod
+    def get_virtual_entities(cls, entity):
+        children = []
+        for ch in entity.virtual_entities():
+            if ch.dxftype() == "INSERT":
+                ch_data = cls.get_virtual_entities(ch)
+                if ch_data is not None:
+                    children += ch_data
+            else:
+                children.append(ch)
+        return children
+
+
+    @classmethod
     def get_entity_data(cls, entity, parent, layout: Any | None = None) -> dict[str, Any] | None:
         """Возвращает данные DXF-сущности."""
 
@@ -90,6 +103,7 @@ class DXFAnalyzer:
             "type": ENTITY_TYPES[dxftype],
             "parent": parent,
             "layer": entity.dxf.layer if hasattr(entity.dxf, "layer") else None,
+            "layout": layout,
         }
 
         # Если есть текст
@@ -108,17 +122,21 @@ class DXFAnalyzer:
             
         match dxftype:
             case "INSERT":
-                entity_data["name"] = entity.dxf.name
                 entity_data["target_block"] = entity.dxf.name
-                entity_data["geom"] = "SRID=4326;POINT({} {})".format(
-                    entity.dxf.insert.x, entity.dxf.insert.y
-                )
+                # entity_data["geom"] = "SRID=4326;POINT({} {})".format(
+                #     entity.dxf.insert.x, entity.dxf.insert.y
+                # )
                 entity_data["attribs"] = {
                     attr.dxf.tag: cls.format_point(attr.dxf.text) 
                     if cls.is_point_like(attr.dxf.text) else attr.dxf.text
                     for attr in entity.attribs
                 }
-                entity_data["children"] = [cls.get_entity_data(child, layout) for child in entity.explode()]
+
+                children = cls.get_virtual_entities(entity)
+                if children:
+                    entity_data["children"] = [
+                        cls.get_entity_data(ch, parent=entity, layout=layout) for ch in children
+                    ]
 
             case "LWPOLYLINE":
                 points = entity.get_points("xy")
@@ -167,13 +185,9 @@ class DXFAnalyzer:
                     entity_data["points"] = [DXFAnalyzer.format_point(x) for x in vertices]
                 except Exception as e:
                     entity_data["points"] = []    
+            case "MULTILEADER":
+                print('Here')
 
-        rendered: list[str] = []
-        for key, value in entity_data.items():
-            if key in {"block", "text"}:
-                rendered.append(f"{key}={value!r}")
-            else:
-                rendered.append(f"{key}={value}")
         return entity_data
     
     @classmethod
@@ -268,14 +282,12 @@ class DXFAnalyzer:
         for entity in inserts:
             if entity.dxf.layer:
                 insert_layers.append(entity.dxf.layer)
-            if entity.attribs:
+            if entity.attribs and idx < 3:  # Собираем атрибуты максимум из 3 вставок для примера
                 sample_attribs = {}
                 for attr in entity.attribs:
                     sample_attribs[attr.dxf.tag] = attr.dxf.text
                 insert_samples.append(sample_attribs)
                 idx += 1
-                if idx > 2:
-                    continue
 
         if insert_samples:
             block_info["insert_samples"] = insert_samples
