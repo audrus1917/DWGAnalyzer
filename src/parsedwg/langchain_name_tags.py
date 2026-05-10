@@ -595,6 +595,11 @@ def extract_semantic_token_meanings_json(tokens: list[str], config: LangChainAge
 
 
 def ensure_langchain_available() -> None:
+    """Проверяет наличие зависимостей LangChain для AI-режима.
+
+    Raises:
+        RuntimeError: Если обязательные пакеты LangChain не установлены.
+    """
     try:
         importlib.import_module("langchain_core")
         importlib.import_module("langchain_openai")
@@ -741,8 +746,11 @@ def call_ollama_name_meaning(
     extra_context: str = "",
     timeout_seconds: float = 60.0,
 ) -> str:
-    
-    """Вызывает Ollama /api/chat и возвращает свободную интерпретацию имени."""
+    """Вызывает Ollama /api/chat и возвращает свободную интерпретацию имени.
+
+    Raises:
+        RuntimeError: Если сервис недоступен или вернул неожиданный либо пустой ответ.
+    """
     import urllib.error
     import urllib.request
 
@@ -785,7 +793,11 @@ def call_openai_chat_completions_name_meaning(
     timeout_seconds: float = 60.0,
     api_key: str = "",
 ) -> str:
-    """Вызывает OpenAI-совместимый endpoint v1/chat/completions и возвращает текстовую интерпретацию."""
+    """Вызывает OpenAI-совместимый endpoint v1/chat/completions и возвращает текстовую интерпретацию.
+
+    Raises:
+        RuntimeError: Если сервис недоступен или вернул неожиданный либо пустой ответ.
+    """
     import urllib.error
     import urllib.request
 

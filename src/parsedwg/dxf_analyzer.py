@@ -22,7 +22,14 @@ class DXFAnalyzer:
 
     @staticmethod
     def is_point_like(value: object) -> bool:
-        """Проверяет, похоже ли значение на точку."""
+        """Проверяет, похоже ли значение на точку.
+
+        Args:
+            value: Проверяемое значение.
+
+        Returns:
+            True, если значение похоже на точку.
+        """
 
         if hasattr(value, "x") and hasattr(value, "y"):
             return True
@@ -38,8 +45,18 @@ class DXFAnalyzer:
         return False
 
     @staticmethod
-    def format_point(point: object | None) -> object | None:
-        """Приводит точечное значение к согласованному виду."""
+    def format_point(point: Any | None) -> list[float] | None:
+        """Приводит точечное значение к согласованному виду.
+
+        Args:
+            point: Точка или tuple-like значение координат.
+
+        Returns:
+            Список координат или None.
+
+        Raises:
+            ValueError: Если point не является точкой и не приводится к координатам.
+        """
 
         if point is None:
             return None
@@ -55,15 +72,23 @@ class DXFAnalyzer:
                 px = float(point[0])
                 py = float(point[1])
                 pz = float(point[2]) if len(point) >= 3 else 0.0
-            except (TypeError, ValueError):
-                return str(point).rstrip()
+            except (TypeError, ValueError) as e:
+                logger.warning(f"Не удалось преобразовать точку: {e}")
+                raise
+
             return [px, py, pz]
-
-        return point
-
+        raise ValueError(f"Значение не являетсяпохоже на точку: {point}")
+    
     @staticmethod
     def get_text(entity) -> str:
-        """Извлекает текст из сущностей TEXT или MTEXT, если он есть."""
+        """Извлекает текст из сущностей TEXT или MTEXT, если он есть.
+
+        Args:
+            entity: DXF-сущность.
+
+        Returns:
+            Текст сущности или пустую строку.
+        """
 
         entity_type = entity.dxftype()
         if entity_type == "TEXT":
@@ -76,6 +101,14 @@ class DXFAnalyzer:
 
     @classmethod
     def get_virtual_entities(cls, entity):
+        """Рекурсивно собирает виртуальные сущности для INSERT.
+
+        Args:
+            entity: DXF-сущность, потенциально содержащая virtual_entities.
+
+        Returns:
+            Список виртуальных дочерних сущностей.
+        """
         children = []
         for ch in entity.virtual_entities():
             if ch.dxftype() == "INSERT":
@@ -89,7 +122,16 @@ class DXFAnalyzer:
 
     @classmethod
     def get_entity_data(cls, entity, parent, layout: Any | None = None) -> dict[str, Any] | None:
-        """Возвращает данные DXF-сущности."""
+        """Возвращает данные DXF-сущности.
+
+        Args:
+            entity: DXF-сущность.
+            parent: Родительский layout или блок.
+            layout: Layout, в котором расположена сущность.
+
+        Returns:
+            Словарь с данными сущности или None для неподдержанного типа.
+        """
 
         # Collect the entity type and base attributes.
         dxftype = entity.dxftype()
@@ -183,10 +225,39 @@ class DXFAnalyzer:
                     vertices = list(hatch_path.flattening(distance=0.01))
                     entity_data["area"] = math_area(vertices)
                     entity_data["points"] = [DXFAnalyzer.format_point(x) for x in vertices]
+                except TypeError as e:
+                    logger.warning(f"Не удалось обработать HATCH-сущность: {e}")
                 except Exception as e:
                     entity_data["points"] = []    
             case "MULTILEADER":
-                print('Here')
+                line_segments = []
+                for c_entity in entity.virtual_entities():
+                    print(c_entity.dxftype())
+                    if c_entity.dxftype() == 'LINE':
+                        start = c_entity.dxf.start
+                        end = c_entity.dxf.end
+                        line_segments.append(f"({start.x} {start.y}, {end.x} {end.y})")
+                    elif c_entity.dxftype() == 'POLYLINE':
+                        points = [vertex.dxf.location.xyz for vertex in c_entity.vertices]
+                        for i in range(len(points) - 1):
+                            start = points[i]
+                            end = points[i + 1]
+                            line_segments.append(f"({start[0]} {start[1]}, {end[0]} {end[1]})")    
+                    elif c_entity.dxftype() == 'LWPOLYLINE':
+                        points = c_entity.get_points("xy")
+                        for i in range(len(points) - 1):
+                            start = points[i]
+                            end = points[i + 1]
+                            line_segments.append(f"({start[0]} {start[1]}, {end[0]} {end[1]})")
+
+                entity_text = entity.get_mtext_content() if hasattr(entity, "get_mtext_content") else ""
+                if entity_text:
+                    print(type(entity_text), dir(entity_text))
+                    entity_data["description"] = re.sub(r"\s+", " ", entity_text).strip()
+
+                # Формируем WKT для MultiLineString
+                multiline_wkt = f"MULTILINESTRING({', '.join(line_segments)})"
+                entity_data["geom"] = f"SRID=4326;{multiline_wkt}"
 
         return entity_data
     
@@ -253,7 +324,18 @@ class DXFAnalyzer:
         doc: Drawing, 
         block_name: str
     ) -> dict[str, Any]:
-        """Возвращает описание DXF-блока."""
+        """Возвращает описание DXF-блока.
+
+        Args:
+            doc: Загруженный чертёж ezdxf.
+            block_name: Имя блока.
+
+        Returns:
+            Сводное описание блока.
+
+        Raises:
+            ValueError: Если блок с именем block_name не найден в файле.
+        """
 
         msp = doc.modelspace()
         block = doc.blocks.get(block_name)

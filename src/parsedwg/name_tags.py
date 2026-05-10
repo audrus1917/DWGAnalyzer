@@ -25,6 +25,17 @@ type _TagMeta = tuple[float, str]
 
 
 def _iter_entries(source_path: Path) -> list[Path]:
+    """Возвращает файл или рекурсивный список записей каталога.
+
+    Args:
+        source_path: Путь к файлу или каталогу.
+
+    Returns:
+        Список файловых и каталоговых записей.
+
+    Raises:
+        FileNotFoundError: Если source_path не существует.
+    """
     if not source_path.exists():
         raise FileNotFoundError(f"Путь {source_path} не найден.")
 
@@ -35,11 +46,27 @@ def _iter_entries(source_path: Path) -> list[Path]:
 
 
 def _tokenize_name(path: Path) -> list[str]:
+    """Разбивает имя файла или каталога на токены.
+
+    Args:
+        path: Путь к файлу или каталогу.
+
+    Returns:
+        Список токенов в нижнем регистре.
+    """
     text = path.stem if path.is_file() else path.name
     return [token.lower() for token in _TOKEN_RE.findall(text)]
 
 
 def _parse_numbers(raw_numbers: str) -> list[int]:
+    """Преобразует строку с номерами в список целых чисел.
+
+    Args:
+        raw_numbers: Строка с номерами и разделителями.
+
+    Returns:
+        Список извлечённых чисел.
+    """
     chunks = re.split(r"\s*(?:-|–|,|и)\s*", raw_numbers)
     numbers: list[int] = []
     for chunk in chunks:
@@ -49,6 +76,14 @@ def _parse_numbers(raw_numbers: str) -> list[int]:
 
 
 def _extract_rule_tags(name_text: str) -> tuple[list[dict[str, str]], list[str], list[dict[str, object]]]:
+    """Извлекает сущности и теги из имени по набору правил.
+
+    Args:
+        name_text: Имя файла или каталога.
+
+    Returns:
+        Кортеж из сущностей, списка тегов и детализированных причин с confidence.
+    """
     text = name_text.lower()
     entities: list[dict[str, str]] = []
     tags_meta: dict[str, _TagMeta] = {}
@@ -96,6 +131,16 @@ def _build_record(
     root: Path,
     ai_extractor: _TagsExtractorLike | None = None,
 ) -> dict[str, object]:
+    """Строит JSON-совместимую запись с тегами для файла или каталога.
+
+    Args:
+        path: Путь к записи.
+        root: Корневой путь для вычисления relative_path.
+        ai_extractor: Дополнительный AI-экстрактор тегов.
+
+    Returns:
+        Словарь с токенами, сущностями и тегами.
+    """
     name = path.name
     base_text = path.stem if path.is_file() else path.name
     entities, rule_tags, tag_details = _extract_rule_tags(base_text)

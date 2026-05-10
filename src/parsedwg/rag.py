@@ -53,7 +53,17 @@ _TERM_CONTEXT_SPLIT_RE = re.compile(
 
 
 async def _embed(text_input: str) -> list[float]:
-    """Получает текстовый эмбеддинг через Ollama /api/embed."""
+    """Получает текстовый эмбеддинг через Ollama /api/embed.
+
+    Args:
+        text_input: Исходный текст для эмбеддинга.
+
+    Returns:
+        Вектор эмбеддинга.
+
+    Raises:
+        ValueError: Если сервис не вернул эмбеддинг в ожидаемом формате.
+    """
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         response = await client.post(
             f"{OLLAMA_BASE_URL}/api/embed",
@@ -72,7 +82,15 @@ async def _embed(text_input: str) -> list[float]:
 
 
 async def _generate(prompt: str, context_docs: list[str]) -> str:
-    """Задаёт LLM вопрос с контекстом из найденных документов."""
+    """Задаёт LLM вопрос с контекстом из найденных документов.
+
+    Args:
+        prompt: Пользовательский запрос.
+        context_docs: Список релевантных документов-контекстов.
+
+    Returns:
+        Текст ответа модели.
+    """
     full_prompt = _build_generation_prompt(prompt, context_docs)
     system = (
         "Ты — ассистент по технической документации и чертежам. "
@@ -92,7 +110,14 @@ async def _generate(prompt: str, context_docs: list[str]) -> str:
 
 
 def _extract_target_term(question: str) -> tuple[str | None, str | None]:
-    """Извлекает целевой термин и дополнительный контекст из вопроса о термине."""
+    """Извлекает целевой термин и дополнительный контекст из вопроса о термине.
+
+    Args:
+        question: Исходный вопрос пользователя.
+
+    Returns:
+        Кортеж из целевого термина и дополнительного контекста.
+    """
     cleaned_question = question.strip()
     for pattern in _QUESTION_TERM_PATTERNS:
         match = pattern.match(cleaned_question)
@@ -119,7 +144,15 @@ def _extract_target_term(question: str) -> tuple[str | None, str | None]:
 
 
 def _build_generation_prompt(question: str, context_docs: list[str]) -> str:
-    """Строит prompt, отделяющий целевой термин от остального контекста."""
+    """Строит prompt, отделяющий целевой термин от остального контекста.
+
+    Args:
+        question: Исходный вопрос пользователя.
+        context_docs: Список найденных документов-контекстов.
+
+    Returns:
+        Полный prompt для генерации ответа.
+    """
     target_term, extra_question_context = _extract_target_term(question)
     context = "\n\n".join(
         f"[{i + 1}] {doc}" for i, doc in enumerate(context_docs)

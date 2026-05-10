@@ -1,6 +1,19 @@
+#!/usr/bin/env python
+
+import sys
+
+import logging
+import argparse
+
+from pathlib import Path as FilePath
+
 import ezdxf
 import json
-from ezdxf.render.mleader import MLeaderContext
+
+
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
 
 def process_mleaders(dxf_path):
     doc = ezdxf.readfile(dxf_path)
@@ -23,7 +36,7 @@ def process_mleaders(dxf_path):
         
         # Используем virtual_entities, чтобы получить "отрисованные" линии
         # Это надежнее, чем вручную перебирать вершины в сложных стилях
-        text_content = ""
+        text_content = ml.get_mtext_content() if hasattr(ml, "get_mtext_content") else ""
         for entity in ml.virtual_entities():
             dxf_type = entity.dxftype()
             if entity.dxftype() == 'LINE':
@@ -43,9 +56,7 @@ def process_mleaders(dxf_path):
                     start = points[i]
                     end = points[i + 1]
                     line_segments.append(f"({start[0]} {start[1]}, {end[0]} {end[1]})")
-            elif dxf_type in ('MTEXT', 'TEXT'):
-                text_content = entity.dxf.text
-
+    
 
         # Формируем WKT для MultiLineString
         multiline_wkt = f"MULTILINESTRING({', '.join(line_segments)})"
@@ -61,8 +72,19 @@ def process_mleaders(dxf_path):
     
     return results
 
-rr = process_mleaders('./sample.dxf')
-print(json.dumps(rr, indent=2, ensure_ascii=False))
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("dxf_file", help="Путь к DWG/DXF файлу для извлечения данных")
+
+    args = parser.parse_args()
+    dxf_file = FilePath(args.dxf_file)
+    if not dxf_file.is_file():
+        logger.error(f"Файл '{dxf_file}' не найден.")
+        sys.exit(1)
+
+    result = process_mleaders(dxf_file)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
 
 # Пример формирования SQL (используя psycopg2 или аналоги)
 # query = "INSERT INTO dwg_mleaders (geom, text_point, label_text, text_angle) 

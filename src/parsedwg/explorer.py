@@ -31,6 +31,11 @@ class DXFExplorer:
     """Просматривает DWG/DXF-файлы и выполняет связанные операции."""
 
     def __init__(self, file_path: Path | str):
+        """Инициализирует обозреватель файла DWG/DXF.
+
+        Raises:
+            FileNotFoundError: Если file_path не указывает на существующий файл.
+        """
         self.file_path = Path(file_path)
         if not self.file_path.is_file():
             logger.error("Файл %s не найден.", self.file_path)
@@ -41,7 +46,11 @@ class DXFExplorer:
         logger.debug("Размер файла: %.2f МБ", size_mb)
 
     def read_drawing(self) -> Drawing:
-        """Читает DWG/DXF-файл и возвращает объект документа ezdxf."""
+        """Читает DWG/DXF-файл и возвращает объект документа ezdxf.
+
+        Returns:
+            Загруженный объект Drawing.
+        """
 
         if self.file_path.suffix.lower() == ".dwg":
             logger.debug(
@@ -54,7 +63,14 @@ class DXFExplorer:
 
     @staticmethod
     def format_point(point: object | None) -> str:
-        """Возвращает отформатированное строковое представление координат точки."""
+        """Возвращает отформатированное строковое представление координат точки.
+
+        Args:
+            point: Объект точки или tuple-like значение координат.
+
+        Returns:
+            Строковое представление координат или исходного значения.
+        """
         if point is None:
             return "n/a"
 
@@ -96,7 +112,14 @@ class DXFExplorer:
 
     @staticmethod
     def get_text_content(entity) -> str:
-        """Возвращает содержимое текстового атрибута сущности."""
+        """Возвращает содержимое текстового атрибута сущности.
+
+        Args:
+            entity: DXF-сущность.
+
+        Returns:
+            Текстовое содержимое сущности или пустую строку.
+        """
 
         entity_type = entity.dxftype()
         if entity_type == "TEXT" and entity.dxf.hasattr("text"):
@@ -116,7 +139,16 @@ class DXFExplorer:
         entity,
         seen_blocks: set[str] | None = None,
     ) -> set[str]:
-        """Собирает все слои, затронутые сущностью, включая вложенные блоки."""
+        """Собирает все слои, затронутые сущностью, включая вложенные блоки.
+
+        Args:
+            doc: Загруженный чертёж ezdxf.
+            entity: DXF-сущность.
+            seen_blocks: Уже посещённые блоки для защиты от циклов.
+
+        Returns:
+            Множество имён слоёв.
+        """
         layers: set[str] = set()
         layer_name = getattr(entity.dxf, "layer", "")
         if layer_name:
@@ -143,7 +175,15 @@ class DXFExplorer:
 
     @classmethod
     def _get_layout_layers(cls, doc, layout) -> str:
-        """Возвращает список всех слоёв layout через запятую."""
+        """Возвращает список всех слоёв layout через запятую.
+
+        Args:
+            doc: Загруженный чертёж ezdxf.
+            layout: Layout, для которого нужно собрать слои.
+
+        Returns:
+            Строку со слоями через запятую или "-".
+        """
         layers: set[str] = set()
         for entity in layout:
             layers.update(cls._collect_entity_layers(doc, entity))
@@ -151,7 +191,14 @@ class DXFExplorer:
 
     @classmethod
     def _get_entity_params(cls, entity) -> dict[str, str]:
-        """Возвращает словарь с параметрами сущности."""
+        """Возвращает словарь с параметрами сущности.
+
+        Args:
+            entity: DXF-сущность.
+
+        Returns:
+            Нормализованный словарь параметров сущности.
+        """
         entity_type = entity.dxftype()
         params: dict[str, str] = {"type": entity_type}
 
@@ -212,6 +259,16 @@ class DXFExplorer:
         x_tolerance: float = 10.0,
         y_tolerance: float = 3.0,
     ) -> TableAnalysis:
+        """Анализирует текстовый блок как потенциальную таблицу.
+
+        Args:
+            block: DXF-блок для анализа.
+            x_tolerance: Допуск кластеризации по X.
+            y_tolerance: Допуск кластеризации по Y.
+
+        Returns:
+            Результат анализа таблицы.
+        """
         return TextClusterAnalyzer.analyze_table(
             block,
             x_tolerance=x_tolerance,
@@ -226,6 +283,18 @@ class DXFExplorer:
         title: str,
         output_dir: Path | None = None,
     ) -> Path:
+        """Экспортирует распознанную таблицу блока в XLSX.
+
+        Args:
+            block_name: Имя блока.
+            rows: Строки таблицы.
+            centered_rows: Индексы строк, которые нужно центрировать и объединить.
+            title: Заголовок таблицы.
+            output_dir: Каталог для сохранения файла.
+
+        Returns:
+            Путь к сохранённому XLSX-файлу.
+        """
         fallback_name = f"{self.file_path.stem}-{block_name}"
         file_stem = title or fallback_name
         safe_file_name = re.sub(r"[^0-9A-Za-zА-Яа-я._-]+", "_", file_stem).strip("_")
@@ -304,7 +373,15 @@ class DXFExplorer:
         table_blocks: list[dict[str, object]],
         output_dir: Path,
     ) -> list[Path]:
-        """Сохраняет XLSX-файлы для табличных блоков, загруженных из БД."""
+        """Сохраняет XLSX-файлы для табличных блоков, загруженных из БД.
+
+        Args:
+            table_blocks: Блоки с табличными данными из БД.
+            output_dir: Каталог для сохранения XLSX-файлов.
+
+        Returns:
+            Список путей к созданным XLSX-файлам.
+        """
         output_paths: list[Path] = []
         for block_payload in table_blocks:
             block_name = str(block_payload.get("block_name", ""))
@@ -341,7 +418,11 @@ class DXFExplorer:
         return output_paths
 
     def list_layouts(self) -> list[ExplorerRow]:
-        """Возвращает layouts текущего DXF/DWG-файла."""
+        """Возвращает layouts текущего DXF/DWG-файла.
+
+        Returns:
+            Список layout с именами и связанными слоями.
+        """
 
         logger.info("Считываем layout'ы для файла: %s", self.file_path)
         doc = self.read_drawing()
@@ -355,7 +436,11 @@ class DXFExplorer:
         ]
 
     def list_blocks(self) -> list[ExplorerRow]:
-        """Возвращает блоки текущего DXF/DWG-файла."""
+        """Возвращает блоки текущего DXF/DWG-файла.
+
+        Returns:
+            Список блоков с именами и количеством сущностей.
+        """
 
         logger.info("Считываем блоки для файла: %s", self.file_path)
         doc = self.read_drawing()
@@ -376,13 +461,28 @@ class DXFExplorer:
 
     @staticmethod
     def _is_layout_block_name(block_name: str) -> bool:
-        """Возвращает True для внутренних имён блоков, связанных с layout."""
+        """Возвращает True для внутренних имён блоков, связанных с layout.
+
+        Args:
+            block_name: Имя блока.
+
+        Returns:
+            True, если блок относится к служебным layout-блокам.
+        """
 
         return block_name.startswith("*Model_Space") or block_name.startswith("*Paper_Space")
 
     @classmethod
     def _collect_block_insert_rows(cls, doc, target_block_name: str) -> list[ExplorerRow]:
-        """Возвращает все сущности INSERT, ссылающиеся на указанный блок."""
+        """Возвращает все сущности INSERT, ссылающиеся на указанный блок.
+
+        Args:
+            doc: Загруженный чертёж ezdxf.
+            target_block_name: Имя целевого блока.
+
+        Returns:
+            Список строк с местами использования блока.
+        """
 
         rows: list[ExplorerRow] = []
 
@@ -433,7 +533,17 @@ class DXFExplorer:
         return rows
 
     def describe_block(self, block_name: str) -> dict[str, Any]:
-        """Возвращает JSON-сериализуемое описание блока из исходного файла."""
+        """Возвращает JSON-сериализуемое описание блока из исходного файла.
+
+        Args:
+            block_name: Имя блока в файле.
+
+        Returns:
+            JSON-сериализуемое описание блока.
+
+        Raises:
+            ValueError: Если блок с именем block_name не найден.
+        """
 
         logger.info("Собираем описание блока '%s' из файла: %s", block_name, self.file_path)
         doc = self.read_drawing()
@@ -446,7 +556,11 @@ class DXFExplorer:
         return block_description
 
     def list_layer_names(self) -> list[str]:
-        """Возвращает имена слоёв текущего DXF/DWG-файла."""
+        """Возвращает имена слоёв текущего DXF/DWG-файла.
+
+        Returns:
+            Отсортированный список имён слоёв.
+        """
 
         logger.info("Считываем слои для файла: %s", self.file_path)
         doc = self.read_drawing()
@@ -457,6 +571,17 @@ class DXFExplorer:
         )
 
     def extract_block(self, block_name: str) -> int:
+        """Извлекает блок и при необходимости экспортирует распознанную таблицу.
+
+        Args:
+            block_name: Имя блока в файле.
+
+        Returns:
+            Код завершения операции.
+
+        Raises:
+            ValueError: Если блок с именем block_name не найден.
+        """
         logger.info("Извлекаем блок '%s' из файла: %s", block_name, self.file_path)
         doc = self.read_drawing()
         block = doc.blocks.get(block_name)
@@ -495,7 +620,20 @@ class DXFExplorer:
         output_path: Path | None = None,
         dpi: int = 300,
     ) -> Path:
-        """Экспортирует выбранный блок в PNG."""
+        """Экспортирует выбранный блок в PNG.
+
+        Args:
+            block_name: Имя блока.
+            output_path: Путь для сохранения PNG.
+            dpi: Разрешение изображения.
+
+        Returns:
+            Путь к сохранённому PNG.
+
+        Raises:
+            ValueError: Если блок не найден или параметры экспорта некорректны.
+            RuntimeError: Если отсутствуют зависимости для графического экспорта.
+        """
 
         return self._export_block_image(
             block_name,
@@ -509,7 +647,19 @@ class DXFExplorer:
         block_name: str,
         output_path: Path | None = None,
     ) -> Path:
-        """Экспортирует выбранный блок в SVG."""
+        """Экспортирует выбранный блок в SVG.
+
+        Args:
+            block_name: Имя блока.
+            output_path: Путь для сохранения SVG.
+
+        Returns:
+            Путь к сохранённому SVG.
+
+        Raises:
+            ValueError: Если блок не найден или параметры экспорта некорректны.
+            RuntimeError: Если отсутствуют зависимости для графического экспорта.
+        """
 
         return self._export_block_image(
             block_name,
@@ -518,7 +668,18 @@ class DXFExplorer:
         )
 
     def export_block_dxf(self, block_name: str) -> str:
-        """Возвращает DXF-текст для выбранного блока."""
+        """Возвращает DXF-текст для выбранного блока.
+
+        Args:
+            block_name: Имя блока.
+
+        Returns:
+            Текст DXF-представления блока.
+
+        Raises:
+            ValueError: Если блок с именем block_name не найден.
+            RuntimeError: Если блок нельзя сериализовать в DXF.
+        """
 
         logger.info("Экспортируем DXF-текст блока '%s' из файла: %s", block_name, self.file_path)
         doc = self.read_drawing()
@@ -548,7 +709,21 @@ class DXFExplorer:
         output_path: Path | None = None,
         dpi: int = 300,
     ) -> Path:
-        """Экспортирует выбранный блок в графический файл."""
+        """Экспортирует выбранный блок в графический файл.
+
+        Args:
+            block_name: Имя блока.
+            image_format: Формат выходного файла.
+            output_path: Путь для сохранения результата.
+            dpi: Разрешение изображения.
+
+        Returns:
+            Путь к сохранённому изображению.
+
+        Raises:
+            ValueError: Если image_format неподдерживаемый, dpi некорректен или блок не найден.
+            RuntimeError: Если отсутствует matplotlib для экспорта.
+        """
 
         normalized_format = image_format.lower()
         if normalized_format not in {"png", "svg"}:
