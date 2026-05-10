@@ -52,6 +52,18 @@ def _compute_md5_hex(path: Path) -> str:
 
 
 def _discover_documents(source_path: Path) -> list[Path]:
+    """Находит поддерживаемые документы по пути.
+
+    Args:
+        source_path: Путь к файлу или каталогу.
+
+    Returns:
+        Список документов поддерживаемых форматов.
+
+    Raises:
+        FileNotFoundError: Если source_path не существует.
+        ValueError: Если передан неподдерживаемый файл или в каталоге нет подходящих документов.
+    """
     if not source_path.exists():
         raise FileNotFoundError(f"Путь {source_path} не найден.")
 
@@ -221,6 +233,17 @@ def _extract_glossary_terms(path: Path) -> list[GlossaryTerm]:
 
 
 def _extract_text(path: Path) -> str:
+    """Извлекает текст из документа поддерживаемого формата.
+
+    Args:
+        path: Путь к документу.
+
+    Returns:
+        Извлечённый текст документа.
+
+    Raises:
+        ValueError: Если тип документа не поддерживается.
+    """
     suffix = path.suffix.lower()
     if suffix == ".docx":
         return _extract_docx_text(path)
@@ -247,6 +270,15 @@ def _build_entity_embedding(text_value: str | None) -> EntityEmbedding | None:
 
 
 async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int:
+    """Сохраняет документы и извлечённый текст в базу данных.
+
+    Args:
+        source_path: Корневой путь импорта.
+        documents: Список документов для сохранения.
+
+    Returns:
+        Количество созданных сущностей.
+    """
     created = 0
 
     async with async_session_factory() as session:

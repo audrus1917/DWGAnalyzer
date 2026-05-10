@@ -87,7 +87,17 @@ def _extract_dxf_text(path: Path) -> str:
 
 
 def convert_dwg(path: Path) -> Path:
-    """Конвертирует DWG в DXF и возвращает путь к временному DXF-файлу."""
+    """Конвертирует DWG в DXF и возвращает путь к временному DXF-файлу.
+
+    Args:
+        path: Путь к DWG-файлу.
+
+    Returns:
+        Путь к созданному временному DXF-файлу.
+
+    Raises:
+        RuntimeError: Если ODA File Converter недоступен в PATH.
+    """
 
     converter = shutil.which("ODAFileConverter") or shutil.which("odafc")
     if converter is None:
@@ -103,7 +113,18 @@ def convert_dwg(path: Path) -> Path:
 
 
 def parse_drawing_file(path: str | Path) -> list[ParsedItem]:
-    """"""
+    """Разбирает DWG/DXF-файл и извлекает позиции.
+
+    Args:
+        path: Путь к файлу чертежа.
+
+    Returns:
+        Список извлечённых позиций.
+
+    Raises:
+        RuntimeError: Если для DWG недоступен ODA File Converter.
+        ValueError: Если формат файла не поддерживается.
+    """
     source_path = Path(path)
     suffix = source_path.suffix.lower()
     if suffix == ".dwg":
@@ -118,6 +139,17 @@ def parse_drawing_file(path: str | Path) -> list[ParsedItem]:
 
 
 def parse_note_file(path: str | Path) -> list[ParsedItem]:
+    """Разбирает текстовую или DOCX-пояснительную записку.
+
+    Args:
+        path: Путь к пояснительной записке.
+
+    Returns:
+        Список извлечённых позиций.
+
+    Raises:
+        ValueError: Если формат файла не поддерживается.
+    """
     source_path = Path(path)
     suffix = source_path.suffix.lower()
 

@@ -365,6 +365,11 @@ def format_verification_report(report: dict[str, object]) -> str:
 
 
 async def _find_file_entity(path: Path, file_id: str | None) -> Entity | None:
+    """Находит file-сущность в БД по пути или явному идентификатору.
+
+    Raises:
+        ValueError: Если file_id передан в некорректном формате.
+    """
     async with async_session_factory() as session:
         if file_id is not None:
             try:
@@ -438,7 +443,13 @@ async def _load_db_snapshot(file_entity: Entity) -> dict[str, object]:
 
 
 async def verify_extraction(path: Path, file_id: str | None = None) -> dict[str, object]:
-    """Сравнивает DWG/DXF-файл с тем, что сохранено в текущей базе данных."""
+    """Сравнивает DWG/DXF-файл с тем, что сохранено в текущей базе данных.
+
+    Raises:
+        FileNotFoundError: Если path не существует.
+        LookupError: Если file-сущность для path не найдена в БД.
+        ValueError: Если file_id передан в некорректном формате.
+    """
 
     resolved_path = path.expanduser().resolve()
     if not resolved_path.exists():

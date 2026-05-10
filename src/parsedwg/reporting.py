@@ -19,6 +19,17 @@ def _write_headers(sheet, headers: list[str]) -> None:
 
 
 def build_workbook_bytes(items: list[ParsedItem]) -> bytes:
+    """Строит Excel-книгу с листами СО, ВОР, сметы и сводки.
+
+    Args:
+        items: Список позиций для включения в отчёт.
+
+    Returns:
+        Байтовое содержимое готовой Excel-книги.
+
+    Raises:
+        RuntimeError: Если не удалось создать стартовый лист Excel.
+    """
     workbook = Workbook()
 
     so_sheet = workbook.active

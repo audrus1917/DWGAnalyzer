@@ -10,6 +10,14 @@ SECTION_ORDER = {"equipment": 0, "materials": 1, "works": 2}
 
 
 def summarize_items(items: list[ParsedItem]) -> list[ParsedItem]:
+    """Агрегирует одинаковые позиции по имени, единице и разделу.
+
+    Args:
+        items: Исходный список позиций.
+
+    Returns:
+        Отсортированный список агрегированных позиций.
+    """
     grouped: dict[tuple[str, str, str], ParsedItem] = {}
 
     for item in items:
@@ -39,6 +47,15 @@ def generate_report_bytes(
     drawing_path: str | Path,
     note_path: str | Path | None = None,
 ) -> tuple[bytes, list[ParsedItem]]:
+    """Строит Excel-отчёт и возвращает его байты вместе с позициями.
+
+    Args:
+        drawing_path: Путь к DWG/DXF-файлу.
+        note_path: Путь к пояснительной записке.
+
+    Returns:
+        Кортеж из байтов Excel-файла и списка итоговых позиций.
+    """
     items = parse_drawing_file(drawing_path)
     if note_path is not None:
         items.extend(parse_note_file(note_path))
@@ -53,6 +70,16 @@ def generate_report_file(
     note_path: str | Path | None,
     output_path: str | Path,
 ) -> Path:
+    """Создаёт Excel-отчёт и сохраняет его в файл.
+
+    Args:
+        drawing_path: Путь к DWG/DXF-файлу.
+        note_path: Путь к пояснительной записке.
+        output_path: Путь для сохранения отчёта.
+
+    Returns:
+        Путь к сохранённому файлу отчёта.
+    """
     payload, _ = generate_report_bytes(drawing_path, note_path)
     target = Path(output_path)
     target.parent.mkdir(parents=True, exist_ok=True)

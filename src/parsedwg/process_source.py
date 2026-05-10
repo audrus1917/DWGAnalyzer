@@ -44,6 +44,18 @@ class DWGTreeProcessor:
     """Обходит каталог и собирает задания на обработку DWG/DXF."""
 
     def __init__(self, source_path: Path, root_path: Path | None = None):
+        """Инициализирует процессор источника DWG/DXF.
+
+        Args:
+            source_path: Исходный путь, который будет обработан.
+            root_path: Корневой путь для относительных ссылок и обхода.
+
+        Returns:
+            Ничего не возвращает.
+
+        Raises:
+            FileNotFoundError: Если root_path не существует.
+        """
         self.source_path = source_path
         self.root_path = root_path or source_path
         if not self.root_path.exists():
@@ -51,7 +63,14 @@ class DWGTreeProcessor:
 
     @staticmethod
     def file_md5(path: Path) -> str:
-        """Возвращает MD5-хэш файла для идентификации содержимого."""
+        """Возвращает MD5-хэш файла для идентификации содержимого.
+
+        Args:
+            path: Путь к файлу.
+
+        Returns:
+            Hex-строку с MD5-хэшем файла.
+        """
 
         digest = hashlib.md5(usedforsecurity=False)
         with path.open("rb") as stream:
@@ -60,7 +79,14 @@ class DWGTreeProcessor:
         return digest.hexdigest()
 
     def walk(self, sources_path: Path) -> Generator[JobEntry, None, None]:
-        """Обходит каталог и выдаёт задания на разбор DWG/DXF."""
+        """Обходит каталог и выдаёт задания на разбор DWG/DXF.
+
+        Args:
+            sources_path: Каталог, внутри которого нужно искать DWG/DXF/DXB и ZIP.
+
+        Yields:
+            Описания файлов и файлов внутри ZIP для последующей обработки.
+        """
 
         for file_path in sorted(path for path in sources_path.rglob("*") if path.is_file()):
             suffix = file_path.suffix.lower()
@@ -105,7 +131,15 @@ class DWGTreeProcessor:
 
     @staticmethod
     def split_to_batches(entries: list[JobEntry], workers: int) -> list[list[JobEntry]]:
-        """Разбивает задания на пачки для параллельной обработки."""
+        """Разбивает задания на пачки для параллельной обработки.
+
+        Args:
+            entries: Список заданий на обработку.
+            workers: Желаемое количество воркеров.
+
+        Returns:
+            Непустые пачки заданий, распределённые по воркерам.
+        """
 
         normalized_workers = max(1, workers)
         batches: list[list[JobEntry]] = [[] for _ in range(normalized_workers)]
@@ -115,7 +149,16 @@ class DWGTreeProcessor:
 
     @staticmethod
     def extract_from_zip(zip_path: Path, member: str, temp_dir: Path) -> Path:
-        """Извлекает файл из ZIP-архива во временный каталог и возвращает его путь."""
+        """Извлекает файл из ZIP-архива во временный каталог и возвращает его путь.
+
+        Args:
+            zip_path: Путь к ZIP-архиву.
+            member: Имя файла внутри архива.
+            temp_dir: Временный каталог для распаковки.
+
+        Returns:
+            Путь к распакованному временному файлу.
+        """
 
         target_path = temp_dir / Path(member).name
         with zipfile.ZipFile(zip_path) as archive:
@@ -125,7 +168,14 @@ class DWGTreeProcessor:
 
     @staticmethod
     def read_drawing(path: Path):
-        """Читает DWG/DXF-файл через ezdxf или ODAFC и возвращает Drawing."""
+        """Читает DWG/DXF-файл через ezdxf или ODAFC и возвращает Drawing.
+
+        Args:
+            path: Путь к файлу чертежа.
+
+        Returns:
+            Объект Drawing, загруженный из файла.
+        """
 
         suffix = path.suffix.lower()
         if suffix == ".dwg":
@@ -193,7 +243,14 @@ def _is_layout_block(block) -> bool:
 
 
 def collect_layout_entities(doc) -> Generator[dict[str, Any] | None, None, None]:
-    """Итерирует все сущности во всех layout и возвращает их данные."""
+    """Итерирует все сущности во всех layout и возвращает их данные.
+
+    Args:
+        doc: Загруженный чертёж ezdxf.
+
+    Yields:
+        Описания сущностей layout или None для неподдержанных DXF-типов.
+    """
 
     for layout in doc.layouts:
         logger.debug(f"Обрабатываем layout: {layout.name}, количество сущностей: {len(layout)}")
@@ -206,7 +263,14 @@ def collect_layout_entities(doc) -> Generator[dict[str, Any] | None, None, None]
 
 
 def collect_drawing_summary(drawing: Drawing) -> dict[str, Any]:
-    """Собирает данные layout, блоков и примитивов из чертежа."""
+    """Собирает данные layout, блоков и примитивов из чертежа.
+
+    Args:
+        drawing: Загруженный чертёж ezdxf.
+
+    Returns:
+        Сводку с layout, слоями, блоками, примитивами и связями между ними.
+    """
 
     # Предварительный вывод статистики
     logger.debug(f"Количество layout'ов: {len(drawing.layouts)}")
@@ -292,7 +356,14 @@ def collect_drawing_summary(drawing: Drawing) -> dict[str, Any]:
 
 
 def collect_dxf_summary(drawing_path: Path) -> dict[str, Any]:
-    """Собирает данные layout, блоков и примитивов из DWG/DXF-файла."""
+    """Собирает данные layout, блоков и примитивов из DWG/DXF-файла.
+
+    Args:
+        drawing_path: Путь к DWG/DXF/DXB-файлу.
+
+    Returns:
+        Сводку по содержимому чертежа.
+    """
 
     # Read the DWG/DXF file.
     doc = DWGTreeProcessor.read_drawing(drawing_path)
@@ -300,6 +371,17 @@ def collect_dxf_summary(drawing_path: Path) -> dict[str, Any]:
 
 
 def process_entry(entry: JobEntry) -> ProcessedEntry:
+    """Обрабатывает одно задание и возвращает готовую сводку.
+
+    Args:
+        entry: Описание файла или файла внутри ZIP для обработки.
+
+    Returns:
+        Готовую сводку с source_ref, entity_md5 и summary.
+
+    Raises:
+        ValueError: Если для записи из ZIP не указан member.
+    """
     source = Path(entry["source"])
 
     with tempfile.TemporaryDirectory(prefix="parsedwg-process-") as temp_dir_name:
@@ -333,7 +415,14 @@ def process_entry(entry: JobEntry) -> ProcessedEntry:
 
 
 def process_batch(batch: list[JobEntry]) -> Generator[ProcessedEntry, None, None]:
-    """Последовательно обрабатывает пачку файлов и возвращает готовые сводки."""
+    """Последовательно обрабатывает пачку файлов и возвращает готовые сводки.
+
+    Args:
+        batch: Пачка заданий на обработку.
+
+    Yields:
+        Обработанные записи с готовыми сводками.
+    """
 
     for entry in batch:
         yield process_entry(entry)
@@ -430,7 +519,16 @@ def drawing_to_db(
 ) -> int:
     """Сохраняет дерево сущностей в базу данных по уже обработанным файлам.
 
-    Возвращает количество созданных сущностей.
+    Args:
+        sources_path: Исходный путь сканирования.
+        processed_entries: Обработанные записи с готовыми сводками.
+        project_id: Идентификатор проекта в БД.
+
+    Returns:
+        Количество созданных сущностей.
+
+    Raises:
+        errors.FolderNotFound: Если для файла или ZIP не найден родительский каталог.
     """
 
     logger.info("Сохраняем результаты в БД")
@@ -686,7 +784,20 @@ def process_source(
     sources_path: Path,
     project_name: str | None = None,
 ) -> dict[str, object]:
-    """Обходит каталог или файл, разбирает DWG/DXF и сохраняет дерево в БД."""
+    """Обходит каталог или файл, разбирает DWG/DXF и сохраняет дерево в БД.
+
+    Args:
+        sources_path: Путь к файлу или каталогу с чертежами.
+        project_name: Имя существующего проекта в БД.
+
+    Returns:
+        Сводку с количеством созданных сущностей и числом найденных файлов.
+
+    Raises:
+        RuntimeError: Если проект с project_name не найден.
+        ValueError: Если передан файл неподдерживаемого формата.
+        errors.FileNotFound: Если путь не существует или не содержит DWG/DXF/DXB-файлов.
+    """
 
     logger.info("Старт обработки")
 

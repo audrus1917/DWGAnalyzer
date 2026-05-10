@@ -35,6 +35,12 @@ async def health() -> dict[str, str]:
 
 @app.post("/process")
 async def process(drawing: UploadFile = File(...), note: UploadFile | None = File(None)) -> Response:
+    """Обрабатывает загруженные файлы и возвращает Excel-отчёт.
+
+    Raises:
+        HTTPException: Если не приложен файл чертежа, входные данные некорректны
+            или позиции не удалось распознать.
+    """
     if not drawing.filename:
         raise HTTPException(status_code=400, detail="Нужно приложить файл DWG или DXF.")
 

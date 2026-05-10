@@ -4,7 +4,14 @@ import re
 
 
 def get_mleader_target_point(mleader):
-    """Извлекает точку, на которую указывает первая стрелка MULTILEADER."""
+    """Извлекает точку, на которую указывает первая стрелка MULTILEADER.
+
+    Args:
+        mleader: DXF-сущность MULTILEADER.
+
+    Returns:
+        Координаты целевой точки или None, если их не удалось получить.
+    """
     try:
         # MLeader may have multiple leaders; use the first one.
         context = mleader.context
@@ -59,6 +66,14 @@ def find_closest_entity(
 
             if target and distance < 1.0:  # Порог допуска.
                 print(f"Leader '{ml.handle}' points to {target.dxftype()} ({target.handle})")
+
+    Args:
+        target_point: Точка, относительно которой ищется ближайшая сущность.
+        msp: Modelspace или другой объект с методом query.
+        search_types: Набор DXF-типов для поиска.
+
+    Returns:
+        Кортеж из ближайшей сущности и расстояния до неё, либо None если точка не задана.
     """
 
     if not target_point:
@@ -88,7 +103,16 @@ def find_closest_entity_in_entities(
     entities,
     search_types=('LINE', 'CIRCLE', 'LWPOLYLINE', 'POLYLINE', 'INSERT', 'TEXT', 'MTEXT'),
 ):
-    """Ищет ближайшую сущность в уже подготовленном наборе DXF-сущностей."""
+    """Ищет ближайшую сущность в уже подготовленном наборе DXF-сущностей.
+
+    Args:
+        target_point: Точка, относительно которой ищется ближайшая сущность.
+        entities: Подготовленный набор DXF-сущностей.
+        search_types: Набор DXF-типов для поиска.
+
+    Returns:
+        Кортеж из ближайшей сущности и расстояния до неё.
+    """
 
     if not target_point:
         return None, float('inf')
