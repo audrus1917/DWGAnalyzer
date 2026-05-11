@@ -2,18 +2,57 @@
 
 import sys
 import json
-
-from pathlib import Path
+import zipfile
+import logging
+import hashlib
 
 from typing import Any
-
-import logging
+from pathlib import Path
 import multiprocessing as mp
+
+from ezdxf.filemanagement import readfile
+from ezdxf.addons.odafc import readfile as read_odafc
 
 from src.parsedwg.constants import ResultRow
 
 
 logger = logging.getLogger(__name__)
+
+
+def extract_from_zip(zip_path: Path, member: str, temp_dir: Path) -> Path:
+    """Извлекает файл из ZIP-архива во временный каталог и возвращает его путь.
+
+    Args:
+        zip_path: Путь к ZIP-архиву.
+        member: Имя файла внутри архива.
+        temp_dir: Временный каталог для распаковки.
+
+    Returns:
+        Путь к распакованному временному файлу.
+    """
+
+    target_path = temp_dir / Path(member).name
+    with zipfile.ZipFile(zip_path) as archive:
+        data = archive.read(member)
+    target_path.write_bytes(data)
+    return target_path
+
+
+def read_drawing(path: Path):
+    """Читает DWG/DXF-файл через ezdxf или ODAFC и возвращает Drawing.
+
+    Args:
+        path: Путь к файлу чертежа.
+
+    Returns:
+        Объект Drawing, загруженный из файла.
+    """
+
+    suffix = path.suffix.lower()
+    if suffix == ".dwg":
+        return read_odafc(path, "ACAD2018")
+    return readfile(path)
+
 
 
 def get_workers_number(requested_workers: int) -> int:
@@ -122,3 +161,20 @@ def _save_payload_to_json(output_path: Path, payload: object) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def file_md5(path: Path) -> str:
+    """Возвращает MD5-хэш файла для идентификации содержимого.
+
+    Args:
+        path: Путь к файлу.
+
+    Returns:
+        Hex-строку с MD5-хэшем файла.
+    """
+
+    digest = hashlib.md5(usedforsecurity=False)
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

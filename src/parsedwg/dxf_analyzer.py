@@ -8,6 +8,7 @@ import re
 from ezdxf.document import Drawing
 from ezdxf import path
 from ezdxf.math import area as math_area
+from ezdxf.tools.text import MTextEditor
 
 from .constants import ENTITY_TYPES
 
@@ -121,7 +122,13 @@ class DXFAnalyzer:
 
 
     @classmethod
-    def get_entity_data(cls, entity, parent, layout: Any | None = None) -> dict[str, Any] | None:
+    def get_entity_data(
+        cls, 
+        entity, 
+        parent, 
+        layout: Any | None = None, 
+        is_virtual: bool = False
+    ) -> dict[str, Any] | None:
         """Возвращает данные DXF-сущности.
 
         Args:
@@ -130,13 +137,11 @@ class DXFAnalyzer:
             layout: Layout, в котором расположена сущность.
 
         Returns:
-            Словарь с данными сущности или None для неподдержанного типа.
+            Словарь с данными сущности или None для неподдерживаемого типа.
         """
 
-        # Collect the entity type and base attributes.
         dxftype = entity.dxftype()
 
-        # Generic handling shared by all entity types.
         if dxftype not in ENTITY_TYPES:
             logger.warning(f"Неизвестный тип сущности: {dxftype}. Будет обработан как PRIMITIVE.")
             return None
@@ -146,12 +151,12 @@ class DXFAnalyzer:
             "parent": parent,
             "layer": entity.dxf.layer if hasattr(entity.dxf, "layer") else None,
             "layout": layout,
+            "is_virtual": is_virtual
         }
 
         # Если есть текст
         if text_value := cls.get_text(entity):
-            entity_data["text"] = re.sub(r"\s+", " ", text_value).strip()
-
+            entity_data["description"] = re.sub(r"\s+", " ", text_value).strip()
 
         dxf_attribs: dict[str, Any] = {}
         for attr_name, value in entity.dxf.all_existing_dxf_attribs().items():
@@ -165,9 +170,6 @@ class DXFAnalyzer:
         match dxftype:
             case "INSERT":
                 entity_data["target_block"] = entity.dxf.name
-                # entity_data["geom"] = "SRID=4326;POINT({} {})".format(
-                #     entity.dxf.insert.x, entity.dxf.insert.y
-                # )
                 entity_data["attribs"] = {
                     attr.dxf.tag: cls.format_point(attr.dxf.text) 
                     if cls.is_point_like(attr.dxf.text) else attr.dxf.text
@@ -177,7 +179,12 @@ class DXFAnalyzer:
                 children = cls.get_virtual_entities(entity)
                 if children:
                     entity_data["children"] = [
-                        cls.get_entity_data(ch, parent=entity, layout=layout) for ch in children
+                        cls.get_entity_data(
+                            ch, 
+                            parent=entity, 
+                            layout=layout, 
+                            is_virtual=True
+                        ) for ch in children
                     ]
 
             case "LWPOLYLINE":
@@ -189,13 +196,13 @@ class DXFAnalyzer:
             case "LINE":
                 entity_data["start"] = cls.format_point(entity.dxf.start)
                 entity_data["end"] = cls.format_point(entity.dxf.end)
-                entity_data["geom"] = "SRID=4326;LINESTRING({} {}, {} {})".format(
+                entity_data["geom"] = "LINESTRING({} {}, {} {})".format(
                     entity.dxf.start.x, entity.dxf.start.y, entity.dxf.end.x, entity.dxf.end.y
                 )
             case "CIRCLE":
                 entity_data["center"] = cls.format_point(entity.dxf.center)
                 entity_data["radius"] = entity.dxf.radius
-                entity_data["geom"] = "SRID=4326;POINT({} {})".format(
+                entity_data["geom"] = "POINT({} {})".format(
                     entity.dxf.center.x, entity.dxf.center.y
                 )
             case "ARC":
@@ -203,7 +210,7 @@ class DXFAnalyzer:
                 entity_data["radius"] = entity.dxf.radius
                 entity_data["start_angle"] = entity.dxf.start_angle
                 entity_data["end_angle"] = entity.dxf.end_angle
-                entity_data["geom"] = "SRID=4326;POINT({} {})".format(
+                entity_data["geom"] = "POINT({} {})".format(
                     entity.dxf.center.x, entity.dxf.center.y
                 )
             case "ELLIPSE":
@@ -212,27 +219,38 @@ class DXFAnalyzer:
                 entity_data["ratio"] = entity.dxf.ratio
                 entity_data["start_param"] = entity.dxf.start_param
                 entity_data["end_param"] = entity.dxf.end_param
-                entity_data["geom"] = "SRID=4326;POINT({} {})".format(
+                entity_data["geom"] = "POINT({} {})".format(
                     entity.dxf.center.x, entity.dxf.center.y
                 )
             case "TEXT" | "MTEXT":
-                entity_data["geom"] = "SRID=4326;POINT({} {})".format(
+                entity_data["geom"] = "POINT({} {})".format(
                     entity.dxf.insert.x, entity.dxf.insert.y
                 )
             case "HATCH":
                 try:
+                    entity_data["name"] = entity.dxf.pattern_name
                     hatch_path = path.make_path(entity)
                     vertices = list(hatch_path.flattening(distance=0.01))
+            
+                    # Формируем строку координат для WKT
+                    coords = ", ".join([f"{p.x} {p.y}" for p in vertices])
+                        
+                    # Замыкаем полигон, если первая и последняя точки разные
+                    if vertices[0] != vertices[-1]:
+                        coords += f", {vertices[0].x} {vertices[0].y}"
+                            
+                    entity_data["geom"] = f"POLYGON(({coords}))"
                     entity_data["area"] = math_area(vertices)
-                    entity_data["points"] = [DXFAnalyzer.format_point(x) for x in vertices]
+
+
                 except TypeError as e:
                     logger.warning(f"Не удалось обработать HATCH-сущность: {e}")
                 except Exception as e:
                     entity_data["points"] = []    
             case "MULTILEADER":
+                # Аннотации
                 line_segments = []
                 for c_entity in entity.virtual_entities():
-                    print(c_entity.dxftype())
                     if c_entity.dxftype() == 'LINE':
                         start = c_entity.dxf.start
                         end = c_entity.dxf.end
@@ -252,12 +270,23 @@ class DXFAnalyzer:
 
                 entity_text = entity.get_mtext_content() if hasattr(entity, "get_mtext_content") else ""
                 if entity_text:
-                    print(type(entity_text), dir(entity_text))
-                    entity_data["description"] = re.sub(r"\s+", " ", entity_text).strip()
+                    # FIXME: убрать
+                    clean_text = MTextEditor(entity_text).text
+                    entity_data["description"] = re.sub(r"\s+", " ", clean_text).strip()
+
+                # print(f"MLEADER: {entity_text}")
+                # for leader in entity.context.leaders:
+                #     for line in leader.lines:
+                #         # line.vertices — это список точек (Vector)
+                #         # Первая точка [0] — это кончик стрелки
+                #         arrow_tip = line.vertices[0]
+                        
+                #         print(f"ID: {entity.dxf.handle}")
+                #         print(f"Кончик стрелки (X, Y, Z): {arrow_tip}")
 
                 # Формируем WKT для MultiLineString
                 multiline_wkt = f"MULTILINESTRING({', '.join(line_segments)})"
-                entity_data["geom"] = f"SRID=4326;{multiline_wkt}"
+                entity_data["geom"] = f"{multiline_wkt}"
 
         return entity_data
     

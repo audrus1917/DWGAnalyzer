@@ -12,15 +12,13 @@ import zipfile
 from pathlib import Path
 
 from ezdxf.document import Drawing
-from ezdxf.addons.odafc import readfile as read_odafc
-from ezdxf.filemanagement import readfile
 from sqlalchemy import func, select
 
 from src.parsedwg.constants import ENTITY_TYPES, EntityType
 from src.parsedwg.db import session_factory
 from src.parsedwg.orm import Entity, EntityEmbedding, Project, EntityToEntity
 from src.parsedwg.dxf_analyzer import DXFAnalyzer
-from src.parsedwg.utils import safe_float
+from src.parsedwg.utils import safe_float, extract_from_zip, read_drawing, file_md5
 from src.parsedwg.table_analysis import TextClusterAnalyzer
 from src.parsedwg import errors
 
@@ -61,22 +59,6 @@ class DWGTreeProcessor:
         if not self.root_path.exists():
             raise FileNotFoundError(f"Путь {self.root_path} не найден.")
 
-    @staticmethod
-    def file_md5(path: Path) -> str:
-        """Возвращает MD5-хэш файла для идентификации содержимого.
-
-        Args:
-            path: Путь к файлу.
-
-        Returns:
-            Hex-строку с MD5-хэшем файла.
-        """
-
-        digest = hashlib.md5(usedforsecurity=False)
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
 
     def walk(self, sources_path: Path) -> Generator[JobEntry, None, None]:
         """Обходит каталог и выдаёт задания на разбор DWG/DXF.
@@ -129,58 +111,6 @@ class DWGTreeProcessor:
             except zipfile.BadZipFile:
                 logger.warning("Пропускаем поврежденный ZIP: %s", file_path)
 
-    @staticmethod
-    def split_to_batches(entries: list[JobEntry], workers: int) -> list[list[JobEntry]]:
-        """Разбивает задания на пачки для параллельной обработки.
-
-        Args:
-            entries: Список заданий на обработку.
-            workers: Желаемое количество воркеров.
-
-        Returns:
-            Непустые пачки заданий, распределённые по воркерам.
-        """
-
-        normalized_workers = max(1, workers)
-        batches: list[list[JobEntry]] = [[] for _ in range(normalized_workers)]
-        for index, entry in enumerate(entries):
-            batches[index % normalized_workers].append(entry)
-        return [batch for batch in batches if batch]
-
-    @staticmethod
-    def extract_from_zip(zip_path: Path, member: str, temp_dir: Path) -> Path:
-        """Извлекает файл из ZIP-архива во временный каталог и возвращает его путь.
-
-        Args:
-            zip_path: Путь к ZIP-архиву.
-            member: Имя файла внутри архива.
-            temp_dir: Временный каталог для распаковки.
-
-        Returns:
-            Путь к распакованному временному файлу.
-        """
-
-        target_path = temp_dir / Path(member).name
-        with zipfile.ZipFile(zip_path) as archive:
-            data = archive.read(member)
-        target_path.write_bytes(data)
-        return target_path
-
-    @staticmethod
-    def read_drawing(path: Path):
-        """Читает DWG/DXF-файл через ezdxf или ODAFC и возвращает Drawing.
-
-        Args:
-            path: Путь к файлу чертежа.
-
-        Returns:
-            Объект Drawing, загруженный из файла.
-        """
-
-        suffix = path.suffix.lower()
-        if suffix == ".dwg":
-            return read_odafc(path, "ACAD2018")
-        return readfile(path)
 
 
 def _build_entity_text(text_value: str | None):
@@ -366,7 +296,7 @@ def collect_dxf_summary(drawing_path: Path) -> dict[str, Any]:
     """
 
     # Read the DWG/DXF file.
-    doc = DWGTreeProcessor.read_drawing(drawing_path)
+    doc = read_drawing(drawing_path)
     return collect_drawing_summary(doc)
 
 
@@ -391,16 +321,16 @@ def process_entry(entry: JobEntry) -> ProcessedEntry:
         if entry["kind"] == "file":
             source_ref = entry["source"]
             working_path = source
-            entity_md5 = DWGTreeProcessor.file_md5(working_path)
+            entity_md5 = file_md5(working_path)
         else:
             is_zip = " (zip)"
             member_name = entry.get("member")
             if member_name is None:
                 raise ValueError("Для zipped_file не указан member.")
 
-            working_path = DWGTreeProcessor.extract_from_zip(source, member_name, temp_dir)
+            working_path = extract_from_zip(source, member_name, temp_dir)
             source_ref = f"{entry['source']}::{member_name}"
-            entity_md5 = DWGTreeProcessor.file_md5(working_path)
+            entity_md5 = file_md5(working_path)
 
         logger.info("Обрабатываем файл: %s%s", source_ref, is_zip)
         summary = collect_dxf_summary(working_path)
@@ -655,7 +585,6 @@ def drawing_to_db(
                 session.add(block_entity)
                 session.flush()
                 block_entities_by_name[block_name] = block_entity.id
-                logger.debug(f"Block {block_name!r} {block_data} (ID={block_entity.id})")
                 created_entities += 1
 
             block_links = summary.get("block_links", {})
@@ -739,17 +668,19 @@ def drawing_to_db(
                 if parent_entity_id is None:
                     parent_entity_id = file_entity.id
 
+                description = primitive_payload.pop("description", None)
+                geometry = primitive_payload.pop("geom", None)
                 primitive_entity = Entity(
                     parent_id=parent_entity_id,
                     file_id=file_entity.id,
                     project_id=project_id,
                     name=name,
-                    description=str(primitive_payload.get("text", "") or "") or None,
+                    description=description,
                     entity_type=_coerce_entity_type(primitive_payload.get("type")),
-                    data=primitive_payload,
-                    embedding_data=_build_entity_embedding(
-                        str(primitive_payload.get("text", "") or name)
-                    ),
+                    # data=primitive_payload,
+                    embedding_data=_build_entity_embedding(description),
+                    geom=geometry,
+                    is_virtual=primitive_payload.get("is_virtual", False)
                 )
                 primitive_batch.append(primitive_entity)
 
