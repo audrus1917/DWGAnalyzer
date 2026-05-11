@@ -131,7 +131,7 @@ def handle_process_docs_command(source_path: Path) -> int:
     return constants.OK
 
 
-def handle_export_block_png_command(
+def handle_export_block_command(
     drawing_path: Path,
     block_name: str,
     output_path: Path | None,
@@ -1944,98 +1944,18 @@ def main(argv: list[str] | None = None) -> int:
         #         output_path=output_path,
         #     )
 
-        # case "extract-block":
-        #     explorer = DXFExplorer(args.file_path)
-        #     return_code = explorer.extract_block(args.block_name)
-
-        # case "describe-block":
-        #     return_code = handle_describe_block_command(
-        #         drawing_path=Path(args.file_path),
-        #         block_name=args.block_name,
-        #         output_path=Path(args.output) if args.output else None,
-        #     )
-
-        # case "export-block-png":
-        #     return_code = handle_export_block_png_command(
-        #         drawing_path=Path(args.file_path),
-        #         block_name=args.block_name,
-        #         output_path=Path(args.output) if args.output else None,
-        #         dpi=args.dpi,
-        #     )
-
-        # case "export-block-svg":
-        #     return_code = handle_export_block_svg_command(
-        #         drawing_path=Path(args.file_path),
-        #         block_name=args.block_name,
-        #         output_path=Path(args.output) if args.output else None,
-        #     )
-
-        # case "export-block-dxf":
-        #     return_code = handle_export_block_dxf_command(
-        #         drawing_path=Path(args.file_path),
-        #         block_name=args.block_name,
-        #         output_path=Path(args.output) if args.output else None,
-        #     )
-
-        # case "file-stat":
-        #     drawing_path = Path(args.drawing)
-        #     output_path = Path(args.output) if args.output else drawing_path.with_suffix(".xlsx")
-        #     project = args.project or ""
-        #     explorer = DXFExplorer(drawing_path)
-        #     explorer.export_file_stat(output_path, project=project)
-
-
-        #     if args.db_tables_by_id:
-        #         from .db import get_file_id_by_source, get_table_blocks_by_file_id
-        #         file_id = asyncio.run(get_file_id_by_source(str(drawing_path)))
-        #         if file_id:
-        #             table_blocks = asyncio.run(get_table_blocks_by_file_id(file_id))
-        #             exported_tables = explorer.export_tables_from_db(
-        #                 table_blocks=table_blocks,
-        #                 output_dir=output_path.parent,
-        #             )
-        #             out(f"Таблиц из БД по file_id выгружено: {len(exported_tables)}")
-        #         else:
-        #             out("file_id не найден для данного файла (source_ref)")
-
-        #     elif args.db_tables:
-        #         from .db import get_table_blocks_for_source
-        #         table_blocks = asyncio.run(get_table_blocks_for_source(str(drawing_path)))
-        #         exported_tables = explorer.export_tables_from_db(
-        #             table_blocks=table_blocks,
-        #             output_dir=output_path.parent,
-        #         )
-        #         out(f"Таблиц из БД по source_ref выгружено: {len(exported_tables)}")
-
-        #     out(f"Статистика сохранена: {output_path}")
-        #     return_code = constants.OK
-
-        # case "file-stat-from-db":
-        #     return_code = handle_file_stat_from_db_command(
-        #         file_ref=args.file_ref,
-        #         by_path=args.by_path,
-        #         output_path=Path(args.output) if args.output else None,
-        #     )
-
-        # case "export-blocks-xlsx":
-        #     return_code = handle_export_blocks_xlsx_command(
-        #         file_ref=args.file_ref,
-        #         by_path=args.by_path,
-        #         output_path=Path(args.output) if args.output else None,
-        #     )
+        case "export-block":
+            return_code = handle_export_block_command(
+                drawing_path=Path(args.file_path),
+                file_format=args.format,
+                block_name=args.block_name,
+                output_path=Path(args.output) if args.output else None
+            )
 
         case "export-interpreted-blocks-xlsx":
             return_code = handle_export_interpreted_blocks_xlsx_command(
                 output_path=Path(args.output) if args.output else None,
             )
-
-        # case "export-blocks-table":
-        #     return_code = handle_export_blocks_table_command(
-        #         file_ref=args.file_ref,
-        #         by_path=args.by_path,
-        #         output_path=Path(args.output) if args.output else None,
-        #     )
-
 
     return return_code
 

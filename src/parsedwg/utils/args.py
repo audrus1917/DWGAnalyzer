@@ -56,7 +56,7 @@ def build_args_parser() -> argparse.ArgumentParser:
     describe_block_parser.add_argument("block_name", help="Имя блока для описания")
 
     export_block_parser = subparsers.add_parser(
-        "export-block-png",
+        "export-block",
         parents=[readfile_common, output_common],
         help="Экспорт выбранного блока в (PNG, SVG, DXF).",
     )
@@ -388,12 +388,6 @@ def build_args_parser() -> argparse.ArgumentParser:
     ingest_docs_parser.add_argument(
         "path",
         help="Путь к файлу или каталогу для рекурсивного обхода.",
-    )
-
-    export_interpreted_blocks_xlsx_parser = subparsers.add_parser(
-        "export-interpreted-blocks-xlsx",
-        parents=[output_common],
-        help="Выгрузить в XLSX все блоки с непустой short_interpretation.",
     )
 
     return parser

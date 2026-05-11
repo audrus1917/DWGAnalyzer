@@ -369,37 +369,6 @@ def _get_block_layout_by_name(doc, block_name: str):
     return None
 
 
-# def _collect_block_annotation_texts_from_source(block_name: str, source_ref: str) -> list[str]:
-#     from .process_source import DWGTreeProcessor
-#     from src.parsedwg.utils import get_mleader_annotation_text
-
-#     if not source_ref.strip():
-#         return []
-
-#     try:
-#         with tempfile.TemporaryDirectory(prefix="parsedwg-block-annotations-") as temp_dir_name:
-#             temp_dir = Path(temp_dir_name)
-#             drawing_path = _resolve_source_ref_to_drawing_path(source_ref, temp_dir)
-#             doc = DWGTreeProcessor.read_drawing(drawing_path)
-#             layout = _get_block_layout_by_name(doc, block_name)
-#             if layout is None:
-#                 return []
-
-#             seen: set[str] = set()
-#             annotation_texts: list[str] = []
-#             for entity in layout:
-#                 if str(entity.dxftype()) != "MULTILEADER":
-#                     continue
-#                 text = get_mleader_annotation_text(entity)
-#                 if not text or text in seen:
-#                     continue
-#                 seen.add(text)
-#                 annotation_texts.append(text)
-#             return annotation_texts
-#     except (FileNotFoundError, OSError, RuntimeError, ValueError):
-#         return []
-
-
 async def get_full_description(
     block_name: str,
     file_id: str | None = None,
