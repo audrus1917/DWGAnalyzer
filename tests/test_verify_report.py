@@ -107,7 +107,12 @@ def test_build_verification_report_detects_mismatches() -> None:
                     id=primitive_id,
                     name="INSERT",
                     entity_type="INSERT",
-                    data={"block": "BLOCK_A", "layout": "Model", "layer": "A-TEXT", "target_block": "MISSING"},
+                    data={
+                        "block": "BLOCK_A",
+                        "layout": "Model",
+                        "layer": "A-TEXT",
+                        "target_block": "MISSING",
+                    },
                     file_id=None,
                 ),
             ],

@@ -58,14 +58,14 @@ def build_args_parser() -> argparse.ArgumentParser:
     export_block_parser = subparsers.add_parser(
         "export-block",
         parents=[readfile_common, output_common],
-        help="Экспорт выбранного блока в (PNG, SVG, DXF).",
+        help="Экспорт выбранного блока в PNG.",
     )
     export_block_parser.add_argument("block_name", help="Имя блока для экспорта")
     export_block_parser.add_argument(
-        "-f",
-        "--format",
-        default=None,
-        help="Формат экспорта блока (PNG, SVG, DXF).",
+        "--dpi",
+        type=int,
+        default=300,
+        help="Разрешение PNG при экспорте (по умолчанию: 300).",
     )
 
     process_parser = subparsers.add_parser(
@@ -86,74 +86,6 @@ def build_args_parser() -> argparse.ArgumentParser:
         dest="project",
         required=True,
         help="Название существующего проекта.",
-    )
-
-    extract_name_meaning_parser = subparsers.add_parser(
-        "extract-name-meaning",
-        parents=[ai_common],
-        help="Извлечь через LLM короткие инженерные смыслы для одного названия.",
-    )
-    extract_name_meaning_parser.add_argument(
-        "name",
-        nargs="?",
-        default=None,
-        help="Название или короткий текст, смысл которого нужно определить.",
-    )
-    extract_name_meaning_parser.add_argument(
-        "--entity-id",
-        dest="entity_id",
-        default=None,
-        help="UUID сущности в БД. Если указан, имя будет взято из БД.",
-    )
-    extract_name_meaning_parser.add_argument(
-        "--extra-context",
-        default="",
-        help="Дополнительный контекст для LLM, например тип проекта или раздел.",
-    )
-
-    explain_block_parser = subparsers.add_parser(
-        "explain-block",
-        parents=[ai_common],
-        help="Разобрать смысл имени блока из БД по его UUID.",
-    )
-    explain_block_parser.add_argument(
-        "block_id",
-        help="UUID сущности блока в БД.",
-    )
-    explain_block_parser.add_argument(
-        "--extra-context",
-        default="",
-        help="Дополнительный контекст для LLM, например тип проекта или раздел.",
-    )
-
-    categorize_entities_parser = subparsers.add_parser(
-        "categorize-entities",
-        parents=[ai_common],
-        help="Извлечь AI-категорию для сущностей и привязать её в БД.",
-    )
-    categorize_entities_parser.add_argument(
-        "--entity-id",
-        dest="entity_ids",
-        action="append",
-        default=None,
-        help="UUID сущности. Можно указывать несколько раз.",
-    )
-    categorize_entities_parser.add_argument(
-        "--entity-type",
-        dest="entity_type",
-        default=None,
-        help="Тип сущности из поля entity_type, например BLOCK.",
-    )
-    categorize_entities_parser.add_argument(
-        "--workers",
-        type=int,
-        default=1,
-        help="Число параллельных AI-запросов при категоризации (по умолчанию: 1).",
-    )
-    categorize_entities_parser.add_argument(
-        "--dry",
-        action="store_true",
-        help="Не записывать результат в БД, а вывести JSON-предпросмотр категоризации.",
     )
 
     interpret_entities_parser = subparsers.add_parser(
@@ -388,6 +320,12 @@ def build_args_parser() -> argparse.ArgumentParser:
     ingest_docs_parser.add_argument(
         "path",
         help="Путь к файлу или каталогу для рекурсивного обхода.",
+    )
+
+    subparsers.add_parser(
+        "export-interpreted-blocks-xlsx",
+        parents=[output_common],
+        help="Выгрузить в XLSX все блоки с непустой short_interpretation.",
     )
 
     return parser

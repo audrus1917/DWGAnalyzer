@@ -67,9 +67,9 @@ load_dotenv()
 settings = Settings(
     database_url=os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres@localhost:5432/parsedwg_db"),
     database_echo=_as_bool(os.getenv("DATABASE_ECHO"), default=False),
-    ai_base_url=os.getenv("AI_BASE_URL", "http://localhost:11434").rstrip("/"),
-    ai_embed_model=os.getenv("AI_EMBED_MODEL", "nomic-embed-text"),
-    ai_model=os.getenv("AI_MODEL", "llama3.1:8b"),
+    ai_base_url=os.getenv("OLLAMA_BASE_URL", os.getenv("AI_BASE_URL", "http://localhost:11434")).rstrip("/"),
+    ai_embed_model=os.getenv("OLLAMA_EMBED_MODEL", os.getenv("AI_EMBED_MODEL", "nomic-embed-text")),
+    ai_model=os.getenv("OLLAMA_LLM_MODEL", os.getenv("AI_MODEL", "llama3.1:8b")),
     ai_timeout_seconds=_as_float(os.getenv("AI_TIMEOUT_SECONDS"), default=120.0),
     ai_api_key=os.getenv("AI_API_KEY", "ollama")
 )
