@@ -655,7 +655,6 @@ def drawing_to_db(
                 session.add(block_entity)
                 session.flush()
                 block_entities_by_name[block_name] = block_entity.id
-                logger.debug(f"Block {block_name!r} {block_data} (ID={block_entity.id})")
                 created_entities += 1
 
             block_links = summary.get("block_links", {})
@@ -739,17 +738,19 @@ def drawing_to_db(
                 if parent_entity_id is None:
                     parent_entity_id = file_entity.id
 
+                description = primitive_payload.pop("description", None)
+                geometry = primitive_payload.pop("geom", None)
                 primitive_entity = Entity(
                     parent_id=parent_entity_id,
                     file_id=file_entity.id,
                     project_id=project_id,
                     name=name,
-                    description=str(primitive_payload.get("text", "") or "") or None,
+                    description=description,
                     entity_type=_coerce_entity_type(primitive_payload.get("type")),
-                    data=primitive_payload,
-                    embedding_data=_build_entity_embedding(
-                        str(primitive_payload.get("text", "") or name)
-                    ),
+                    # data=primitive_payload,
+                    embedding_data=_build_entity_embedding(description),
+                    geom=geometry,
+                    is_virtual=primitive_payload.get("is_virtual", False)
                 )
                 primitive_batch.append(primitive_entity)
 

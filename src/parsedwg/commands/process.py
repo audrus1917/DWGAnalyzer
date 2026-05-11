@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def handle_process_command(
     source_path: Path,
-    project_name: str | None = None,
+    project_name: str
 ) -> int:
     """Сканирует DWG/DXF, сохраняет дерево сущностей в БД и привязывает его к проекту."""
 

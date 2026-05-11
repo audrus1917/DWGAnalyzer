@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Table, Text
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Table, Text, Boolean
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -106,14 +106,15 @@ class Entity(Base):
     name: Mapped[str] = mapped_column(String(512), nullable=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    is_table: Mapped[bool | None] = mapped_column(nullable=True)
+    is_table: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_virtual: Mapped[bool | None] = mapped_column(Boolean, default=False, index=True)
     entity_md5: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_get_now,
         index=True
     )
     geom: Mapped[str | None] = mapped_column(
-        Geometry("GEOMETRY", srid=4326),
+        Geometry("GEOMETRY", srid=0),
         nullable=True,
         index=True,
     )
