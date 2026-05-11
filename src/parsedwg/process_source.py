@@ -560,7 +560,6 @@ def drawing_to_db(
             block_entities_by_name: dict[str, int] = {}
             logger.info("Блоки (%d шт.)", len(summary.get("blocks", [])))
             for block in summary["blocks"]:
-                logger.debug(block)
                 block_name = str(block["name"])
 
                 block_data = block.get("data", {})

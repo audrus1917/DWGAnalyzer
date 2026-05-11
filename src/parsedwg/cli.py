@@ -10,11 +10,8 @@ import time
 
 from pathlib import Path
 
-from src.parsedwg.langchain_name_tags import LangChainAgentConfig, LangChainNameTagsExtractor
-
-
 from src.parsedwg import constants
-from src.parsedwg.settings import settings, get_ai_settings
+from src.parsedwg.settings import settings
 from src.parsedwg.explorer import DXFExplorer
 from src.parsedwg.docs_ingest import run_documents_ingest
 from src.parsedwg.utils import (
@@ -23,7 +20,7 @@ from src.parsedwg.utils import (
     _finish_progress_line,
     _format_duration_seconds,
     _save_rows_to_json,
-    _save_payload_to_json
+    get_chat_url
 )
 from src.parsedwg.utils.args import build_args_parser
 from src.parsedwg.commands.process import handle_process_command
@@ -193,457 +190,42 @@ def handle_export_block_dxf_command(
         return constants.ERROR
 
 
+def handle_extract_block_command(
+    drawing_path: Path,
+    block_name: str,
+) -> int:
+    """Извлекает блок в отдельный файл через DXFExplorer."""
+
+    try:
+        explorer = DXFExplorer(drawing_path)
+        return int(explorer.extract_block(block_name))
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        logger.error("Не удалось извлечь блок: %s", exc)
+        return constants.ERROR
+
+
 def handle_describe_block_command(
     drawing_path: Path,
     block_name: str,
     output_path: Path | None,
 ) -> int:
-    """Читает файл чертежа и возвращает описание выбранного блока."""
+    """Возвращает JSON-описание блока."""
 
     try:
         explorer = DXFExplorer(drawing_path)
         payload = explorer.describe_block(block_name)
-
-        if output_path is not None:
-            _save_payload_to_json(output_path, payload)
-            logger.info("JSON сохранён: %s", output_path)
-            return constants.OK
-
-        logger.debug(json.dumps(payload, ensure_ascii=False, indent=2))
-        return constants.OK
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        logger.error("Не удалось получить описание блока: %s", exc)
+        logger.error("Не удалось описать блок: %s", exc)
         return constants.ERROR
 
-
-def handle_extract_name_tags_command(
-    source_path: Path,
-    output_path: Path | None,
-    ai_name_tags: bool = False,
-    ai_model: str = "llama3.1:8b",
-    ai_base_url: str = "http://localhost:11434/v1",
-    ai_api_key: str = "ollama",
-) -> int:
-    """Извлекает семантические теги из имён файлов и каталогов."""
-    from .name_tags import collect_name_tags
-
-    try:
-        ai_extractor = None
-        if ai_name_tags:
-            ensure_config = get_ai_settings(
-                enabled=True,
-                model=ai_model,
-                base_url=ai_base_url,
-                api_key=ai_api_key,
-            )
-            assert ensure_config is not None
-            ai_extractor = LangChainNameTagsExtractor.from_config(
-                LangChainAgentConfig(
-                    model=ensure_config["model"],
-                    base_url=ensure_config["base_url"],
-                    api_key=ensure_config["api_key"],
-                )
-            )
-
-        rows = collect_name_tags(source_path, ai_extractor=ai_extractor)
-
-        if output_path is not None:
-            _save_rows_to_json(output_path, rows)
-            logger.info("JSON сохранён: %s", output_path)
-            return constants.OK
-
-        logger.debug(json.dumps(rows, ensure_ascii=False, indent=2))
+    rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(rendered, encoding="utf-8")
         return constants.OK
-    except RuntimeError as e:
-        logger.error("Ошибка AI-режима: %s", e)
-        return constants.ERROR
-    except (FileNotFoundError, OSError, ValueError) as e:
-        logger.error("Сбой извлечения тегов: %s", e)
-        return constants.UNBOUND_ERROR
 
-
-def handle_extract_token_tags_command(
-    tokens: list[str],
-    drawing_path: Path | None = None,
-    ai_model: str = "llama3.2",
-    ai_base_url: str = "http://localhost:11434/v1",
-    ai_api_key: str = "ollama",
-    with_scores: bool = False,
-) -> int:
-    """Извлекает через LLM JSON-отображение смыслов для списка токенов."""
-    token_context = "строительство, чертеж"
-
-    try:
-        merged_tokens: list[str] = []
-        seen_tokens: set[str] = set()
-
-        def _extend_unique(values: list[str]) -> None:
-            for value in values:
-                cleaned = value.strip()
-                if not cleaned or cleaned in seen_tokens:
-                    continue
-                seen_tokens.add(cleaned)
-                merged_tokens.append(cleaned)
-
-        _extend_unique(tokens)
-
-        if drawing_path is not None:
-            explorer = DXFExplorer(drawing_path)
-            _extend_unique(explorer.list_layer_names())
-
-        if not merged_tokens:
-            logger.error("Не переданы токены и не указан drawing-файл.")
-            return constants.UNBOUND_ERROR
-
-        extractor = LangChainNameTagsExtractor.from_config(
-            LangChainAgentConfig(
-                model=ai_model,
-                base_url=ai_base_url,
-                api_key=ai_api_key,
-            )
-        )
-        if with_scores:
-            print(
-                extractor.extract_token_meanings_scored_json(
-                    merged_tokens,
-                    extra_context=token_context,
-                )
-            )
-        else:
-            print(
-                extractor.extract_token_meanings_json(
-                    merged_tokens,
-                    extra_context=token_context,
-                )
-            )
-        return constants.OK
-    except RuntimeError as e:
-        logger.error("Ошибка AI-режима: %s", e)
-        return constants.ERROR
-    except (FileNotFoundError, OSError, ValueError) as e:
-        logger.error("Сбой извлечения тегов по токенам: %s", e)
-        return constants.UNBOUND_ERROR
-
-
-def _derive_ollama_chat_url(base_url: str) -> str:
-    """Строит URL Ollama /api/chat из OpenAI-совместимого base URL."""
-    stripped = base_url.rstrip("/")
-    if stripped.endswith("/v1"):
-        stripped = stripped[:-3]
-    return stripped.rstrip("/") + "/api/chat"
-
-
-def handle_extract_name_meaning_command(
-    name: str | None = None,
-    entity_id: str | None = None,
-    extra_context: str = "",
-    ai_model: str = "llama3.1:8b",
-    ai_base_url: str = "http://localhost:11434/v1",
-    ai_api_key: str = "ollama",
-) -> int:
-    """Анализирует заголовок или имя сущности из БД через LLM.
-
-    Args:
-        name: Явное имя сущности для интерпретации.
-        entity_id: Идентификатор сущности, если имя нужно получить из БД.
-        extra_context: Дополнительный контекст для LLM.
-        ai_model: Имя модели LLM.
-        ai_base_url: Базовый URL AI-сервиса.
-        ai_api_key: Ключ доступа к AI-сервису.
-
-    Returns:
-        Код завершения CLI-команды.
-
-    Raises:
-        RuntimeError: Может возникнуть во внутренних вызовах LLM и преобразуется в код ошибки.
-    """
-    from .db import get_entity_name_by_id
-    from .langchain_name_tags import call_ollama_name_meaning
-
-    logger.debug("AI API key configured: %s", bool(ai_api_key))
-
-    if bool(name) == bool(entity_id):
-        logger.error("Нужно указать либо name, либо --entity-id.")
-        return constants.UNBOUND_ERROR
-
-    resolved_name = name
-    if entity_id is not None:
-        try:
-            resolved_name = asyncio.run(get_entity_name_by_id(entity_id))
-        except (ValueError, LookupError) as exc:
-            logger.error("Некорректный entity_id: %s", exc)
-            return constants.UNBOUND_ERROR
-        if resolved_name is None:
-            print(f"Сущность не найдена: {entity_id}")
-            return constants.NOT_FOUND
-        print(f"Сущность: {resolved_name}")
-        print("")
-
-    assert resolved_name is not None
-    normalized_name = " ".join(resolved_name.split())
-    normalized_extra_context = " ".join(extra_context.split())
-    chat_url = _derive_ollama_chat_url(ai_base_url)
-
-    try:
-        result = call_ollama_name_meaning(
-            name=normalized_name,
-            chat_url=chat_url,
-            model=ai_model,
-            extra_context=normalized_extra_context,
-        )
-        print(result)
-        return constants.OK
-    except RuntimeError as e:
-        logger.error("Ошибка AI-режима: %s", e)
-        return constants.ERROR
-
-
-def handle_explain_block_command(
-    block_id: str,
-    extra_context: str = "",
-    ai_model: str = "llama3.1:8b",
-    ai_base_url: str = "http://localhost:11434/v1",
-    ai_api_key: str = "ollama",
-) -> int:
-    """Получает имя блока по UUID из БД и анализирует его через LLM.
-
-    Args:
-        block_id: Идентификатор блока в БД.
-        extra_context: Дополнительный контекст для LLM.
-        ai_model: Имя модели LLM.
-        ai_base_url: Базовый URL AI-сервиса.
-        ai_api_key: Ключ доступа к AI-сервису.
-
-    Returns:
-        Код завершения CLI-команды.
-
-    Raises:
-        ValueError: Может возникнуть во внутренних вызовах получения сущности по id и преобразуется в код ошибки.
-        LookupError: Может возникнуть во внутренних вызовах получения сущности по id и преобразуется в код ошибки.
-    """
-    _ = ai_api_key  # Ollama /api/chat не требует авторизации
-
-    from .db import get_entity_name_by_id
-
-    try:
-        name = asyncio.run(get_entity_name_by_id(block_id))
-    except (ValueError, LookupError) as e:
-        logger.error("Некорректный block_id: %s", e)
-        return constants.UNBOUND_ERROR
-
-    if name is None:
-        print(f"Блок не найден: {block_id}")
-        return constants.NOT_FOUND
-
-    print(f"Блок: {name}")
-    print("")
-    return handle_extract_name_meaning_command(
-        name=name,
-        entity_id=None,
-        extra_context=extra_context,
-        ai_model=ai_model,
-        ai_base_url=ai_base_url,
-        ai_api_key=ai_api_key,
-    )
-
-
-def handle_categorize_entities_command(
-    entity_ids: list[str] | None,
-    entity_type: str | None,
-    ai_model: str = "llama3.2",
-    ai_base_url: str = "http://localhost:11434/v1",
-    ai_api_key: str = "ollama",
-    workers: int = 1,
-    dry: bool = False,
-) -> int:
-    """Извлекает семантические категории для сущностей и связывает их в БД.
-
-    Args:
-        entity_ids: Явный список идентификаторов сущностей для категоризации.
-        entity_type: Тип сущностей для выборки, если entity_ids не переданы.
-        ai_model: Имя модели LLM.
-        ai_base_url: Базовый URL AI-сервиса.
-        ai_api_key: Ключ доступа к AI-сервису.
-        workers: Максимальное число параллельных задач.
-        dry: Если true, не сохраняет результат в БД.
-
-    Returns:
-        Код завершения CLI-команды.
-
-    Raises:
-        RuntimeError: Может возникнуть во внутренних AI-вызовах и преобразуется в код ошибки.
-        ValueError: Может возникнуть во внутренних вызовах выборки и валидации и преобразуется в код ошибки.
-        LookupError: Может возникнуть во внутренних вызовах БД и преобразуется в код ошибки.
-    """
-    extra_context = "строительство, чертеж"
-
-    from .db import assign_semantic_category, list_entities_for_semantic_categorization
-
-    if bool(entity_ids) == bool(entity_type):
-        logger.error("Нужно указать либо --entity-id, либо --entity-type.")
-        return constants.UNBOUND_ERROR
-    if workers <= 0:
-        logger.error("--workers должен быть больше 0.")
-        return constants.UNBOUND_ERROR
-
-    def _build_dry_row(entity: dict[str, str], meanings: list[dict[str, object]]) -> dict[str, object]:
-        normalized_meanings = [
-            {
-                "meaning": str(item.get("meaning")),
-                "score": item.get("score"),
-            }
-            for item in meanings
-            if isinstance(item, dict) and isinstance(item.get("meaning"), str)
-        ]
-        category_name = normalized_meanings[0]["meaning"] if normalized_meanings else ""
-        return {
-            "entity_id": str(entity["id"]),
-            "entity_name": str(entity["name"]),
-            "entity_type": str(entity["entity_type"]),
-            "category_id": "",
-            "category_name": category_name,
-            "matched_meaning": category_name,
-            "status": "dry-run" if normalized_meanings else "no-tags",
-            "meanings": normalized_meanings,
-        }
-
-    async def _run_stream() -> list[dict[str, object]]:
-        selected_entities = await list_entities_for_semantic_categorization(
-            entity_ids=entity_ids,
-            entity_type=entity_type,
-        )
-        if not selected_entities:
-            return []
-        if not dry:
-            print(f"Выбрано сущностей: {len(selected_entities)}")
-
-        queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
-        semaphore = asyncio.Semaphore(workers)
-
-        async def _extract_entity(entity: dict[str, str]) -> dict[str, object]:
-            async with semaphore:
-                text = "\n".join(
-                    part.strip()
-                    for part in [
-                        str(entity["name"]),
-                        str(entity["description"]),
-                    ]
-                    if str(part).strip()
-                )
-                meanings = await asyncio.to_thread(
-                    extractor.extract_scored_tags,
-                    text,
-                    extra_context,
-                )
-                return {
-                    "entity": entity,
-                    "entity_id": entity["id"],
-                    "meanings": meanings,
-                }
-
-        async def producer() -> None:
-            try:
-                tasks = [asyncio.create_task(_extract_entity(entity)) for entity in selected_entities]
-                for task in asyncio.as_completed(tasks):
-                    await queue.put(await task)
-            except (RuntimeError, OSError, ValueError) as exc:
-                await queue.put({"exception": exc})
-            finally:
-                await queue.put(None)
-
-        async def consumer() -> list[dict[str, object]]:
-            rows: list[dict[str, object]] = []
-            total = len(selected_entities)
-            progress_width = 0
-            while True:
-                item = await queue.get()
-                try:
-                    if item is None:
-                        if not dry:
-                            _finish_progress_line(progress_width)
-                        return rows
-                    if "exception" in item:
-                        raise item["exception"]  # type: ignore[misc]
-                    raw_meanings = item.get("meanings", [])
-                    normalized_meanings = (
-                        [value for value in raw_meanings if isinstance(value, dict)]
-                        if isinstance(raw_meanings, list)
-                        else []
-                    )
-                    if dry:
-                        entity_payload = item.get("entity")
-                        if not isinstance(entity_payload, dict):
-                            raise ValueError("Некорректная сущность в dry-режиме категоризации.")
-                        rows.append(_build_dry_row(entity_payload, normalized_meanings))
-                        continue
-
-                    saved_row = await assign_semantic_category(
-                        entity_id=str(item["entity_id"]),
-                        meanings=normalized_meanings,
-                    )
-                    rows.append(saved_row)
-                    progress_width = _write_progress_line(
-                        "Сохранено {current}/{total}: {entity_id} -> {category_name} [{status}]".format(
-                            current=len(rows),
-                            total=total,
-                            entity_id=saved_row["entity_id"],
-                            category_name=saved_row["category_name"] or "-",
-                            status=saved_row["status"],
-                        ),
-                        previous_width=progress_width,
-                    )
-                finally:
-                    queue.task_done()
-
-        producer_task = asyncio.create_task(producer())
-        consumer_task = asyncio.create_task(consumer())
-        await producer_task
-        await queue.join()
-        return await consumer_task
-
-    try:
-        extractor = LangChainNameTagsExtractor.from_config(
-            LangChainAgentConfig(
-                model=ai_model,
-                base_url=ai_base_url,
-                api_key=ai_api_key,
-            )
-        )
-
-        rows = asyncio.run(_run_stream())
-        if not rows:
-            if dry:
-                print("[]")
-            else:
-                print("Нет сущностей для категоризации.")
-            return constants.OK
-        if dry:
-            print(json.dumps(rows, ensure_ascii=False, indent=2))
-            return constants.OK
-        printable_rows: list[ResultRow] = []
-        for row in rows:
-            raw_meanings = row.get("meanings", [])
-            printable_rows.append(
-                {
-                    "entity_id": row["entity_id"],
-                    "entity_type": row["entity_type"],
-                    "entity_name": row["entity_name"],
-                    "category_name": row["category_name"],
-                    "matched_meaning": row["matched_meaning"],
-                    "status": row["status"],
-                    "meanings": ", ".join(str(value) for value in raw_meanings)
-                    if isinstance(raw_meanings, list)
-                    else "",
-                }
-            )
-        print_as_table(printable_rows)
-        return constants.OK
-    except RuntimeError as e:
-        logger.error("Ошибка AI-режима: %s", e)
-        return constants.ERROR
-    except (LookupError, OSError, ValueError) as e:
-        logger.error("Сбой категоризации сущностей: %s", e)
-        return constants.UNBOUND_ERROR
+    print(rendered)
+    return constants.OK
 
 
 def handle_interpret_entities_command(
@@ -697,7 +279,7 @@ def handle_interpret_entities_command(
         logger.error("--workers должен быть больше 0.")
         return constants.UNBOUND_ERROR
 
-    chat_url = _derive_ollama_chat_url(ai_base_url)
+    chat_url = get_chat_url(ai_base_url)
     logger.debug("chat_url: %s", chat_url)
     normalized_context = " ".join(extra_context.split())
     llm_timeout_seconds = settings.ai_timeout_seconds
@@ -937,7 +519,7 @@ def handle_interpret_blocks_command(
             print("Файл не найден в БД.")
             return constants.NOT_FOUND
 
-    chat_url = _derive_ollama_chat_url(ai_base_url)
+    chat_url = get_chat_url(ai_base_url)
     normalized_context = " ".join(extra_context.split())
     llm_timeout_seconds = settings.ai_timeout_seconds
 
@@ -1186,13 +768,13 @@ def handle_verify_extraction_command(
 
 
 def _resolve_source_ref_to_drawing_path(source_ref: str, temp_dir: Path) -> Path:
-    from .process_source import DWGTreeProcessor
+    from .utils import extract_from_zip
 
     if "::" not in source_ref:
         return Path(source_ref)
 
     archive_path_str, member_name = source_ref.split("::", 1)
-    return DWGTreeProcessor.extract_from_zip(Path(archive_path_str), member_name, temp_dir)
+    return extract_from_zip(Path(archive_path_str), member_name, temp_dir)
 
 
 def _get_block_layout_by_name(doc, block_name: str):
@@ -1770,61 +1352,32 @@ def main(argv: list[str] | None = None) -> int:
     return_code: int = 0
     match args.command:
 
+        case "extract-block":
+            return_code = handle_extract_block_command(
+                drawing_path=Path(args.file_path),
+                block_name=args.block_name,
+            )
+
+        case "describe-block":
+            return_code = handle_describe_block_command(
+                drawing_path=Path(args.file_path),
+                block_name=args.block_name,
+                output_path=Path(args.output) if args.output else None,
+            )
+
+        case "export-block-png":
+            return_code = handle_export_block_png_command(
+                drawing_path=Path(args.file_path),
+                block_name=args.block_name,
+                output_path=Path(args.output) if args.output else None,
+                dpi=args.dpi,
+            )
+
         case "process":
             return_code = handle_process_command(
                 Path(args.path),
                 project_name=args.project,
             )
-
-        # case "extract-name-tags":
-        #     return_code = handle_extract_name_tags_command(
-        #         source_path=Path(args.path),
-        #         output_path=Path(args.output) if args.output else None,
-        #         ai_name_tags=args.ai_name_tags,
-        #         ai_model=args.ai_model,
-        #         ai_base_url=args.ai_base_url,
-        #         ai_api_key=args.ai_api_key,
-        #     )
-
-        # case "extract-token-tags":
-        #     return_code = handle_extract_token_tags_command(
-        #         tokens=args.tokens,
-        #         drawing_path=Path(args.drawing) if args.drawing else None,
-        #         ai_model=args.ai_model,
-        #         ai_base_url=args.ai_base_url,
-        #         ai_api_key=args.ai_api_key,
-        #         with_scores=args.with_scores,
-        #     )
-
-        # case "extract-name-meaning":
-        #     return_code = handle_extract_name_meaning_command(
-        #         name=args.name,
-        #         entity_id=args.entity_id,
-        #         extra_context=args.extra_context,
-        #         ai_model=args.ai_model,
-        #         ai_base_url=args.ai_base_url,
-        #         ai_api_key=args.ai_api_key,
-        #     )
-
-        # case "explain-block":
-        #     return_code = handle_explain_block_command(
-        #         block_id=args.block_id,
-        #         extra_context=args.extra_context,
-        #         ai_model=args.ai_model,
-        #         ai_base_url=args.ai_base_url,
-        #         ai_api_key=args.ai_api_key,
-        #     )
-
-        # case "categorize-entities":
-        #     return_code = handle_categorize_entities_command(
-        #         entity_ids=args.entity_ids,
-        #         entity_type=args.entity_type,
-        #         ai_model=args.ai_model,
-        #         ai_base_url=args.ai_base_url,
-        #         ai_api_key=args.ai_api_key,
-        #         workers=args.workers,
-        #         dry=args.dry,
-        #     )
 
         case "interpret-entities":
             return_code = handle_interpret_entities_command(
@@ -1864,14 +1417,14 @@ def main(argv: list[str] | None = None) -> int:
                 dry=args.dry,
             )
 
-        # case "verify-extraction":
-        #     return_code = handle_verify_extraction_command(
-        #         drawing_path=Path(args.drawing),
-        #         file_id=args.file_id,
-        #     )
+        case "verify-extraction":
+            return_code = handle_verify_extraction_command(
+                drawing_path=Path(args.file_path),
+                file_id=args.file_id,
+            )
 
-        # case "ingest-docs" | "process-docs":
-        #     return_code = handle_process_docs_command(Path(args.path))
+        case "ingest-docs":
+            return_code = handle_process_docs_command(Path(args.path))
 
         case "project-add":
             return_code = handle_project_add_command(
@@ -1918,126 +1471,11 @@ def main(argv: list[str] | None = None) -> int:
         case "category-list":
             return_code = handle_category_list_command(parent_id=args.parent_id)
 
-        # case "search":
-        #     output_path = Path(args.output) if args.output else None
-        #     return_code = handle_search_command(
-        #         query=args.query,
-        #         entity_type=args.type,
-        #         limit=args.limit,
-        #         output_path=output_path,
-        #         parent_id=args.parent_id,
-        #     )
-
-        # case "index":
-        #     return_code = handle_index_command(
-        #         entity_type=args.type,
-        #         batch_size=args.batch_size,
-        #         reindex=args.reindex,
-        #     )
-
-        # case "ask":
-        #     output_path = Path(args.output) if args.output else None
-        #     return_code = handle_ask_command(
-        #         question=args.question,
-        #         entity_type=args.type,
-        #         top_k=args.top_k,
-        #         output_path=output_path,
-        #     )
-
-        # case "extract-block":
-        #     explorer = DXFExplorer(args.file_path)
-        #     return_code = explorer.extract_block(args.block_name)
-
-        # case "describe-block":
-        #     return_code = handle_describe_block_command(
-        #         drawing_path=Path(args.file_path),
-        #         block_name=args.block_name,
-        #         output_path=Path(args.output) if args.output else None,
-        #     )
-
-        # case "export-block-png":
-        #     return_code = handle_export_block_png_command(
-        #         drawing_path=Path(args.file_path),
-        #         block_name=args.block_name,
-        #         output_path=Path(args.output) if args.output else None,
-        #         dpi=args.dpi,
-        #     )
-
-        # case "export-block-svg":
-        #     return_code = handle_export_block_svg_command(
-        #         drawing_path=Path(args.file_path),
-        #         block_name=args.block_name,
-        #         output_path=Path(args.output) if args.output else None,
-        #     )
-
-        # case "export-block-dxf":
-        #     return_code = handle_export_block_dxf_command(
-        #         drawing_path=Path(args.file_path),
-        #         block_name=args.block_name,
-        #         output_path=Path(args.output) if args.output else None,
-        #     )
-
-        # case "file-stat":
-        #     drawing_path = Path(args.drawing)
-        #     output_path = Path(args.output) if args.output else drawing_path.with_suffix(".xlsx")
-        #     project = args.project or ""
-        #     explorer = DXFExplorer(drawing_path)
-        #     explorer.export_file_stat(output_path, project=project)
-
-
-        #     if args.db_tables_by_id:
-        #         from .db import get_file_id_by_source, get_table_blocks_by_file_id
-        #         file_id = asyncio.run(get_file_id_by_source(str(drawing_path)))
-        #         if file_id:
-        #             table_blocks = asyncio.run(get_table_blocks_by_file_id(file_id))
-        #             exported_tables = explorer.export_tables_from_db(
-        #                 table_blocks=table_blocks,
-        #                 output_dir=output_path.parent,
-        #             )
-        #             out(f"Таблиц из БД по file_id выгружено: {len(exported_tables)}")
-        #         else:
-        #             out("file_id не найден для данного файла (source_ref)")
-
-        #     elif args.db_tables:
-        #         from .db import get_table_blocks_for_source
-        #         table_blocks = asyncio.run(get_table_blocks_for_source(str(drawing_path)))
-        #         exported_tables = explorer.export_tables_from_db(
-        #             table_blocks=table_blocks,
-        #             output_dir=output_path.parent,
-        #         )
-        #         out(f"Таблиц из БД по source_ref выгружено: {len(exported_tables)}")
-
-        #     out(f"Статистика сохранена: {output_path}")
-        #     return_code = constants.OK
-
-        # case "file-stat-from-db":
-        #     return_code = handle_file_stat_from_db_command(
-        #         file_ref=args.file_ref,
-        #         by_path=args.by_path,
-        #         output_path=Path(args.output) if args.output else None,
-        #     )
-
-        # case "export-blocks-xlsx":
-        #     return_code = handle_export_blocks_xlsx_command(
-        #         file_ref=args.file_ref,
-        #         by_path=args.by_path,
-        #         output_path=Path(args.output) if args.output else None,
-        #     )
-
         case "export-interpreted-blocks-xlsx":
             return_code = handle_export_interpreted_blocks_xlsx_command(
                 output_path=Path(args.output) if args.output else None,
             )
 
-        # case "export-blocks-table":
-        #     return_code = handle_export_blocks_table_command(
-        #         file_ref=args.file_ref,
-        #         by_path=args.by_path,
-        #         output_path=Path(args.output) if args.output else None,
-        #     )
-
-
     return return_code
-
 
 __all__ = ["DXFExplorer", "main"]

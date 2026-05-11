@@ -178,3 +178,11 @@ def file_md5(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def get_chat_url(base_url: str) -> str:
+    """Строит URL Ollama /api/chat из OpenAI-совместимого base URL."""
+    stripped = base_url.rstrip("/")
+    if stripped.endswith("/v1"):
+        stripped = stripped[:-3]
+    return stripped.rstrip("/") + "/api/chat"

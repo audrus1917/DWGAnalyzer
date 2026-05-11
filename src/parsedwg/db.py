@@ -348,13 +348,40 @@ def _collect_annotation_texts_from_rows(rows: Sequence[Sequence[object]]) -> lis
 
 
 def _resolve_source_ref_to_drawing_path(source_ref: str, temp_dir: Path) -> Path:
-    from .process_source import DWGTreeProcessor
+    from .utils import extract_from_zip
 
     if "::" not in source_ref:
         return Path(source_ref)
 
     archive_path_str, member_name = source_ref.split("::", 1)
-    return DWGTreeProcessor.extract_from_zip(Path(archive_path_str), member_name, temp_dir)
+    return extract_from_zip(Path(archive_path_str), member_name, temp_dir)
+
+
+def _collect_block_annotation_texts_from_source(
+    block_name: str,
+    source_ref: str,
+) -> list[str]:
+    from .utils import read_drawing
+    from .utils.geom import get_mleader_annotation_text
+
+    seen: set[str] = set()
+    values: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="parsedwg-annot-") as temp_dir_name:
+        drawing_path = _resolve_source_ref_to_drawing_path(source_ref, Path(temp_dir_name))
+        doc = read_drawing(drawing_path)
+        block = _get_block_layout_by_name(doc, block_name)
+        if block is None:
+            return []
+
+        for entity in block:
+            if entity.dxftype() != "MULTILEADER":
+                continue
+            text = get_mleader_annotation_text(entity).strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            values.append(text)
+    return values
 
 
 def _get_block_layout_by_name(doc, block_name: str):
@@ -367,37 +394,6 @@ def _get_block_layout_by_name(doc, block_name: str):
     if block_name == "Model" or block_name.startswith("*Model_Space"):
         return doc.modelspace()
     return None
-
-
-# def _collect_block_annotation_texts_from_source(block_name: str, source_ref: str) -> list[str]:
-#     from .process_source import DWGTreeProcessor
-#     from src.parsedwg.utils import get_mleader_annotation_text
-
-#     if not source_ref.strip():
-#         return []
-
-#     try:
-#         with tempfile.TemporaryDirectory(prefix="parsedwg-block-annotations-") as temp_dir_name:
-#             temp_dir = Path(temp_dir_name)
-#             drawing_path = _resolve_source_ref_to_drawing_path(source_ref, temp_dir)
-#             doc = DWGTreeProcessor.read_drawing(drawing_path)
-#             layout = _get_block_layout_by_name(doc, block_name)
-#             if layout is None:
-#                 return []
-
-#             seen: set[str] = set()
-#             annotation_texts: list[str] = []
-#             for entity in layout:
-#                 if str(entity.dxftype()) != "MULTILEADER":
-#                     continue
-#                 text = get_mleader_annotation_text(entity)
-#                 if not text or text in seen:
-#                     continue
-#                 seen.add(text)
-#                 annotation_texts.append(text)
-#             return annotation_texts
-#     except (FileNotFoundError, OSError, RuntimeError, ValueError):
-#         return []
 
 
 async def get_full_description(
@@ -418,11 +414,9 @@ async def get_full_description(
     """
 
     async with async_session_factory() as session:
-        block_stmt = (
-            select(Entity)
-            .options(selectinload(Entity.embedding_data))
-            .where(Entity.entity_type == EntityType.BLOCK)
-            .where(Entity.name == block_name)
+        block_stmt = select(Entity).where(
+            Entity.entity_type == EntityType.BLOCK,
+            Entity.name == block_name,
         )
         if file_id is not None:
             block_stmt = block_stmt.where(Entity.file_id == _parse_id(file_id))
@@ -431,7 +425,67 @@ async def get_full_description(
         block = block_result.scalar_one_or_none()
         if block is None:
             return None
-        return block.description if block.description else {}
+
+        layers_result = await session.execute(
+            select(Entity.name, EntityEmbedding.short_interpretation)
+        )
+        layers = [
+            {
+                "name": str(_row_value(row, 0, "name") or ""),
+                "short_interpretation": _row_value(row, 1, "short_interpretation"),
+            }
+            for row in layers_result
+            if str(_row_value(row, 0, "name") or "").strip()
+        ]
+
+        attrib_rows_result = await session.execute(select(Entity.data))
+        attributes: dict[str, object] = {}
+        for row in attrib_rows_result:
+            payload = _row_value(row, 0, "data")
+            if not isinstance(payload, dict):
+                continue
+            attribs = payload.get("attribs")
+            if isinstance(attribs, dict):
+                attributes.update(attribs)
+
+        inserts_result = await session.execute(select(Entity.id, Entity.parent_id, Entity.file_id, Entity.data))
+        inserts = []
+        for row in inserts_result:
+            insert_id = _row_value(row, 0, "id")
+            parent_id = _row_value(row, 1, "parent_id")
+            insert_file_id = _row_value(row, 2, "file_id")
+            data = _row_value(row, 3, "data")
+            inserts.append(
+                {
+                    "id": str(insert_id) if insert_id is not None else "",
+                    "parent_id": str(parent_id) if parent_id is not None else None,
+                    "file_id": str(insert_file_id) if insert_file_id is not None else None,
+                    "data": data if isinstance(data, dict) else {},
+                }
+            )
+
+        multileader_rows_result = await session.execute(select(Entity.description, Entity.data))
+        annotation_texts = _collect_annotation_texts_from_rows(list(multileader_rows_result))
+
+        if not annotation_texts and block.file_id is not None:
+            source_ref_result = await session.execute(select(Entity.data["source_ref"].astext))
+            source_ref_row = source_ref_result.first()
+            source_ref = source_ref_row[0] if source_ref_row else None
+            if isinstance(source_ref, str) and source_ref.strip():
+                annotation_texts = _collect_block_annotation_texts_from_source(block.name, source_ref)
+
+    return {
+        "id": str(block.id),
+        "name": block.name,
+        "description": block.description or "",
+        "short_interpretation": _get_short_interpretation(block),
+        "full_interpretation": _get_full_interpretation(block),
+        "layers": layers,
+        "attributes": attributes,
+        "annotation_texts": annotation_texts,
+        "insert_count": len(inserts),
+        "inserts": inserts,
+    }
 
 
 async def get_full_description_by_id(block_id: str) -> dict[str, object] | None:
