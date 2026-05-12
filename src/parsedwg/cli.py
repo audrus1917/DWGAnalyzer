@@ -128,6 +128,66 @@ def handle_process_docs_command(source_path: Path) -> int:
     return constants.OK
 
 
+def handle_agent_run_command(
+    input_ref: str,
+    profile: str,
+    ai_model: str,
+    ai_base_url: str,
+    ai_api_key: str,
+    workers: int,
+    dry: bool,
+    project_name: str | None,
+) -> int:
+    """Запускает агентный пайплайн и печатает ID завершённой задачи."""
+    from .agent_service import run_agent_job_sync
+
+    logger.debug("Start `agent_run`")
+    try:
+        job_id = run_agent_job_sync(
+            input_ref=input_ref,
+            profile=profile,
+            ai_model=ai_model,
+            ai_base_url=ai_base_url,
+            ai_api_key=ai_api_key,
+            workers=workers,
+            dry=dry,
+            project_name=project_name,
+        )
+    except (LookupError, OSError, RuntimeError, ValueError) as exc:
+        logger.error("Не удалось выполнить agent-run: %s", exc)
+        return constants.ERROR
+
+    print(f"Агентная задача завершена: {job_id}")
+    return constants.OK
+
+
+def handle_agent_status_command(job_id: int) -> int:
+    """Печатает сводку по агентной задаче и её шагам."""
+    from .agent_service import get_agent_job_report
+
+    report = get_agent_job_report(job_id)
+    if report is None:
+        logger.error("Agent job %s не найден.", job_id)
+        return constants.ERROR
+
+    job = report.get("job") if isinstance(report, dict) else None
+    steps = report.get("steps") if isinstance(report, dict) else None
+    if not isinstance(job, dict):
+        logger.error("Некорректный формат отчёта agent-status для job %s.", job_id)
+        return constants.ERROR
+
+    print(f"Agent job: {job.get('id', job_id)}")
+    print(f"Status: {job.get('status', '')}")
+    for step in steps if isinstance(steps, list) else []:
+        if not isinstance(step, dict):
+            continue
+        print(
+            f"{step.get('step_order', '?')}. {step.get('step_kind', '')}: "
+            f"{step.get('status', '')}"
+        )
+    return constants.OK
+
+
 def handle_export_block_command(
     drawing_path: Path,
     block_name: str,
@@ -267,7 +327,7 @@ def handle_interpret_entities_command(
     from .db import list_entities_for_semantic_categorization, save_short_interpretation
     from .langchain_name_tags import (
         build_name_meaning_prompt,
-        call_ollama_name_meaning,
+        get_name_meaning,
     )
 
     logger.debug("AI API key configured: %s", bool(ai_api_key))
@@ -313,7 +373,7 @@ def handle_interpret_entities_command(
                 try:
                     text = await asyncio.wait_for(
                         asyncio.to_thread(
-                            call_ollama_name_meaning,
+                            get_name_meaning,
                             name=entity["name"],
                             chat_url=chat_url,
                             model=ai_model,
@@ -501,7 +561,7 @@ def handle_interpret_blocks_command(
         save_block_description,
         save_block_interpretations,
     )
-    from .langchain_name_tags import call_ollama_name_meaning
+    from .langchain_name_tags import get_name_meaning
 
     logger.debug("AI API key configured: %s", bool(ai_api_key))
 
@@ -531,11 +591,16 @@ def handle_interpret_blocks_command(
         if not blocks:
             return {"rows": [], "failures": []}
         if not dry:
-            print(f"Выбрано блоков: {len(blocks)}")
+            logger.debug(f"Выбрано блоков: {len(blocks)}")
 
         semaphore = asyncio.Semaphore(workers)
 
-        async def _process(block: dict[str, str]) -> dict[str, object]:
+        async def _process_block(block: dict[str, str]) -> dict[str, object]:
+            logger.debug(
+                f"Start processing block_id={block.get('id', '')}"
+                f" block_name={block.get('name', '')}"
+            )
+            
             async with semaphore:
                 block_id = block["id"]
                 block_name = block["name"]
@@ -558,7 +623,7 @@ def handle_interpret_blocks_command(
                         )
                     short_interpretation = await asyncio.wait_for(
                         asyncio.to_thread(
-                            call_ollama_name_meaning,
+                            get_name_meaning,
                             name=block_text_for_llm,
                             chat_url=chat_url,
                             model=ai_model,
@@ -570,7 +635,7 @@ def handle_interpret_blocks_command(
                     # Request the full block description from the LLM as well.
                     full_description = await asyncio.wait_for(
                         asyncio.to_thread(
-                            call_ollama_name_meaning,
+                            get_name_meaning,
                             name=block_text_for_llm,
                             chat_url=chat_url,
                             model=ai_model,
@@ -617,7 +682,7 @@ def handle_interpret_blocks_command(
         failures: list[dict[str, object]] = []
         progress_width = 0
         total = len(blocks)
-        tasks = [asyncio.create_task(_process(block)) for block in blocks]
+        tasks = [asyncio.create_task(_process_block(block)) for block in blocks]
         try:
             for task in asyncio.as_completed(tasks):
                 item = await task
@@ -1365,8 +1430,8 @@ def main(argv: list[str] | None = None) -> int:
                 output_path=Path(args.output) if args.output else None,
             )
 
-        case "export-block-png":
-            return_code = handle_export_block_png_command(
+        case "export-block" | "export-block-png":
+            return_code = handle_export_block_command(
                 drawing_path=Path(args.file_path),
                 block_name=args.block_name,
                 output_path=Path(args.output) if args.output else None,
@@ -1378,6 +1443,21 @@ def main(argv: list[str] | None = None) -> int:
                 Path(args.path),
                 project_name=args.project,
             )
+
+        case "agent-run":
+            return_code = handle_agent_run_command(
+                input_ref=args.input_ref,
+                profile=args.profile,
+                ai_model=args.ai_model,
+                ai_base_url=args.ai_base_url,
+                ai_api_key=args.ai_api_key,
+                workers=args.workers,
+                dry=args.dry,
+                project_name=args.project_name,
+            )
+
+        case "agent-status":
+            return_code = handle_agent_status_command(job_id=args.job_id)
 
         case "interpret-entities":
             return_code = handle_interpret_entities_command(

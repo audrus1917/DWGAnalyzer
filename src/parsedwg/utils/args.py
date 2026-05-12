@@ -68,6 +68,19 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="Разрешение PNG при экспорте (по умолчанию: 300).",
     )
 
+    export_block_png_parser = subparsers.add_parser(
+        "export-block-png",
+        parents=[readfile_common, output_common],
+        help="Экспорт выбранного блока в PNG.",
+    )
+    export_block_png_parser.add_argument("block_name", help="Имя блока для экспорта")
+    export_block_png_parser.add_argument(
+        "--dpi",
+        type=int,
+        default=300,
+        help="Разрешение PNG при экспорте (по умолчанию: 300).",
+    )
+
     process_parser = subparsers.add_parser(
         "process",
         help=(
@@ -87,6 +100,45 @@ def build_args_parser() -> argparse.ArgumentParser:
         required=True,
         help="Название существующего проекта.",
     )
+
+    agent_run_parser = subparsers.add_parser(
+        "agent-run",
+        parents=[ai_common],
+        help="Запустить агентный пайплайн для файла или каталога.",
+    )
+    agent_run_parser.add_argument(
+        "input_ref",
+        help="Путь к файлу или каталогу для агентного запуска.",
+    )
+    agent_run_parser.add_argument(
+        "--profile",
+        choices=["full", "interpret-only"],
+        default="full",
+        help="Профиль агентного запуска (по умолчанию: full).",
+    )
+    agent_run_parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Число параллельных AI-задач (по умолчанию: 1).",
+    )
+    agent_run_parser.add_argument(
+        "--dry",
+        action="store_true",
+        help="Построить и выполнить план без сохранения AI-результатов в БД.",
+    )
+    agent_run_parser.add_argument(
+        "--project",
+        dest="project_name",
+        default=None,
+        help="Имя проекта для привязки результатов agent-run.",
+    )
+
+    agent_status_parser = subparsers.add_parser(
+        "agent-status",
+        help="Показать состояние агентной задачи и её шагов.",
+    )
+    agent_status_parser.add_argument("job_id", type=int, help="ID агентной задачи.")
 
     interpret_entities_parser = subparsers.add_parser(
         "interpret-entities",

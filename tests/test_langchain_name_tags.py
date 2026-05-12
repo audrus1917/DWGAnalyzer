@@ -224,7 +224,7 @@ def test_call_ollama_name_meaning_sends_prompt_and_returns_text() -> None:
     import json
     from unittest.mock import MagicMock, patch
 
-    from parsedwg.langchain_name_tags import call_ollama_name_meaning
+    from parsedwg.langchain_name_tags import get_name_meaning
 
     body = json.dumps({
         "message": {"role": "assistant", "content": "1. Насос\n2. Этаж: 4"}
@@ -236,7 +236,7 @@ def test_call_ollama_name_meaning_sends_prompt_and_returns_text() -> None:
     mock_resp.__exit__ = MagicMock(return_value=False)
 
     with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
-        result = call_ollama_name_meaning(
+        result = get_name_meaning(
             name="Насос 4 этаж",
             chat_url="http://localhost:11434/api/chat",
             model="llama3.1:8b",
@@ -258,14 +258,14 @@ def test_call_ollama_name_meaning_raises_on_connection_error() -> None:
     import urllib.error
     from unittest.mock import patch
 
-    from parsedwg.langchain_name_tags import call_ollama_name_meaning
+    from parsedwg.langchain_name_tags import get_name_meaning
 
     with patch(
         "urllib.request.urlopen",
         side_effect=urllib.error.URLError("connection refused"),
     ):
         try:
-            call_ollama_name_meaning(
+            get_name_meaning(
                 name="Насос",
                 chat_url="http://localhost:11434/api/chat",
                 model="llama3.1:8b",

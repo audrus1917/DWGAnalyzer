@@ -188,7 +188,7 @@ async def interpret_blocks(
         save_block_description,
         save_block_interpretations,
     )
-    from .langchain_name_tags import call_ollama_name_meaning
+    from .langchain_name_tags import get_name_meaning
 
     logger.debug("AI API key configured: %s", bool(ai_api_key))
 
@@ -241,7 +241,7 @@ async def interpret_blocks(
                     )
                 short_interpretation = await asyncio.wait_for(
                     asyncio.to_thread(
-                        call_ollama_name_meaning,
+                        get_name_meaning,
                         name=block_text_for_llm,
                         chat_url=chat_url,
                         model=ai_model,
@@ -252,7 +252,7 @@ async def interpret_blocks(
                 )
                 full_description = await asyncio.wait_for(
                     asyncio.to_thread(
-                        call_ollama_name_meaning,
+                        get_name_meaning,
                         name=block_text_for_llm,
                         chat_url=chat_url,
                         model=ai_model,

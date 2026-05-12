@@ -739,7 +739,7 @@ def build_name_meaning_prompt(
     )
 
 
-def call_ollama_name_meaning(
+def get_name_meaning(
     name: str,
     chat_url: str,
     model: str,

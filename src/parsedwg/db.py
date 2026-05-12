@@ -2,6 +2,7 @@
 
 from typing import Any, cast
 
+import logging
 import tempfile
 
 from collections.abc import AsyncGenerator, Sequence
@@ -12,8 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import Session, aliased, selectinload, sessionmaker
 
 from .settings import settings
-from .orm import Category, Entity, EntityEmbedding, EntityToEntity, EntityType, Project
+from .orm import Category, Entity, EntityEmbedding, EntityType, Project
 
+
+logger = logging.getLogger(__name__)
 
 def _to_sync_database_url(database_url: str) -> str:
     return database_url.replace("+asyncpg", "+psycopg")
@@ -414,21 +417,39 @@ async def get_full_description(
     """
 
     async with async_session_factory() as session:
-        block_stmt = select(Entity).where(
-            Entity.entity_type == EntityType.BLOCK,
-            Entity.name == block_name,
+        block_stmt = (
+            select(Entity)
+            .options(selectinload(Entity.embedding_data))
+            .where(
+                Entity.entity_type == EntityType.BLOCK,
+                Entity.name == block_name,
+            )
         )
         if file_id is not None:
             block_stmt = block_stmt.where(Entity.file_id == _parse_id(file_id))
         block_stmt = block_stmt.limit(1)
+        logger.debug(f"Запрос блока: {block_stmt}")
+
         block_result = await session.execute(block_stmt)
         block = block_result.scalar_one_or_none()
         if block is None:
             return None
 
         layers_result = await session.execute(
-            select(Entity.name, EntityEmbedding.short_interpretation)
+            select(
+                Entity.name, 
+                EntityEmbedding.short_interpretation
+            ).select_from(
+                Entity
+            ).join(
+                EntityEmbedding, EntityEmbedding.entity_id == Entity.id
+            ).where(
+                Entity.entity_type == EntityType.LAYER
+            ).where(
+                Entity.name == block_name
+            )
         )
+
         layers = [
             {
                 "name": str(_row_value(row, 0, "name") or ""),
@@ -473,19 +494,18 @@ async def get_full_description(
             source_ref = source_ref_row[0] if source_ref_row else None
             if isinstance(source_ref, str) and source_ref.strip():
                 annotation_texts = _collect_block_annotation_texts_from_source(block.name, source_ref)
-
-    return {
-        "id": str(block.id),
-        "name": block.name,
-        "description": block.description or "",
-        "short_interpretation": _get_short_interpretation(block),
-        "full_interpretation": _get_full_interpretation(block),
-        "layers": layers,
-        "attributes": attributes,
-        "annotation_texts": annotation_texts,
-        "insert_count": len(inserts),
-        "inserts": inserts,
-    }
+        return {
+            "id": str(block.id),
+            "name": block.name,
+            "description": block.description or "",
+            "short_interpretation": _get_short_interpretation(block),
+            "full_interpretation": _get_full_interpretation(block),
+            "layers": layers,
+            "attributes": attributes,
+            "annotation_texts": annotation_texts,
+            "insert_count": len(inserts),
+            "inserts": inserts,
+        }
 
 
 async def get_full_description_by_id(block_id: str) -> dict[str, object] | None:
