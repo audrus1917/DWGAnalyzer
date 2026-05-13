@@ -1,4 +1,4 @@
-"""Воркеры шагов агентного пайплайна."""
+"""Workers for agent pipeline steps."""
 
 from __future__ import annotations
 
@@ -29,13 +29,13 @@ async def run_interpret_blocks_step(
 
         return_code = handle_process_command(Path(file_ref), project_name=project_name)
         if return_code != constants.OK:
-            raise RuntimeError(f"Не удалось предварительно обработать источник: {file_ref}")
+            raise RuntimeError(f"Failed to pre-process source: {file_ref}")
         file_id = await get_file_id_by_source(file_ref)
 
     if not file_id:
         raise LookupError(
-            "Не найден file_id для интерпретации блоков. Сначала загрузите файл в БД "
-            "или передайте --project для предварительной обработки."
+            "file_id for block interpretation was not found. Load the file into the database "
+            "first or pass --project for pre-processing."
         )
 
     result = await interpret_blocks(
@@ -52,9 +52,9 @@ async def run_interpret_blocks_step(
     rows = result.get("rows", [])
     failures = result.get("failures", [])
     if not isinstance(rows, list) or not isinstance(failures, list):
-        raise RuntimeError("Шаг interpret_blocks вернул некорректный результат.")
+        raise RuntimeError("interpret_blocks returned an invalid result.")
     if not rows and failures:
-        raise RuntimeError("Шаг interpret_blocks завершился с ошибкой.")
+        raise RuntimeError("interpret_blocks failed.")
 
     return {
         "processed": len(rows) + len(failures),
@@ -82,7 +82,7 @@ async def run_categorize_entities_step(
     file_id = file_ref if not by_path else await get_file_id_by_source(file_ref)
     if not file_id:
         raise LookupError(
-            "Не найден file_id для категоризации. Сначала загрузите файл в БД."
+            "file_id for categorization was not found. Load the file into the database first."
         )
 
     rows = await categorize_entities(

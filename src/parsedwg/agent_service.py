@@ -1,4 +1,4 @@
-"""Сервисный слой для агентного пайплайна."""
+"""Service layer for the agent pipeline."""
 
 from __future__ import annotations
 

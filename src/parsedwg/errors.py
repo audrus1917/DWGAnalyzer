@@ -1,12 +1,12 @@
-"""Классы исключений."""
+"""Exception classes."""
 
 class ObjectNotFound(Exception):
-    """Исключение, выбрасываемое при отсутствии объекта в БД."""
+    """Raised when an object is missing in the database."""
 
 
 class FileNotFound(Exception):
-    """Исключение, выбрасываемое при отсутствии файла."""
+    """Raised when a file is missing."""
 
 class FolderNotFound(Exception):
-    """Исключение, выбрасываемое при отсутствии папки."""
+    """Raised when a folder is missing."""
 

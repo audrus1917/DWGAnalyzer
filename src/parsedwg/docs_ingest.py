@@ -52,24 +52,24 @@ def _compute_md5_hex(path: Path) -> str:
 
 
 def _discover_documents(source_path: Path) -> list[Path]:
-    """Находит поддерживаемые документы по пути.
+    """Find supported documents under a path.
 
     Args:
-        source_path: Путь к файлу или каталогу.
+        source_path: File or directory path.
 
     Returns:
-        Список документов поддерживаемых форматов.
+        List of supported documents.
 
     Raises:
-        FileNotFoundError: Если source_path не существует.
-        ValueError: Если передан неподдерживаемый файл или в каталоге нет подходящих документов.
+        FileNotFoundError: If source_path does not exist.
+        ValueError: If an unsupported file is passed or the directory contains no matching documents.
     """
     if not source_path.exists():
-        raise FileNotFoundError(f"Путь {source_path} не найден.")
+        raise FileNotFoundError(f"Path {source_path} was not found.")
 
     if source_path.is_file():
         if source_path.suffix.lower() not in SUPPORTED_DOC_SUFFIXES:
-            raise ValueError("Поддерживаются только PDF, DOCX, XLSX и CSV файлы.")
+            raise ValueError("Only PDF, DOCX, XLSX, and CSV files are supported.")
         return [source_path]
 
     files = sorted(
@@ -78,7 +78,7 @@ def _discover_documents(source_path: Path) -> list[Path]:
         if item.is_file() and item.suffix.lower() in SUPPORTED_DOC_SUFFIXES
     )
     if not files:
-        raise ValueError(f"В каталоге {source_path} не найдено PDF/DOCX/XLSX/CSV файлов.")
+        raise ValueError(f"No PDF/DOCX/XLSX/CSV files were found in directory {source_path}.")
     return files
 
 
@@ -233,16 +233,16 @@ def _extract_glossary_terms(path: Path) -> list[GlossaryTerm]:
 
 
 def _extract_text(path: Path) -> str:
-    """Извлекает текст из документа поддерживаемого формата.
+    """Extract text from a supported document.
 
     Args:
-        path: Путь к документу.
+        path: Path to the document.
 
     Returns:
-        Извлечённый текст документа.
+        Extracted document text.
 
     Raises:
-        ValueError: Если тип документа не поддерживается.
+        ValueError: If the document type is unsupported.
     """
     suffix = path.suffix.lower()
     if suffix == ".docx":
@@ -253,7 +253,7 @@ def _extract_text(path: Path) -> str:
         return _extract_pdf_text(path)
     if suffix == ".csv":
         return _extract_csv_text(path)
-    raise ValueError(f"Неподдерживаемый тип документа: {path.suffix}")
+    raise ValueError(f"Unsupported document type: {path.suffix}")
 
 
 def _build_entity_text(text_value: str | None):
@@ -270,14 +270,14 @@ def _build_entity_embedding(text_value: str | None) -> EntityEmbedding | None:
 
 
 async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int:
-    """Сохраняет документы и извлечённый текст в базу данных.
+    """Save documents and extracted text to the database.
 
     Args:
-        source_path: Корневой путь импорта.
-        documents: Список документов для сохранения.
+        source_path: Root import path.
+        documents: Documents to persist.
 
     Returns:
-        Количество созданных сущностей.
+        Number of created entities.
     """
     created = 0
 
@@ -286,11 +286,11 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
 
         root = Entity(
             name=source_path.name if source_path.name else str(source_path),
-            description="Корневая папка импортированных документов PDF/DOCX/XLSX/CSV",
+            description="Root folder for imported PDF/DOCX/XLSX/CSV documents",
             entity_type=EntityType.folder,
             data={"path": str(source_path)},
             embedding_data=_build_entity_embedding(
-                "Корневая папка импортированных документов PDF/DOCX/XLSX/CSV"
+                "Root folder for imported PDF/DOCX/XLSX/CSV documents"
             ),
         )
         session.add(root)
@@ -346,7 +346,7 @@ async def _save_documents_to_db(source_path: Path, documents: list[Path]) -> int
 
 
 def run_documents_ingest(source_path: Path) -> dict[str, object]:
-    """Рекурсивно импортирует PDF/DOCX/XLSX/CSV-документы в таблицу сущностей."""
+    """Recursively import PDF/DOCX/XLSX/CSV documents into the entity table."""
 
     source = source_path.resolve()
     documents = _discover_documents(source)

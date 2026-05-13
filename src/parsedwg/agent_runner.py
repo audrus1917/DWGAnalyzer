@@ -1,4 +1,4 @@
-"""Оркестратор агентного пайплайна."""
+"""Orchestrator for the agent pipeline."""
 
 from __future__ import annotations
 
@@ -222,7 +222,7 @@ class AgentRunner:
             raise ValueError(f"Invalid step id: {raw_step_id}")
         step_id = int(raw_step_id)
         step_kind = str(step.get("step_kind") or "")
-        reason = str(state.get("planned_reason") or "Шаг пропущен planner-ом.")
+        reason = str(state.get("planned_reason") or "Step skipped by the planner.")
         result: dict[str, object] = {
             "status": "skipped",
             "reason": reason,
@@ -285,8 +285,8 @@ class AgentRunner:
             graph_module = importlib.import_module("langgraph.graph")
         except ImportError as exc:
             raise RuntimeError(
-                "Для agent-run через LangGraph установите optional AI dependencies: parsedwg[ai] "
-                "или пакет langgraph."
+                "To use agent-run via LangGraph, install the optional AI dependencies: "
+                "parsedwg[ai] or the langgraph package."
             ) from exc
 
         return graph_module.START, graph_module.END, graph_module.StateGraph
@@ -313,7 +313,7 @@ class AgentRunner:
             if not drawing_path.is_file():
                 return {
                     "status": "skipped",
-                    "reason": "verify_extraction поддерживается только для одного файла.",
+                    "reason": "verify_extraction is supported only for a single file.",
                 }
             return await run_verify_extraction_step(
                 drawing_path=drawing_path,

@@ -1,6 +1,6 @@
-"""Извлекатель тегов для имён и текстов на базе LangChain.
+"""LangChain-based tag extractor for names and texts.
 
-Модуль импортируется только при явном включении AI-режима.
+This module is imported only when AI mode is explicitly enabled.
 """
 
 from __future__ import annotations

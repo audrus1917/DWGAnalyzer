@@ -1,4 +1,4 @@
-"""Вспомогательные утилиты."""
+"""Helper utilities."""
 
 import sys
 import json
@@ -20,15 +20,15 @@ logger = logging.getLogger(__name__)
 
 
 def extract_from_zip(zip_path: Path, member: str, temp_dir: Path) -> Path:
-    """Извлекает файл из ZIP-архива во временный каталог и возвращает его путь.
+    """Extract a file from a ZIP archive into a temporary directory.
 
     Args:
-        zip_path: Путь к ZIP-архиву.
-        member: Имя файла внутри архива.
-        temp_dir: Временный каталог для распаковки.
+        zip_path: Path to the ZIP archive.
+        member: File name inside the archive.
+        temp_dir: Temporary directory used for extraction.
 
     Returns:
-        Путь к распакованному временному файлу.
+        Path to the extracted temporary file.
     """
 
     target_path = temp_dir / Path(member).name
@@ -39,13 +39,13 @@ def extract_from_zip(zip_path: Path, member: str, temp_dir: Path) -> Path:
 
 
 def read_drawing(path: Path):
-    """Читает DWG/DXF-файл через ezdxf или ODAFC и возвращает Drawing.
+    """Read a DWG/DXF file via ezdxf or ODAFC and return a Drawing.
 
     Args:
-        path: Путь к файлу чертежа.
+        path: Path to the drawing file.
 
     Returns:
-        Объект Drawing, загруженный из файла.
+        Drawing object loaded from the file.
     """
 
     suffix = path.suffix.lower()
@@ -56,9 +56,9 @@ def read_drawing(path: Path):
 
 
 def get_workers_number(requested_workers: int) -> int:
-    """Возвращает оптимальное число рабочих процессов для конвертации.
+    """Return the optimal number of worker processes for conversion.
 
-    Значение зависит от ресурсов машины и запрошенного числа workers.
+    The value depends on machine resources and the requested worker count.
     """
 
     logical_cpus = max(1, mp.cpu_count())
@@ -67,7 +67,7 @@ def get_workers_number(requested_workers: int) -> int:
 
     if requested_workers <= 0:
         logger.info(
-            "Автовыбор workers: logical_cpus=%s, conversion_workers=%s",
+            "Auto-selected workers: logical_cpus=%s, conversion_workers=%s",
             logical_cpus,
             auto_workers,
         )
@@ -75,7 +75,7 @@ def get_workers_number(requested_workers: int) -> int:
 
     if requested_workers > max_workers:
         logger.warning(
-            "Запрошено workers=%s, ограничено до %s (logical_cpus=%s).",
+            "Requested workers=%s, capped at %s (logical_cpus=%s).",
             requested_workers,
             max_workers,
             logical_cpus,
@@ -93,10 +93,10 @@ def safe_float(value: Any) -> float | None:
 
 
 def as_table(rows: list[ResultRow]) -> str:
-    """Форматирует строки результата в простую ASCII-таблицу."""
+    """Format result rows as a simple ASCII table."""
 
     if not rows:
-        return "Нет данных."
+        return "No data."
 
     columns = list(rows[0].keys())
     prepared_rows = [[str(row.get(column, "")) for column in columns] for row in rows]
@@ -115,13 +115,13 @@ def as_table(rows: list[ResultRow]) -> str:
 
 
 def print_as_table(rows: list[ResultRow]) -> None:
-    """Печатает строки результата в виде таблицы."""
+    """Print result rows as a table."""
 
     print(as_table(rows))
 
 
 def _write_progress_line(message: str, previous_width: int = 0) -> int:
-    """Обновляет одну строку прогресса в stdout."""
+    """Update a single progress line in stdout."""
 
     width = max(previous_width, len(message))
     sys.stdout.write("\r" + message.ljust(width))
@@ -130,7 +130,7 @@ def _write_progress_line(message: str, previous_width: int = 0) -> int:
 
 
 def _finish_progress_line(width: int) -> None:
-    """Завершает строку прогресса переводом строки."""
+    """Terminate the progress line with a newline."""
 
     if width <= 0:
         return
@@ -139,12 +139,12 @@ def _finish_progress_line(width: int) -> None:
 
 
 def _format_duration_seconds(duration_seconds: float) -> str:
-    """Форматирует длительность обработки в секундах."""
+    """Format processing duration in seconds."""
 
-    return f"{duration_seconds:.2f} c"
+    return f"{duration_seconds:.2f} s"
 
 def _save_rows_to_json(output_path: Path, rows: list[ResultRow]) -> None:
-    """Сохраняет строки результата в JSON-файл."""
+    """Save result rows to a JSON file."""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
@@ -154,7 +154,7 @@ def _save_rows_to_json(output_path: Path, rows: list[ResultRow]) -> None:
 
 
 def _save_payload_to_json(output_path: Path, payload: object) -> None:
-    """Сохраняет любой JSON-сериализуемый payload в файл."""
+    """Save any JSON-serializable payload to a file."""
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
@@ -164,13 +164,13 @@ def _save_payload_to_json(output_path: Path, payload: object) -> None:
 
 
 def file_md5(path: Path) -> str:
-    """Возвращает MD5-хэш файла для идентификации содержимого.
+    """Return the file MD5 hash used to identify content.
 
     Args:
-        path: Путь к файлу.
+        path: File path.
 
     Returns:
-        Hex-строку с MD5-хэшем файла.
+        Hex string with the file MD5 hash.
     """
 
     digest = hashlib.md5(usedforsecurity=False)
@@ -181,7 +181,7 @@ def file_md5(path: Path) -> str:
 
 
 def get_chat_url(base_url: str) -> str:
-    """Строит URL Ollama /api/chat из OpenAI-совместимого base URL."""
+    """Build the Ollama /api/chat URL from an OpenAI-compatible base URL."""
     stripped = base_url.rstrip("/")
     if stripped.endswith("/v1"):
         stripped = stripped[:-3]

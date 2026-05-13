@@ -1,4 +1,4 @@
-"""Сервисный слой для AI-операций над сущностями и блоками."""
+"""Service layer for AI operations on entities and blocks."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import time
+from typing import Any, cast
 
 from .langchain_name_tags import LangChainAgentConfig, LangChainNameTagsExtractor
 from .settings import settings
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def derive_ollama_chat_url(base_url: str) -> str:
-    """Строит URL Ollama /api/chat из OpenAI-совместимого base URL."""
+    """Build the Ollama /api/chat URL from an OpenAI-compatible base URL."""
 
     stripped = base_url.rstrip("/")
     if stripped.endswith("/v1"):
@@ -33,16 +34,16 @@ async def categorize_entities(
     workers: int,
     dry: bool,
     file_id: str | None = None,
-    extra_context: str = "строительство, чертеж",
+    extra_context: str = "construction, drawing",
 ) -> list[dict[str, object]]:
-    """Извлекает семантические категории для сущностей и связывает их в БД."""
+    """Extract semantic categories for entities and link them in the database."""
 
     from .db import assign_semantic_category, list_entities_for_semantic_categorization
 
     if bool(entity_ids) == bool(entity_type):
-        raise ValueError("Нужно указать либо entity_ids, либо entity_type.")
+        raise ValueError("Specify either entity_ids or entity_type.")
     if workers <= 0:
-        raise ValueError("--workers должен быть больше 0.")
+        raise ValueError("--workers must be greater than 0.")
 
     def _build_dry_row(entity: dict[str, str], meanings: list[dict[str, object]]) -> dict[str, object]:
         normalized_meanings = [
@@ -65,7 +66,8 @@ async def categorize_entities(
             "meanings": normalized_meanings,
         }
 
-    selected_entities = await list_entities_for_semantic_categorization(
+    list_entities = cast(Any, list_entities_for_semantic_categorization)
+    selected_entities = await list_entities(
         entity_ids=entity_ids,
         entity_type=entity_type,
         file_id=file_id,
@@ -73,7 +75,7 @@ async def categorize_entities(
     if not selected_entities:
         return []
     if not dry:
-        print(f"Выбрано сущностей: {len(selected_entities)}")
+        print(f"Selected entities: {len(selected_entities)}")
 
     extractor = LangChainNameTagsExtractor.from_config(
         LangChainAgentConfig(
@@ -139,7 +141,7 @@ async def categorize_entities(
                 if dry:
                     entity_payload = item.get("entity")
                     if not isinstance(entity_payload, dict):
-                        raise ValueError("Некорректная сущность в dry-режиме категоризации.")
+                        raise ValueError("Invalid entity payload in dry-run categorization mode.")
                     rows.append(_build_dry_row(entity_payload, normalized_meanings))
                     continue
 
@@ -149,7 +151,7 @@ async def categorize_entities(
                 )
                 rows.append(saved_row)
                 progress_width = _write_progress_line(
-                    "Сохранено {current}/{total}: {entity_id} -> {category_name} [{status}]".format(
+                    "Saved {current}/{total}: {entity_id} -> {category_name} [{status}]".format(
                         current=len(rows),
                         total=total,
                         entity_id=saved_row["entity_id"],
@@ -179,7 +181,7 @@ async def interpret_blocks(
     workers: int,
     dry: bool,
 ) -> dict[str, object]:
-    """Интерпретирует блоки и сохраняет краткие и полные интерпретации."""
+    """Interpret blocks and save short and full interpretations."""
 
     from .db import (
         get_file_id_by_source,
@@ -193,15 +195,15 @@ async def interpret_blocks(
     logger.debug("AI API key configured: %s", bool(ai_api_key))
 
     if bool(block_ids) == bool(file_ref):
-        raise ValueError("Нужно указать либо block_ids, либо file_ref.")
+        raise ValueError("Specify either block_ids or file_ref.")
     if workers <= 0:
-        raise ValueError("--workers должен быть больше 0.")
+        raise ValueError("--workers must be greater than 0.")
 
     resolved_file_id = file_ref
     if file_ref is not None and by_path:
         resolved_file_id = await get_file_id_by_source(file_ref)
         if not resolved_file_id:
-            raise LookupError("Файл не найден в БД.")
+            raise LookupError("File was not found in the database.")
 
     chat_url = derive_ollama_chat_url(ai_base_url)
     normalized_context = " ".join(extra_context.split())
@@ -214,7 +216,7 @@ async def interpret_blocks(
     if not blocks:
         return {"rows": [], "failures": []}
     if not dry:
-        print(f"Выбрано блоков: {len(blocks)}")
+        print(f"Selected blocks: {len(blocks)}")
 
     semaphore = asyncio.Semaphore(workers)
 
@@ -258,8 +260,8 @@ async def interpret_blocks(
                         model=ai_model,
                         extra_context=(
                             normalized_context
-                            + "\nДай максимально подробное описание назначения и структуры "
-                            + "этого блока, с деталями для проектировщика."
+                            + "\nProvide the most detailed possible description of this "
+                            + "block's purpose and structure, including engineer-facing details."
                         ),
                         timeout_seconds=llm_timeout_seconds,
                     ),
@@ -275,7 +277,7 @@ async def interpret_blocks(
                     "block_name": block_name,
                     "duration_seconds": duration_seconds,
                     "error": (
-                        "Превышен таймаут ожидания ответа LLM для блока "
+                        "Timed out while waiting for the LLM response for block "
                         f"{block_id} ({block_name})."
                     ),
                 }
@@ -327,7 +329,7 @@ async def interpret_blocks(
                     }
                 )
                 logger.error(
-                    "Ошибка интерпретации блока %s (%s) за %s: %s",
+                    "Block interpretation error for %s (%s) after %s: %s",
                     block_id or "-",
                     block_name or "-",
                     duration_label,
@@ -375,19 +377,19 @@ async def interpret_blocks(
                         }
                     )
                     logger.error(
-                        "Ошибка сохранения интерпретации блока %s (%s): %s",
+                        "Failed to save interpretation for block %s (%s): %s",
                         block_id or "-",
                         block_name or "-",
                         exc,
                     )
 
             if not dry:
-                print(f"\nБлок {block_name or block_id or '-'} обработан за {duration_label}")
+                print(f"\nBlock {block_name or block_id or '-'} processed in {duration_label}")
 
             processed = len(rows) + len(failures)
             if not dry:
                 progress_width = _write_progress_line(
-                    "Обработано {processed}/{total}: успешно {success}, ошибок {errors}".format(
+                    "Processed {processed}/{total}: success {success}, errors {errors}".format(
                         processed=processed,
                         total=total,
                         success=len(rows),

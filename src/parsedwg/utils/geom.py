@@ -1,16 +1,16 @@
-"""Утилиты для работы с MULTILEADER в DXF файлах."""
+"""Utilities for working with MULTILEADER in DXF files."""
 
 import re
 
 
 def get_mleader_target_point(mleader):
-    """Извлекает точку, на которую указывает первая стрелка MULTILEADER.
+    """Extract the point targeted by the first MULTILEADER arrow.
 
     Args:
-        mleader: DXF-сущность MULTILEADER.
+        mleader: MULTILEADER DXF entity.
 
     Returns:
-        Координаты целевой точки или None, если их не удалось получить.
+        Coordinates of the target point, or None if unavailable.
     """
     try:
         # MLeader may have multiple leaders; use the first one.
@@ -24,7 +24,7 @@ def get_mleader_target_point(mleader):
 
 
 def get_mleader_annotation_text(mleader) -> str:
-    """Возвращает текст аннотации MULTILEADER, если он присутствует."""
+    """Return MULTILEADER annotation text when present."""
     try:
         context = mleader.context
         mtext = getattr(context, "mtext", None)
@@ -52,11 +52,11 @@ def find_closest_entity(
     search_types=('LINE', 'CIRCLE', 'LWPOLYLINE', 'POLYLINE', 'INSERT', 'TEXT', 'MTEXT'),
 ):
     """
-    Ищет ближайший объект нужных типов к заданной точке.
+    Find the closest entity of the requested types to a target point.
 
     .. code-block:: python
 
-        # Пример использования:
+        # Example usage:
         doc = ezdxf.readfile("your_file.dxf")
         msp = doc.modelspace()
 
@@ -64,16 +64,16 @@ def find_closest_entity(
             tip = get_mleader_target_point(ml)
             target, distance = find_closest_entity(tip, msp)
 
-            if target and distance < 1.0:  # Порог допуска.
+            if target and distance < 1.0:  # Tolerance threshold.
                 print(f"Leader '{ml.handle}' points to {target.dxftype()} ({target.handle})")
 
     Args:
-        target_point: Точка, относительно которой ищется ближайшая сущность.
-        msp: Modelspace или другой объект с методом query.
-        search_types: Набор DXF-типов для поиска.
+        target_point: Point used as the search origin.
+        msp: Modelspace or another object exposing query.
+        search_types: DXF types to search for.
 
     Returns:
-        Кортеж из ближайшей сущности и расстояния до неё, либо None если точка не задана.
+        Tuple of the closest entity and the distance to it, or None if no point is provided.
     """
 
     if not target_point:
@@ -103,15 +103,15 @@ def find_closest_entity_in_entities(
     entities,
     search_types=('LINE', 'CIRCLE', 'LWPOLYLINE', 'POLYLINE', 'INSERT', 'TEXT', 'MTEXT'),
 ):
-    """Ищет ближайшую сущность в уже подготовленном наборе DXF-сущностей.
+    """Find the closest entity in an already prepared DXF entity set.
 
     Args:
-        target_point: Точка, относительно которой ищется ближайшая сущность.
-        entities: Подготовленный набор DXF-сущностей.
-        search_types: Набор DXF-типов для поиска.
+        target_point: Point used as the search origin.
+        entities: Prepared DXF entity collection.
+        search_types: DXF types to search for.
 
     Returns:
-        Кортеж из ближайшей сущности и расстояния до неё.
+        Tuple of the closest entity and the distance to it.
     """
 
     if not target_point:

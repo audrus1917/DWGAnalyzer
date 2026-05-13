@@ -1,4 +1,4 @@
-"""Операции БД для агентного пайплайна."""
+"""Database operations for the agent pipeline."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Обработчик для команды `process`."""
+"""Handler for the `process` command."""
 
 import logging
 
@@ -13,25 +13,28 @@ logger = logging.getLogger(__name__)
 
 def handle_process_command(
     source_path: Path,
-    project_name: str
+    project_name: str | None,
+    dry: bool = False,
+    detail_level: str = "high",
 ) -> int:
-    """Сканирует DWG/DXF, сохраняет дерево сущностей в БД и привязывает его к проекту."""
+    """Scan DWG/DXF input, store the entity tree, and link it to a project."""
 
     try:
         summary = process_source(
             source_path,
             project_name=project_name,
+            dry=dry,
+            detail_level=detail_level,
         )
     except ValueError as e:
-        logger.exception("Ошибка при обработке каталога / файла: %s", e)
+        logger.exception("Failed to process directory or file: %s", e)
         return constants.ERROR
 
     except RuntimeError as e:
-        logger.error("Ошибка AI-режима: %s", e)
+        logger.error("AI mode error: %s", e)
         return constants.ERROR
-    print(f"Найдено файлов: {summary['file_count']}")
-    # print(f"Обработано файлов: {summary['processed_count']}")
-    print(f"Режим обработки: {summary['mode']}")
-    print(f"Создано сущностей в БД: {summary['created_entities']}")
+    print(f"Files found: {summary['file_count']}")
+    print(f"Processing mode: {summary['mode']}")
+    print(f"Entities created in DB: {summary['created_entities']}")
     return constants.OK
 

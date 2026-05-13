@@ -1,4 +1,4 @@
-"""Утилиты для просмотра DWG/DXF-файлов и связанных операций."""
+"""Utilities for inspecting DWG/DXF files and related operations."""
 
 from __future__ import annotations
 
@@ -28,33 +28,33 @@ type ExplorerRow = dict[str, object]
 
 
 class DXFExplorer:
-    """Просматривает DWG/DXF-файлы и выполняет связанные операции."""
+    """Inspect DWG/DXF files and perform related operations."""
 
     def __init__(self, file_path: Path | str):
-        """Инициализирует обозреватель файла DWG/DXF.
+        """Initialize the DWG/DXF file explorer.
 
         Raises:
-            FileNotFoundError: Если file_path не указывает на существующий файл.
+            FileNotFoundError: If file_path does not point to an existing file.
         """
         self.file_path = Path(file_path)
         if not self.file_path.is_file():
-            logger.error("Файл %s не найден.", self.file_path)
-            raise FileNotFoundError(f"Файл {self.file_path} не найден.")
+            logger.error("File %s was not found.", self.file_path)
+            raise FileNotFoundError(f"File {self.file_path} was not found.")
 
         size_mb = self.file_path.stat().st_size / (1024 * 1024)
-        logger.debug("Обрабатываемый файл: %s", self.file_path)
-        logger.debug("Размер файла: %.2f МБ", size_mb)
+        logger.debug("Processing file: %s", self.file_path)
+        logger.debug("File size: %.2f MB", size_mb)
 
     def read_drawing(self) -> Drawing:
-        """Читает DWG/DXF-файл и возвращает объект документа ezdxf.
+        """Read a DWG/DXF file and return the ezdxf Drawing object.
 
         Returns:
-            Загруженный объект Drawing.
+            Loaded Drawing object.
         """
 
         if self.file_path.suffix.lower() == ".dwg":
             logger.debug(
-                "Файл %s имеет формат DWG, сначала конвертируем его в DXF.",
+                "File %s is in DWG format; converting it to DXF first.",
                 self.file_path,
             )
             return read_odafc(self.file_path, "ACAD2018")
@@ -63,13 +63,13 @@ class DXFExplorer:
 
     @staticmethod
     def format_point(point: object | None) -> str:
-        """Возвращает отформатированное строковое представление координат точки.
+        """Return a formatted string representation of point coordinates.
 
         Args:
-            point: Объект точки или tuple-like значение координат.
+            point: Point object or tuple-like coordinate value.
 
         Returns:
-            Строковое представление координат или исходного значения.
+            String representation of coordinates or the original value.
         """
         if point is None:
             return "n/a"
@@ -93,9 +93,9 @@ class DXFExplorer:
 
     @staticmethod
     def is_point(value: object) -> bool:
-        """Возвращает True, если значение похоже на точку с координатами.
+        """Return True if the value looks like a coordinate point.
 
-        Поддерживает объекты с атрибутами x/y и tuple-like контейнеры координат.
+        Supports objects with x/y attributes and tuple-like coordinate containers.
         """
         if hasattr(value, "x") and hasattr(value, "y"):
             return True
@@ -112,13 +112,13 @@ class DXFExplorer:
 
     @staticmethod
     def get_text_content(entity) -> str:
-        """Возвращает содержимое текстового атрибута сущности.
+        """Return the content of an entity text attribute.
 
         Args:
-            entity: DXF-сущность.
+            entity: DXF entity.
 
         Returns:
-            Текстовое содержимое сущности или пустую строку.
+            Text content of the entity or an empty string.
         """
 
         entity_type = entity.dxftype()
@@ -139,15 +139,15 @@ class DXFExplorer:
         entity,
         seen_blocks: set[str] | None = None,
     ) -> set[str]:
-        """Собирает все слои, затронутые сущностью, включая вложенные блоки.
+        """Collect all layers touched by an entity, including nested blocks.
 
         Args:
-            doc: Загруженный чертёж ezdxf.
-            entity: DXF-сущность.
-            seen_blocks: Уже посещённые блоки для защиты от циклов.
+            doc: Loaded ezdxf drawing.
+            entity: DXF entity.
+            seen_blocks: Already visited blocks used to protect against cycles.
 
         Returns:
-            Множество имён слоёв.
+            Set of layer names.
         """
         layers: set[str] = set()
         layer_name = getattr(entity.dxf, "layer", "")
@@ -175,14 +175,14 @@ class DXFExplorer:
 
     @classmethod
     def _get_layout_layers(cls, doc, layout) -> str:
-        """Возвращает список всех слоёв layout через запятую.
+        """Return the comma-separated list of all layout layers.
 
         Args:
-            doc: Загруженный чертёж ezdxf.
-            layout: Layout, для которого нужно собрать слои.
+            doc: Loaded ezdxf drawing.
+            layout: Layout for which layers should be collected.
 
         Returns:
-            Строку со слоями через запятую или "-".
+            Comma-separated layer string or "-".
         """
         layers: set[str] = set()
         for entity in layout:
@@ -191,13 +191,13 @@ class DXFExplorer:
 
     @classmethod
     def _get_entity_params(cls, entity) -> dict[str, str]:
-        """Возвращает словарь с параметрами сущности.
+        """Return a dictionary with entity parameters.
 
         Args:
-            entity: DXF-сущность.
+            entity: DXF entity.
 
         Returns:
-            Нормализованный словарь параметров сущности.
+            Normalized dictionary of entity parameters.
         """
         entity_type = entity.dxftype()
         params: dict[str, str] = {"type": entity_type}
@@ -259,15 +259,15 @@ class DXFExplorer:
         x_tolerance: float = 10.0,
         y_tolerance: float = 3.0,
     ) -> TableAnalysis:
-        """Анализирует текстовый блок как потенциальную таблицу.
+        """Analyze a text block as a potential table.
 
         Args:
-            block: DXF-блок для анализа.
-            x_tolerance: Допуск кластеризации по X.
-            y_tolerance: Допуск кластеризации по Y.
+            block: DXF block to analyze.
+            x_tolerance: Clustering tolerance on X.
+            y_tolerance: Clustering tolerance on Y.
 
         Returns:
-            Результат анализа таблицы.
+            Table analysis result.
         """
         return TextClusterAnalyzer.analyze_table(
             block,
@@ -283,17 +283,17 @@ class DXFExplorer:
         title: str,
         output_dir: Path | None = None,
     ) -> Path:
-        """Экспортирует распознанную таблицу блока в XLSX.
+        """Export a detected block table to XLSX.
 
         Args:
-            block_name: Имя блока.
-            rows: Строки таблицы.
-            centered_rows: Индексы строк, которые нужно центрировать и объединить.
-            title: Заголовок таблицы.
-            output_dir: Каталог для сохранения файла.
+            block_name: Block name.
+            rows: Table rows.
+            centered_rows: Row indexes that should be centered and merged.
+            title: Table title.
+            output_dir: Target output directory.
 
         Returns:
-            Путь к сохранённому XLSX-файлу.
+            Path to the saved XLSX file.
         """
         fallback_name = f"{self.file_path.stem}-{block_name}"
         file_stem = title or fallback_name
@@ -373,14 +373,14 @@ class DXFExplorer:
         table_blocks: list[dict[str, object]],
         output_dir: Path,
     ) -> list[Path]:
-        """Сохраняет XLSX-файлы для табличных блоков, загруженных из БД.
+        """Save XLSX files for table blocks loaded from the database.
 
         Args:
-            table_blocks: Блоки с табличными данными из БД.
-            output_dir: Каталог для сохранения XLSX-файлов.
+            table_blocks: Blocks with table data from the database.
+            output_dir: Output directory for XLSX files.
 
         Returns:
-            Список путей к созданным XLSX-файлам.
+            List of created XLSX file paths.
         """
         output_paths: list[Path] = []
         for block_payload in table_blocks:
@@ -418,13 +418,13 @@ class DXFExplorer:
         return output_paths
 
     def list_layouts(self) -> list[ExplorerRow]:
-        """Возвращает layouts текущего DXF/DWG-файла.
+        """Return layouts of the current DXF/DWG file.
 
         Returns:
-            Список layout с именами и связанными слоями.
+            List of layouts with names and related layers.
         """
 
-        logger.info("Считываем layout'ы для файла: %s", self.file_path)
+        logger.info("Reading layouts for file: %s", self.file_path)
         doc = self.read_drawing()
         return [
             {
@@ -436,13 +436,13 @@ class DXFExplorer:
         ]
 
     def list_blocks(self) -> list[ExplorerRow]:
-        """Возвращает блоки текущего DXF/DWG-файла.
+        """Return blocks of the current DXF/DWG file.
 
         Returns:
-            Список блоков с именами и количеством сущностей.
+            List of blocks with names and entity counts.
         """
 
-        logger.info("Считываем блоки для файла: %s", self.file_path)
+        logger.info("Reading blocks for file: %s", self.file_path)
         doc = self.read_drawing()
         rows: list[ExplorerRow] = []
         for block in doc.blocks:
@@ -461,27 +461,27 @@ class DXFExplorer:
 
     @staticmethod
     def _is_layout_block_name(block_name: str) -> bool:
-        """Возвращает True для внутренних имён блоков, связанных с layout.
+        """Return True for internal block names associated with layouts.
 
         Args:
-            block_name: Имя блока.
+            block_name: Block name.
 
         Returns:
-            True, если блок относится к служебным layout-блокам.
+            True if the block belongs to internal layout blocks.
         """
 
         return block_name.startswith("*Model_Space") or block_name.startswith("*Paper_Space")
 
     @classmethod
     def _collect_block_insert_rows(cls, doc, target_block_name: str) -> list[ExplorerRow]:
-        """Возвращает все сущности INSERT, ссылающиеся на указанный блок.
+        """Return all INSERT entities that reference the given block.
 
         Args:
-            doc: Загруженный чертёж ezdxf.
-            target_block_name: Имя целевого блока.
+            doc: Loaded ezdxf drawing.
+            target_block_name: Target block name.
 
         Returns:
-            Список строк с местами использования блока.
+            List of rows describing block usage locations.
         """
 
         rows: list[ExplorerRow] = []
@@ -533,36 +533,36 @@ class DXFExplorer:
         return rows
 
     def describe_block(self, block_name: str) -> dict[str, Any]:
-        """Возвращает JSON-сериализуемое описание блока из исходного файла.
+        """Return a JSON-serializable block description from the source file.
 
         Args:
-            block_name: Имя блока в файле.
+            block_name: Block name in the file.
 
         Returns:
-            JSON-сериализуемое описание блока.
+            JSON-serializable block description.
 
         Raises:
-            ValueError: Если блок с именем block_name не найден.
+            ValueError: If a block with the given block_name is not found.
         """
 
-        logger.info("Собираем описание блока '%s' из файла: %s", block_name, self.file_path)
+        logger.info("Collecting block description for '%s' from file: %s", block_name, self.file_path)
         doc = self.read_drawing()
         block = doc.blocks.get(block_name)
         if block is None:
-            logger.error("Блок '%s' не найден в файле.", block_name)
-            raise ValueError(f"Блок '{block_name}' не найден в файле.")
+            logger.error("Block '%s' was not found in the file.", block_name)
+            raise ValueError(f"Block '{block_name}' was not found in the file.")
 
         block_description = DXFAnalyzer.get_block_decsription(doc, block_name)
         return block_description
 
     def list_layer_names(self) -> list[str]:
-        """Возвращает имена слоёв текущего DXF/DWG-файла.
+        """Return layer names from the current DXF/DWG file.
 
         Returns:
-            Отсортированный список имён слоёв.
+            Sorted list of layer names.
         """
 
-        logger.info("Считываем слои для файла: %s", self.file_path)
+        logger.info("Reading layers for file: %s", self.file_path)
         doc = self.read_drawing()
         return sorted(
             str(layer.dxf.name)
@@ -571,23 +571,23 @@ class DXFExplorer:
         )
 
     def extract_block(self, block_name: str) -> int:
-        """Извлекает блок и при необходимости экспортирует распознанную таблицу.
+        """Extract a block and export a detected table when applicable.
 
         Args:
-            block_name: Имя блока в файле.
+            block_name: Block name in the file.
 
         Returns:
-            Код завершения операции.
+            Operation exit code.
 
         Raises:
-            ValueError: Если блок с именем block_name не найден.
+            ValueError: If a block with the given block_name is not found.
         """
-        logger.info("Извлекаем блок '%s' из файла: %s", block_name, self.file_path)
+        logger.info("Extracting block '%s' from file: %s", block_name, self.file_path)
         doc = self.read_drawing()
         block = doc.blocks.get(block_name)
         if block is None:
-            logger.error("Блок '%s' не найден в файле.", block_name)
-            raise ValueError(f"Блок '{block_name}' не найден в файле.")
+            logger.error("Block '%s' was not found in the file.", block_name)
+            raise ValueError(f"Block '{block_name}' was not found in the file.")
 
         for entity in block:
             self._get_entity_params(entity)
@@ -595,7 +595,7 @@ class DXFExplorer:
 
         table_stats = self._analyze_text_table(block)
         logger.info(
-            "TEXT/MTEXT: всего=%s, близко по X/Y=%s, X-групп=%s, Y-групп=%s",
+            "TEXT/MTEXT: total=%s, close on X/Y=%s, X-groups=%s, Y-groups=%s",
             table_stats.total_texts,
             table_stats.table_like_texts,
             len(table_stats.x_clusters),
@@ -609,9 +609,9 @@ class DXFExplorer:
                 table_stats.centered_rows,
                 table_stats.title,
             )
-            logger.info("Таблица сохранена в XLSX: %s", output_path)
+            logger.info("Table saved to XLSX: %s", output_path)
         else:
-            logger.info("Табличная структура не определена, XLSX не создан.")
+            logger.info("Table structure was not detected; XLSX was not created.")
         return 0
 
     def export_block_png(
@@ -620,19 +620,19 @@ class DXFExplorer:
         output_path: Path | None = None,
         dpi: int = 300,
     ) -> Path:
-        """Экспортирует выбранный блок в PNG.
+        """Export the selected block to PNG.
 
         Args:
-            block_name: Имя блока.
-            output_path: Путь для сохранения PNG.
-            dpi: Разрешение изображения.
+            block_name: Block name.
+            output_path: Target path for the PNG.
+            dpi: Image resolution.
 
         Returns:
-            Путь к сохранённому PNG.
+            Path to the saved PNG.
 
         Raises:
-            ValueError: Если блок не найден или параметры экспорта некорректны.
-            RuntimeError: Если отсутствуют зависимости для графического экспорта.
+            ValueError: If the block is not found or export parameters are invalid.
+            RuntimeError: If graphical export dependencies are missing.
         """
 
         return self._export_block_image(
@@ -647,18 +647,18 @@ class DXFExplorer:
         block_name: str,
         output_path: Path | None = None,
     ) -> Path:
-        """Экспортирует выбранный блок в SVG.
+        """Export the selected block to SVG.
 
         Args:
-            block_name: Имя блока.
-            output_path: Путь для сохранения SVG.
+            block_name: Block name.
+            output_path: Target path for the SVG.
 
         Returns:
-            Путь к сохранённому SVG.
+            Path to the saved SVG.
 
         Raises:
-            ValueError: Если блок не найден или параметры экспорта некорректны.
-            RuntimeError: Если отсутствуют зависимости для графического экспорта.
+            ValueError: If the block is not found or export parameters are invalid.
+            RuntimeError: If graphical export dependencies are missing.
         """
 
         return self._export_block_image(
@@ -668,28 +668,28 @@ class DXFExplorer:
         )
 
     def export_block_dxf(self, block_name: str) -> str:
-        """Возвращает DXF-текст для выбранного блока.
+        """Return DXF text for the selected block.
 
         Args:
-            block_name: Имя блока.
+            block_name: Block name.
 
         Returns:
-            Текст DXF-представления блока.
+            DXF text representation of the block.
 
         Raises:
-            ValueError: Если блок с именем block_name не найден.
-            RuntimeError: Если блок нельзя сериализовать в DXF.
+            ValueError: If a block with the given block_name is not found.
+            RuntimeError: If the block cannot be serialized to DXF.
         """
 
-        logger.info("Экспортируем DXF-текст блока '%s' из файла: %s", block_name, self.file_path)
+        logger.info("Exporting DXF text for block '%s' from file: %s", block_name, self.file_path)
         doc = self.read_drawing()
         block = doc.blocks.get(block_name)
         if block is None:
-            logger.error("Блок '%s' не найден в файле.", block_name)
-            raise ValueError(f"Блок '{block_name}' не найден в файле.")
+            logger.error("Block '%s' was not found in the file.", block_name)
+            raise ValueError(f"Block '{block_name}' was not found in the file.")
 
         if block.block is None or block.endblk is None:
-            raise RuntimeError(f"Блок '{block_name}' не может быть сериализован в DXF.")
+            raise RuntimeError(f"Block '{block_name}' cannot be serialized to DXF.")
 
         collector = TagCollector(dxfversion=doc.dxfversion)
         block.block.export_dxf(collector)
@@ -709,31 +709,31 @@ class DXFExplorer:
         output_path: Path | None = None,
         dpi: int = 300,
     ) -> Path:
-        """Экспортирует выбранный блок в графический файл.
+        """Export the selected block to an image file.
 
         Args:
-            block_name: Имя блока.
-            image_format: Формат выходного файла.
-            output_path: Путь для сохранения результата.
-            dpi: Разрешение изображения.
+            block_name: Block name.
+            image_format: Output file format.
+            output_path: Target output path.
+            dpi: Image resolution.
 
         Returns:
-            Путь к сохранённому изображению.
+            Path to the saved image.
 
         Raises:
-            ValueError: Если image_format неподдерживаемый, dpi некорректен или блок не найден.
-            RuntimeError: Если отсутствует matplotlib для экспорта.
+            ValueError: If image_format is unsupported, dpi is invalid, or the block is not found.
+            RuntimeError: If matplotlib is missing for export.
         """
 
         normalized_format = image_format.lower()
         if normalized_format not in {"png", "svg"}:
-            raise ValueError(f"Неподдерживаемый формат экспорта: {image_format}.")
+            raise ValueError(f"Unsupported export format: {image_format}.")
 
         if dpi <= 0:
-            raise ValueError("DPI должен быть положительным числом.")
+            raise ValueError("DPI must be a positive number.")
 
         logger.info(
-            "Экспортируем блок '%s' в %s из файла: %s",
+            "Exporting block '%s' to %s from file: %s",
             block_name,
             normalized_format.upper(),
             self.file_path,
@@ -741,8 +741,8 @@ class DXFExplorer:
         doc = self.read_drawing()
         block = doc.blocks.get(block_name)
         if block is None:
-            logger.error("Блок '%s' не найден в файле.", block_name)
-            raise ValueError(f"Блок '{block_name}' не найден в файле.")
+            logger.error("Block '%s' was not found in the file.", block_name)
+            raise ValueError(f"Block '{block_name}' was not found in the file.")
 
         try:
             import matplotlib
@@ -756,7 +756,7 @@ class DXFExplorer:
             from ezdxf.addons.importer import Importer
         except ImportError as exc:
             raise RuntimeError(
-                "Для экспорта блока в PNG/SVG требуется установленный matplotlib."
+                "matplotlib must be installed to export a block to PNG/SVG."
             ) from exc
 
         target_doc = new()
@@ -802,7 +802,7 @@ class DXFExplorer:
         finally:
             plt.close(figure)
 
-        logger.info("%s сохранён: %s", normalized_format.upper(), resolved_output_path)
+        logger.info("%s saved: %s", normalized_format.upper(), resolved_output_path)
         return resolved_output_path
 
     @staticmethod
@@ -815,7 +815,7 @@ class DXFExplorer:
 
     @staticmethod
     def _collect_block_inserts(doc) -> dict[str, dict[str, object]]:
-        """Возвращает block_name -> {insert_count, layers} по всем layout."""
+        """Return block_name -> {insert_count, layers} across all layouts."""
         stats: dict[str, dict] = {}
         for layout in doc.layouts:
             for entity in layout:
@@ -846,22 +846,22 @@ class DXFExplorer:
             sheet.column_dimensions[get_column_letter(col_idx)].width = min(width + 2, 60)
 
     def export_file_stat(self, output_path: Path, project: str = "") -> Path:
-        """Собирает статистику DXF/DWG-файла и сохраняет её в XLSX-книгу."""
-        logger.info("Собираем статистику файла: %s", self.file_path)
+        """Collect DXF/DWG file statistics and save them to an XLSX workbook."""
+        logger.info("Collecting file statistics: %s", self.file_path)
         doc = self.read_drawing()
 
         wb = Workbook()
         # --- Sheet 1: File ---
         ws_file = wb.active
-        ws_file.title = "Файл"
-        ws_file.append(["Параметр", "Значение"])
+        ws_file.title = "File"
+        ws_file.append(["Parameter", "Value"])
         self._apply_header_style(ws_file, 1)
         md5 = self._md5_file(self.file_path)
         parent_dirs = [str(p) for p in reversed(self.file_path.parents)]
-        ws_file.append(["Имя файла", self.file_path.name])
+        ws_file.append(["File name", self.file_path.name])
         ws_file.append(["MD5", md5])
-        ws_file.append(["Родительские каталоги", " / ".join(parent_dirs)])
-        ws_file.append(["Проект", project])
+        ws_file.append(["Parent directories", " / ".join(parent_dirs)])
+        ws_file.append(["Project", project])
         ws_file.freeze_panes = "A2"
         for row in ws_file.iter_rows():
             for cell in row:
@@ -869,8 +869,8 @@ class DXFExplorer:
         self._auto_column_widths(ws_file)
 
         # --- Sheet 2: Blocks ---
-        ws_blocks = wb.create_sheet("Блоки")
-        headers_blocks = ["Наименование", "Таблица", "Добавлен (раз)", "Слои"]
+        ws_blocks = wb.create_sheet("Blocks")
+        headers_blocks = ["Name", "Table", "Insert count", "Layers"]
         ws_blocks.append(headers_blocks)
         self._apply_header_style(ws_blocks, 1)
         ws_blocks.freeze_panes = "A2"
@@ -885,8 +885,8 @@ class DXFExplorer:
             bstat = insert_stats.get(block_name, {})
             insert_count = bstat.get("insert_count", 0)
             layers = ", ".join(sorted(bstat.get("layers", set())))
-            all_block_rows.append((block_name, "Да" if is_table else "Нет", insert_count, layers))
-            ws_blocks.append([block_name, "Да" if is_table else "Нет", insert_count, layers])
+            all_block_rows.append((block_name, "Yes" if is_table else "No", insert_count, layers))
+            ws_blocks.append([block_name, "Yes" if is_table else "No", insert_count, layers])
 
         for row in ws_blocks.iter_rows(min_row=2):
             for cell in row:
@@ -894,13 +894,13 @@ class DXFExplorer:
         self._auto_column_widths(ws_blocks)
 
         # --- Sheet 3: Table blocks ---
-        ws_tables = wb.create_sheet("Блоки-таблицы")
+        ws_tables = wb.create_sheet("Table Blocks")
         ws_tables.append(headers_blocks)
         self._apply_header_style(ws_tables, 1)
         ws_tables.freeze_panes = "A2"
 
         for row_data in all_block_rows:
-            if row_data[1] == "Да":
+            if row_data[1] == "Yes":
                 ws_tables.append(list(row_data))
 
         for row in ws_tables.iter_rows(min_row=2):
@@ -909,8 +909,8 @@ class DXFExplorer:
         self._auto_column_widths(ws_tables)
 
         # --- Sheet 4: Text primitives ---
-        ws_prim = wb.create_sheet("Текстовые примитивы")
-        headers_prim = ["Блок", "Тип", "Текст", "Слой", "Локация"]
+        ws_prim = wb.create_sheet("Text Primitives")
+        headers_prim = ["Block", "Type", "Text", "Layer", "Location"]
         ws_prim.append(headers_prim)
         self._apply_header_style(ws_prim, 1)
         ws_prim.freeze_panes = "A2"
@@ -936,7 +936,7 @@ class DXFExplorer:
         self._auto_column_widths(ws_prim)
 
         wb.save(output_path)
-        logger.info("Статистика сохранена: %s", output_path)
+        logger.info("Statistics saved: %s", output_path)
         return output_path
 
 

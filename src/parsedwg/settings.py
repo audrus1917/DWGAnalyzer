@@ -1,4 +1,4 @@
-"""Настройки приложения ParsedWG."""
+"""ParsedWG application settings."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def get_ai_settings(
     base_url: str,
     api_key: str,
 ) -> dict | None:
-    """Возвращает конфигурацию AI для извлечения тегов из имён или None."""
+    """Return AI configuration for name-tag extraction, or None."""
 
     if not enabled:
         return None

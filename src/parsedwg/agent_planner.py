@@ -1,4 +1,4 @@
-"""Планировщик переходов для графа агентного пайплайна."""
+"""Transition planner for the agent pipeline graph."""
 
 from __future__ import annotations
 
@@ -28,12 +28,12 @@ class AgentGraphPolicy:
 
 
 class AgentGraphPlanner:
-    """Определяет следующий переход графа на основе текущего шага и результатов ранее.
+    """Determine the next graph route from the current step and prior results.
 
-    Planner использует policy-таблицу переходов поверх текущего состояния графа.
-    Сейчас поддержаны два result-aware правила:
-    1. Если interpret_blocks не нашёл сущностей, skip для categorize_entities.
-    2. Если categorize_entities не обработал ни одной сущности, skip для verify_extraction.
+    The planner applies a policy table on top of the current graph state.
+    It currently supports two result-aware rules:
+    1. If interpret_blocks found no entities, skip categorize_entities.
+    2. If categorize_entities processed no entities, skip verify_extraction.
     """
 
     _SUPPORTED_ROUTES = {
@@ -50,31 +50,31 @@ class AgentGraphPlanner:
                 route="skip_step",
                 predicate=self._should_skip_verify_in_dry_run,
                 reason_builder=lambda _state: (
-                    "verify_extraction пропущен: dry-run не формирует устойчивое состояние "
-                    "для проверки результатов."
+                    "verify_extraction skipped: dry-run does not produce a stable state "
+                    "for result verification."
                 ),
             ),
             AgentGraphPolicy(
                 route="skip_step",
                 predicate=self._should_skip_verify_for_non_full_profile,
                 reason_builder=lambda _state: (
-                    "verify_extraction пропущен: профиль запуска не поддерживает шаг проверки."
+                    "verify_extraction skipped: the run profile does not support the verification step."
                 ),
             ),
             AgentGraphPolicy(
                 route="skip_step",
                 predicate=self._should_skip_categorize_after_empty_interpret,
                 reason_builder=lambda _state: (
-                    "categorize_entities пропущен: предыдущий interpret_blocks не нашёл "
-                    "сущностей для обработки."
+                    "categorize_entities skipped: the previous interpret_blocks step found "
+                    "no entities to process."
                 ),
             ),
             AgentGraphPolicy(
                 route="skip_step",
                 predicate=self._should_skip_verify_after_empty_categorize,
                 reason_builder=lambda _state: (
-                    "verify_extraction пропущен: предыдущий categorize_entities не обработал "
-                    "ни одной сущности."
+                    "verify_extraction skipped: the previous categorize_entities step "
+                    "processed no entities."
                 ),
             ),
         )

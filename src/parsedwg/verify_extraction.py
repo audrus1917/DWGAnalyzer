@@ -1,4 +1,4 @@
-"""Проверяет, что DWG/DXF-файл корректно сохранён в текущей базе данных."""
+"""Verify that a DWG/DXF file was stored correctly in the current database."""
 
 from __future__ import annotations
 
@@ -146,7 +146,7 @@ def build_verification_report(
     source_summary: dict[str, Any],
     db_snapshot: dict[str, object],
 ) -> dict[str, object]:
-    """Строит итоговый отчёт проверки по сводке файла и снимку БД."""
+    """Build the final verification report from file and database snapshots."""
 
     file_entity = cast(Entity, db_snapshot["file_entity"])
     layouts = cast(list[Entity], db_snapshot["layouts"])
@@ -310,7 +310,7 @@ def build_verification_report(
 
 
 def format_verification_report(report: dict[str, object]) -> str:
-    """Форматирует отчёт в текст, удобный для CLI."""
+    """Format the report into CLI-friendly text."""
 
     layouts = cast(dict[str, object], report["layouts"])
     blocks = cast(dict[str, object], report["blocks"])
@@ -322,29 +322,29 @@ def format_verification_report(report: dict[str, object]) -> str:
     def _render_list(items: list[str], limit: int = 20) -> list[str]:
         if not items:
             return ["    Mismatches: 0"]
-        rendered = [f"    Расхождений: {len(items)}"]
+        rendered = [f"    Mismatches: {len(items)}"]
         rendered.extend(f"    {item}" for item in items[:limit])
         if len(items) > limit:
-            rendered.append(f"    ... и ещё {len(items) - limit}")
+            rendered.append(f"    ... and {len(items) - limit} more")
         return rendered
 
-    lines = [f"Проверка file_id={report['file_id']}"]
+    lines = [f"Verification for file_id={report['file_id']}"]
     lines.append("")
-    lines.append("[1] Layout и слои:")
-    lines.append(f"    Layout в файле: {layouts['expected']}")
-    lines.append(f"    Layout в БД:    {layouts['actual']}")
+    lines.append("[1] Layouts and layers:")
+    lines.append(f"    Layouts in file: {layouts['expected']}")
+    lines.append(f"    Layouts in DB:   {layouts['actual']}")
     lines.extend(_render_list(cast(list[str], layouts["mismatches"])))
 
     lines.append("")
-    lines.append("[2] Блоки:")
-    lines.append(f"    Блоков в файле: {blocks['expected']}")
-    lines.append(f"    Блоков в БД:    {blocks['actual']}")
+    lines.append("[2] Blocks:")
+    lines.append(f"    Blocks in file: {blocks['expected']}")
+    lines.append(f"    Blocks in DB:   {blocks['actual']}")
     lines.extend(_render_list(cast(list[str], blocks["mismatches"])))
 
     lines.append("")
-    lines.append("[3] Примитивы по block/type:")
-    lines.append(f"    Всего в файле: {primitive_counts['expected']}")
-    lines.append(f"    Всего в БД:    {primitive_counts['actual']}")
+    lines.append("[3] Primitives by block/type:")
+    lines.append(f"    Total in file: {primitive_counts['expected']}")
+    lines.append(f"    Total in DB:   {primitive_counts['actual']}")
     lines.extend(_render_list(cast(list[str], primitive_counts["mismatches"])))
 
     lines.append("")
@@ -352,30 +352,30 @@ def format_verification_report(report: dict[str, object]) -> str:
     lines.extend(_render_list(cast(list[str], insert_targets["unresolved"])))
 
     lines.append("")
-    lines.append("[5] primitive -> layer link:")
+    lines.append("[5] Primitive -> layer link:")
     lines.extend(_render_list(cast(list[str], layer_links["missing"])))
 
     lines.append("")
-    lines.append("[6] file_id у потомков файла:")
+    lines.append("[6] file_id on file descendants:")
     lines.extend(_render_list(cast(list[str], file_id_check["invalid"])))
 
     lines.append("")
-    lines.append("ИТОГ: " + ("✓ Всё извлечено корректно" if report["ok"] else "⚠ Есть расхождения, см. выше"))
+    lines.append("SUMMARY: " + ("✓ Extraction is consistent" if report["ok"] else "⚠ Mismatches detected, see above"))
     return "\n".join(lines)
 
 
 async def _find_file_entity(path: Path, file_id: str | None) -> Entity | None:
-    """Находит file-сущность в БД по пути или явному идентификатору.
+    """Find the file entity in the database by path or explicit identifier.
 
     Raises:
-        ValueError: Если file_id передан в некорректном формате.
+        ValueError: If file_id has an invalid format.
     """
     async with async_session_factory() as session:
         if file_id is not None:
             try:
                 file_uuid = uuid.UUID(file_id)
             except ValueError as exc:
-                raise ValueError(f"Некорректный file_id: {file_id}") from exc
+                raise ValueError(f"Invalid file_id: {file_id}") from exc
 
             entity = await session.get(Entity, file_uuid)
             if entity is None:
@@ -443,22 +443,22 @@ async def _load_db_snapshot(file_entity: Entity) -> dict[str, object]:
 
 
 async def verify_extraction(path: Path, file_id: str | None = None) -> dict[str, object]:
-    """Сравнивает DWG/DXF-файл с тем, что сохранено в текущей базе данных.
+    """Compare a DWG/DXF file with what is stored in the current database.
 
     Raises:
-        FileNotFoundError: Если path не существует.
-        LookupError: Если file-сущность для path не найдена в БД.
-        ValueError: Если file_id передан в некорректном формате.
+        FileNotFoundError: If path does not exist.
+        LookupError: If the file entity for path is missing in the database.
+        ValueError: If file_id has an invalid format.
     """
 
     resolved_path = path.expanduser().resolve()
     if not resolved_path.exists():
-        raise FileNotFoundError(f"Файл не найден: {resolved_path}")
+        raise FileNotFoundError(f"File not found: {resolved_path}")
 
     source_summary = collect_dxf_summary(resolved_path)
     file_entity = await _find_file_entity(resolved_path, file_id)
     if file_entity is None:
-        raise LookupError(f"file-сущность не найдена в БД для {resolved_path}")
+        raise LookupError(f"File entity was not found in the database for {resolved_path}")
 
     db_snapshot = await _load_db_snapshot(file_entity)
     return build_verification_report(source_summary, db_snapshot)

@@ -1,4 +1,4 @@
-"""Операции работы с базой данных."""
+"""Database operations."""
 
 from typing import Any, cast
 
@@ -10,7 +10,7 @@ from pathlib import Path
 
 from sqlalchemy import case, create_engine, func, or_, select, desc
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import Session, aliased, selectinload, sessionmaker
+from sqlalchemy.orm import Session, aliased, selectinload, sessionmaker as orm_sessionmaker
 
 from .settings import settings
 from .orm import Category, Entity, EntityEmbedding, EntityType, Project
@@ -28,20 +28,20 @@ sync_engine = create_engine(_to_sync_database_url(settings.database_url), echo=s
 async_session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
     engine, expire_on_commit=False
 )
-session_factory: sessionmaker[Session] = sessionmaker(sync_engine, expire_on_commit=False)
+session_factory = orm_sessionmaker(sync_engine, expire_on_commit=False)
 
 
 def _parse_id(raw_id: str | int) -> int:
-    """Нормализует внешний id к целочисленному первичному ключу.
+    """Normalize an external id to an integer primary key.
 
     Args:
-        raw_id: Внешний id в строковом или целочисленном виде.
+        raw_id: External id as a string or integer.
 
     Returns:
-        Целочисленный первичный ключ.
+        Integer primary key.
 
     Raises:
-        ValueError: Если raw_id нельзя преобразовать к целому числу.
+        ValueError: If raw_id cannot be converted to an integer.
     """
 
     if isinstance(raw_id, int):
@@ -49,7 +49,7 @@ def _parse_id(raw_id: str | int) -> int:
     try:
         return int(raw_id)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"Некорректный id: {raw_id}") from exc
+        raise ValueError(f"Invalid id: {raw_id}") from exc
 
 
 def _get_short_interpretation(value: object) -> str | None:
@@ -103,13 +103,13 @@ async def _get_entity_with_embedding(session: AsyncSession, entity_id: str | int
 
 
 async def get_file_id_by_source(source_ref: str) -> str | None:
-    """Возвращает id файловой сущности по пути source_ref.
+    """Return the file entity id for the given source_ref path.
 
     Args:
-        source_ref: Значение source_ref, сохранённое в data файла.
+        source_ref: source_ref value stored in file data.
 
     Returns:
-        Идентификатор файловой сущности или None.
+        File entity identifier or None.
     """
     stmt = (
         select(Entity.id)
@@ -125,13 +125,13 @@ async def get_file_id_by_source(source_ref: str) -> str | None:
 
 
 async def get_entity_name_by_id(entity_id: str) -> str | None:
-    """Возвращает имя сущности по id или None, если сущность не найдена.
+    """Return the entity name by id, or None if the entity is not found.
 
     Args:
-        entity_id: Идентификатор сущности.
+        entity_id: Entity identifier.
 
     Returns:
-        Имя сущности или None.
+        Entity name or None.
     """
     async with async_session_factory() as session:
         entity = await session.get(Entity, _parse_id(entity_id))
@@ -139,23 +139,23 @@ async def get_entity_name_by_id(entity_id: str) -> str | None:
 
 
 async def save_short_interpretation(entity_id: str, text: str) -> None:
-    """Сохраняет short_interpretation для сущности по её id.
+    """Save short_interpretation for an entity by id.
 
     Args:
-        entity_id: Идентификатор сущности.
-        text: Текст краткой интерпретации.
+        entity_id: Entity identifier.
+        text: Short interpretation text.
 
     Returns:
-        Ничего не возвращает.
+        Returns nothing.
 
     Raises:
-        LookupError: Если сущность с указанным id не найдена.
-        ValueError: Если entity_id имеет некорректный формат.
+        LookupError: If the entity with the given id is not found.
+        ValueError: If entity_id has an invalid format.
     """
     async with async_session_factory() as session:
         entity = await _get_entity_with_embedding(session, entity_id)
         if entity is None:
-            raise LookupError(f"Сущность {entity_id} не найдена.")
+            raise LookupError(f"Entity {entity_id} was not found.")
         embedding_data = _ensure_embedding(entity)
         embedding_data.short_interpretation = text
         session.add(embedding_data)
@@ -163,23 +163,23 @@ async def save_short_interpretation(entity_id: str, text: str) -> None:
 
 
 async def save_block_description(block_id: str, description: str) -> None:
-    """Сохраняет описание блока по id.
+    """Save a block description by id.
 
     Args:
-        block_id: Идентификатор блока.
-        description: Описание блока.
+        block_id: Block identifier.
+        description: Block description.
 
     Returns:
-        Ничего не возвращает.
+        Returns nothing.
 
     Raises:
-        LookupError: Если блок с указанным id не найден.
-        ValueError: Если block_id имеет некорректный формат.
+        LookupError: If the block with the given id is not found.
+        ValueError: If block_id has an invalid format.
     """
     async with async_session_factory() as session:
         entity = await session.get(Entity, _parse_id(block_id))
         if entity is None:
-            raise LookupError(f"Блок {block_id} не найден.")
+            raise LookupError(f"Block {block_id} was not found.")
         entity.description = description
         await session.commit()
 
@@ -190,25 +190,25 @@ async def save_block_interpretations(
     full_interpretation: str,
     description: str,
 ) -> None:
-    """Сохраняет интерпретации блока по id.
+    """Save block interpretations by id.
 
     Args:
-        block_id: Идентификатор блока.
-        short_interpretation: Краткая интерпретация блока.
-        full_interpretation: Полная интерпретация блока.
-        description: Сериализованное описание блока, сохранённое в description.
+        block_id: Block identifier.
+        short_interpretation: Short interpretation of the block.
+        full_interpretation: Full interpretation of the block.
+        description: Serialized block description stored in description.
 
     Returns:
-        Ничего не возвращает.
+        Returns nothing.
 
     Raises:
-        LookupError: Если блок с указанным id не найден.
-        ValueError: Если block_id имеет некорректный формат.
+        LookupError: If the block with the given id is not found.
+        ValueError: If block_id has an invalid format.
     """
     async with async_session_factory() as session:
         entity = await _get_entity_with_embedding(session, block_id)
         if entity is None:
-            raise LookupError(f"Блок {block_id} не найден.")
+            raise LookupError(f"Block {block_id} was not found.")
         entity.description = description
         embedding_data = _ensure_embedding(entity)
         embedding_data.short_interpretation = short_interpretation
@@ -221,22 +221,22 @@ async def list_blocks_for_interpretation(
     block_ids: list[str] | None = None,
     file_id: str | None = None,
 ) -> list[dict[str, str]]:
-    """Возвращает блоки, подготовленные для пакетной интерпретации.
+    """Return blocks prepared for batch interpretation.
 
     Args:
-        block_ids: Явный список идентификаторов блоков для выборки.
-        file_id: Идентификатор файла, для которого нужно выбрать блоки.
+        block_ids: Explicit list of block identifiers to fetch.
+        file_id: File identifier used to select blocks.
 
     Returns:
-        Список словарей с id, name, description и file_id для выбранных блоков.
+        List of dictionaries with id, name, description, and file_id.
 
     Raises:
-        ValueError: Если одновременно переданы block_ids и file_id или не передан ни один из них.
-        ValueError: Если один из переданных идентификаторов имеет некорректный формат.
+        ValueError: If both block_ids and file_id are provided, or neither is provided.
+        ValueError: If one of the provided identifiers has an invalid format.
     """
 
     if bool(block_ids) == bool(file_id):
-        raise ValueError("Нужно указать либо block_ids, либо file_id.")
+        raise ValueError("Specify either block_ids or file_id.")
 
     stmt = (
         select(Entity.id, Entity.name, Entity.description, Entity.file_id)
@@ -283,7 +283,7 @@ async def list_blocks_for_interpretation(
 async def list_multileaders_for_nearest_lookup(
     file_id: str | None = None,
 ) -> list[dict[str, str]]:
-    """Возвращает сущности MULTILEADER вместе с source_ref исходного файла."""
+    """Return MULTILEADER entities together with the source_ref of the source file."""
 
     file_entity = aliased(Entity)
     stmt = (
@@ -403,17 +403,17 @@ async def get_full_description(
     block_name: str,
     file_id: str | None = None,
 ) -> dict[str, object] | None:
-    """Возвращает полное описание сущности BLOCK.
+    """Return the full description of a BLOCK entity.
 
-    Включает имя, слои (name + short_interpretation), атрибуты INSERT-примитивов
-    и INSERT-сущности, имя которых совпадает с именем блока.
+    Includes the name, layers (name + short_interpretation), INSERT primitive
+    attributes, and INSERT entities whose name matches the block name.
 
     Args:
-        block_name: Имя блока.
-        file_id: Идентификатор файла для сужения поиска.
+        block_name: Block name.
+        file_id: File identifier used to narrow the search.
 
     Returns:
-        Полное описание блока или None.
+        Full block description or None.
     """
 
     async with async_session_factory() as session:
@@ -428,7 +428,7 @@ async def get_full_description(
         if file_id is not None:
             block_stmt = block_stmt.where(Entity.file_id == _parse_id(file_id))
         block_stmt = block_stmt.limit(1)
-        logger.debug(f"Запрос блока: {block_stmt}")
+        logger.debug(f"Block query: {block_stmt}")
 
         block_result = await session.execute(block_stmt)
         block = block_result.scalar_one_or_none()
@@ -509,13 +509,13 @@ async def get_full_description(
 
 
 async def get_full_description_by_id(block_id: str) -> dict[str, object] | None:
-    """Возвращает полное описание блока по id.
+    """Return the full block description by id.
 
     Args:
-        block_id: Идентификатор блока.
+        block_id: Block identifier.
 
     Returns:
-        Полное описание блока или None.
+        Full block description or None.
     """
 
     async with async_session_factory() as session:
@@ -526,13 +526,13 @@ async def get_full_description_by_id(block_id: str) -> dict[str, object] | None:
 
 
 async def list_blocks_for_export(file_id: str) -> list[dict[str, object]]:
-    """Возвращает данные сущностей BLOCK для экспорта в XLSX.
+    """Return BLOCK entity data for XLSX export.
 
     Args:
-        file_id: Идентификатор файла.
+        file_id: File identifier.
 
     Returns:
-        Список описаний блоков для экспорта.
+        List of block descriptions for export.
     """
     file_entity_id = _parse_id(file_id)
     stmt = (
@@ -555,10 +555,10 @@ async def list_blocks_for_export(file_id: str) -> list[dict[str, object]]:
 
 
 async def list_interpreted_blocks_for_export() -> list[dict[str, str]]:
-    """Возвращает все блоки с непустой short_interpretation для экспорта в XLSX.
+    """Return all blocks with a non-empty short_interpretation for XLSX export.
 
     Returns:
-        Список блоков с полями для XLSX-экспорта.
+        List of blocks with fields required for XLSX export.
     """
 
     stmt = (
@@ -587,7 +587,7 @@ async def list_interpreted_blocks_for_export() -> list[dict[str, str]]:
 
 
 async def get_table_blocks_by_file_id(file_id: str) -> list[dict[str, object]]:
-    """Возвращает табличные блоки из БД, у которых parent_id равен file_id."""
+    """Return table blocks from the database whose parent_id equals file_id."""
     stmt = (
         select(Entity.name, Entity.data)
         .where(Entity.entity_type == EntityType.BLOCK)
@@ -612,7 +612,7 @@ async def get_table_blocks_by_file_id(file_id: str) -> list[dict[str, object]]:
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    """Провайдер session, совместимый с FastAPI и dependency injection."""
+    """Session provider compatible with FastAPI and dependency injection."""
     async with async_session_factory() as session:
         yield session
 
@@ -623,10 +623,10 @@ async def search_entities(
     limit: int = 20,
     parent_id: str | None = None,
 ) -> list[dict]:
-    """Выполняет полнотекстовый поиск по entity_text с запасным поиском по name и description.
+    """Run full-text search on entity_text with fallback search on name and description.
 
-    Использует PostgreSQL websearch_to_tsquery с поддержкой кавычек, минуса и OR
-    вместе с to_tsvector, настроенным для русского языка.
+    Uses PostgreSQL websearch_to_tsquery with support for quotes, minus, and OR,
+    together with to_tsvector configured for Russian language text.
     """
 
     tsquery = func.websearch_to_tsquery("russian", query)
@@ -681,7 +681,7 @@ async def search_entities(
 
 
 async def create_all() -> None:
-    """Создаёт все таблицы (хелпер для dev/test; для production предпочтителен Alembic)."""
+    """Create all tables (helper for dev/test; Alembic is preferred in production)."""
     from .orm import Base  # local import to avoid circular deps
 
     async with engine.begin() as conn:
@@ -693,7 +693,7 @@ async def create_project(
     description: str | None = None,
     created_by: str | None = None,
 ) -> dict[str, str]:
-    """Создаёт проект и возвращает его основные поля."""
+    """Create a project and return its main fields."""
 
     async with async_session_factory() as session:
         project = Project(
@@ -794,27 +794,30 @@ def _get_category_payload(meanings: list[dict[str, object]]) -> tuple[str | None
 async def list_entities_for_semantic_categorization(
     entity_ids: list[str] | None = None,
     entity_type: str | None = None,
+    file_id: str | None = None,
 ) -> list[dict[str, str]]:
-    """Возвращает сущности для AI-категоризации по id или entity_type.
+    """Return entities for AI categorization by id or entity_type.
 
     Args:
-        entity_ids: Явный список идентификаторов сущностей для выборки.
-        entity_type: Тип сущностей для выборки, если entity_ids не переданы.
+        entity_ids: Explicit list of entity identifiers to fetch.
+        entity_type: Entity type to fetch when entity_ids are not provided.
+        file_id: Optional file identifier used to restrict the selection.
 
     Returns:
-        Список словарей с id, name, description и entity_type.
+        List of dictionaries with id, name, description, and entity_type.
 
     Raises:
-        ValueError: Если одновременно переданы entity_ids и entity_type или не передан ни один.
-        ValueError: Если один из entity_ids имеет некорректный формат.
+        ValueError: If both entity_ids and entity_type are provided, or neither is provided.
+        ValueError: If one of entity_ids or file_id has an invalid format.
     """
 
     if bool(entity_ids) == bool(entity_type):
-        raise ValueError("Нужно указать либо entity_ids, либо entity_type.")
+        raise ValueError("Specify either entity_ids or entity_type.")
 
     stmt = select(Entity.id, Entity.name, Entity.description, Entity.entity_type)
     order_by_name = False
     id_order: dict[int, int] = {}
+    parsed_file_id = _parse_id(file_id) if file_id is not None else None
 
     if entity_ids:
         parsed_ids = [_parse_id(entity_id) for entity_id in entity_ids]
@@ -823,6 +826,9 @@ async def list_entities_for_semantic_categorization(
     else:
         stmt = stmt.where(Entity.entity_type == entity_type)
         order_by_name = True
+
+    if parsed_file_id is not None:
+        stmt = stmt.where(Entity.file_id == parsed_file_id)
 
     if order_by_name:
         stmt = stmt.order_by(Entity.name.asc(), Entity.id.asc())
@@ -853,18 +859,18 @@ async def assign_semantic_category(
     entity_id: str,
     meanings: list[dict[str, object]],
 ) -> dict[str, object]:
-    """Создаёт или находит категорию по AI-смыслам и связывает её с сущностью.
+    """Create or find a category from AI meanings and link it to an entity.
 
     Args:
-        entity_id: Идентификатор сущности, которую нужно связать с категорией.
-        meanings: Список AI-смыслов с оценками и дополнительными полями.
+        entity_id: Identifier of the entity to link to a category.
+        meanings: List of AI meanings with scores and additional fields.
 
     Returns:
-        Сводку по результату связывания сущности с категорией.
+        Summary of the entity-to-category linking result.
 
     Raises:
-        LookupError: Если сущность с указанным entity_id не найдена.
-        ValueError: Если entity_id имеет некорректный формат.
+        LookupError: If the entity with the given entity_id is not found.
+        ValueError: If entity_id has an invalid format.
     """
 
     entity_pk = _parse_id(entity_id)
@@ -877,7 +883,7 @@ async def assign_semantic_category(
         )
         entity = entity_result.scalar_one_or_none()
         if entity is None:
-            raise LookupError(f"Сущность {entity_pk} не найдена.")
+            raise LookupError(f"Entity {entity_pk} was not found.")
 
         category_result = await session.execute(select(Category).order_by(Category.name.asc()))
         categories = category_result.scalars().all()
@@ -940,7 +946,7 @@ async def assign_semantic_category(
 async def assign_semantic_categories(
     categorizations: list[dict[str, object]],
 ) -> list[dict[str, object]]:
-    """Создаёт или находит категории по AI-смыслам и связывает их с сущностями."""
+    """Create or find categories from AI meanings and link them to entities."""
 
     if not categorizations:
         return []
@@ -967,7 +973,7 @@ async def create_category(
     description: str | None = None,
     parent_id: str | None = None,
 ) -> dict[str, str]:
-    """Создаёт категорию и возвращает её основные поля."""
+    """Create a category and return its main fields."""
 
     parent_entity_id = _parse_id(parent_id) if parent_id is not None else None
 
@@ -995,7 +1001,7 @@ async def update_category(
     description: str | None = None,
     parent_id: str | None = None,
 ) -> dict[str, str] | None:
-    """Обновляет категорию по id. Возвращает None, если категория не найдена."""
+    """Update a category by id. Return None if the category is not found."""
 
     category_entity_id = _parse_id(category_id)
     parent_entity_id = _parse_id(parent_id) if parent_id is not None else None
@@ -1023,7 +1029,7 @@ async def update_category(
 
 
 async def delete_category(category_id: str) -> bool:
-    """Удаляет категорию по id. Возвращает True, если удаление произошло."""
+    """Delete a category by id. Return True if deletion occurred."""
 
     category_entity_id = _parse_id(category_id)
 
@@ -1038,7 +1044,7 @@ async def delete_category(category_id: str) -> bool:
 
 
 async def list_categories(parent_id: str | None = None) -> list[dict[str, str]]:
-    """Возвращает категории, при необходимости отфильтрованные по parent_id."""
+    """Return categories, optionally filtered by parent_id."""
 
     stmt = select(Category).order_by(Category.name.asc())
     if parent_id is not None:
@@ -1065,7 +1071,7 @@ async def update_project(
     description: str | None = None,
     created_by: str | None = None,
 ) -> dict[str, str] | None:
-    """Обновляет проект по id. Возвращает None, если проект не найден."""
+    """Update a project by id. Return None if the project is not found."""
     async with async_session_factory() as session:
         project = await session.get(Project, _parse_id(project_id))
         if project is None:
@@ -1089,7 +1095,7 @@ async def update_project(
 
 
 async def delete_project(project_id: str) -> bool:
-    """Удаляет проект по id. Возвращает True, если удаление произошло."""
+    """Delete a project by id. Return True if deletion occurred."""
     async with async_session_factory() as session:
         project = await session.get(Project, _parse_id(project_id))
         if project is None:
@@ -1101,7 +1107,7 @@ async def delete_project(project_id: str) -> bool:
 
 
 async def get_table_blocks_for_source(source_ref: str) -> list[dict[str, object]]:
-    """Возвращает табличные блоки из БД для указанного file source_ref."""
+    """Return table blocks from the database for the given file source_ref."""
     file_id_subquery = (
         select(Entity.id)
         .where(Entity.entity_type == EntityType.FILE)
@@ -1136,7 +1142,7 @@ async def get_table_blocks_for_source(source_ref: str) -> list[dict[str, object]
 
 
 def get_block_full_description(block: dict[str, object]) -> str:
-    """Генерирует текстовое описание блока для AI на основе его данных."""
+    """Generate a text description of a block for AI based on its data."""
 
     name = str(block.get("name", "") or "")
     description = str(block.get("description", "") or "")
@@ -1148,9 +1154,9 @@ def get_block_full_description(block: dict[str, object]) -> str:
 
     lines: list[str] = []
     if name:
-        lines.append(f"Имя блока: {name}")
+        lines.append(f"Block name: {name}")
     if description:
-        lines.append(f"Описание: {description}")
+        lines.append(f"Description: {description}")
 
     if isinstance(layers, list) and layers:
         layer_parts: list[str] = []
@@ -1166,19 +1172,19 @@ def get_block_full_description(block: dict[str, object]) -> str:
             else:
                 layer_parts.append(layer_name)
         if layer_parts:
-            lines.append("Связанные слои: " + "; ".join(layer_parts))
+            lines.append("Related layers: " + "; ".join(layer_parts))
 
     if isinstance(attributes, dict) and attributes:
         attribute_parts = [f"{key}={attributes[key]}" for key in sorted(attributes)]
-        lines.append("Атрибуты: " + "; ".join(attribute_parts))
+        lines.append("Attributes: " + "; ".join(attribute_parts))
 
     if isinstance(insert_count, int):
-        lines.append(f"Количество вставок: {insert_count}")
+        lines.append(f"Insert count: {insert_count}")
 
     if isinstance(annotation_texts, list) and annotation_texts:
         annotation_parts = [str(value).strip() for value in annotation_texts if str(value).strip()]
         if annotation_parts:
-            lines.append("Тексты аннотаций: " + "; ".join(annotation_parts))
+            lines.append("Annotation texts: " + "; ".join(annotation_parts))
 
     if isinstance(inserts, list) and inserts:
         insert_parts: list[str] = []
@@ -1203,6 +1209,6 @@ def get_block_full_description(block: dict[str, object]) -> str:
             if fragment:
                 insert_parts.append("{" + "; ".join(fragment) + "}")
         if insert_parts:
-            lines.append("Примеры вставок: " + "; ".join(insert_parts))
+            lines.append("Insert examples: " + "; ".join(insert_parts))
 
     return "\n".join(lines).strip()

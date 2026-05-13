@@ -21,19 +21,19 @@ _TOKEN_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9]+")
 
 
 def _iter_entries(source_path: Path) -> list[Path]:
-    """Возвращает файл или рекурсивный список записей каталога.
+    """Return a file or the recursive list of directory entries.
 
     Args:
-        source_path: Путь к файлу или каталогу.
+        source_path: Path to a file or directory.
 
     Returns:
-        Список файловых и каталоговых записей.
+        List of file and directory entries.
 
     Raises:
-        FileNotFoundError: Если source_path не существует.
+        FileNotFoundError: If source_path does not exist.
     """
     if not source_path.exists():
-        raise FileNotFoundError(f"Путь {source_path} не найден.")
+        raise FileNotFoundError(f"Path {source_path} was not found.")
 
     if source_path.is_file():
         return [source_path]
@@ -42,28 +42,28 @@ def _iter_entries(source_path: Path) -> list[Path]:
 
 
 def _tokenize_name(path: Path) -> list[str]:
-    """Разбивает имя файла или каталога на токены.
+    """Split a file or directory name into tokens.
 
     Args:
-        path: Путь к файлу или каталогу.
+        path: Path to a file or directory.
 
     Returns:
-        Список токенов в нижнем регистре.
+        Lowercased token list.
     """
     text = path.stem if path.is_file() else path.name
     return [token.lower() for token in _TOKEN_RE.findall(text)]
 
 
 def _lemmatize_token(token: str, wordnet: object | None, russian_stemmer: object | None) -> str:
-    """Нормализует токен через WordNet или русский Snowball stemmer.
+    """Normalize a token via WordNet or the Russian Snowball stemmer.
 
     Args:
-        token: Исходный токен.
-        wordnet: Экземпляр WordNet lemmatizer или None.
-        russian_stemmer: Экземпляр русского stemmer или None.
+        token: Source token.
+        wordnet: WordNet lemmatizer instance or None.
+        russian_stemmer: Russian stemmer instance or None.
 
     Returns:
-        Нормализованный токен.
+        Normalized token.
     """
     if token.isdigit() or not token:
         return token
@@ -92,16 +92,16 @@ def _build_name_record(
     wordnet: object | None,
     russian_stemmer: object | None,
 ) -> dict[str, object]:
-    """Строит JSON-совместимую запись по имени файла или каталога.
+    """Build a JSON-compatible record for a file or directory name.
 
     Args:
-        path: Путь к записи.
-        root: Корневой путь для вычисления relative_path.
-        wordnet: Экземпляр WordNet lemmatizer или None.
-        russian_stemmer: Экземпляр русского stemmer или None.
+        path: Entry path.
+        root: Root path used to compute relative_path.
+        wordnet: WordNet lemmatizer instance or None.
+        russian_stemmer: Russian stemmer instance or None.
 
     Returns:
-        Словарь с токенами и леммами имени.
+        Dictionary with name tokens and lemmas.
     """
     tokens = _tokenize_name(path)
 
@@ -118,13 +118,13 @@ def _build_name_record(
 
 
 def collect_name_lemmas(source_path: Path) -> list[dict[str, object]]:
-    """Собирает токены и леммы имён файлов и каталогов.
+    """Collect tokens and lemmas for file and directory names.
 
     Args:
-        source_path: Путь к файлу или каталогу.
+        source_path: Path to a file or directory.
 
     Returns:
-        Список записей с токенами и леммами.
+        List of records with tokens and lemmas.
     """
     source = source_path.resolve()
     entries = _iter_entries(source)
@@ -141,20 +141,20 @@ def collect_name_lemmas(source_path: Path) -> list[dict[str, object]]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Запускает CLI для лемматизации имён файлов и каталогов.
+    """Run the CLI that lemmatizes file and directory names.
 
     Args:
-        argv: Аргументы командной строки.
+        argv: Command-line arguments.
 
     Returns:
-        Код завершения процесса.
+        Process exit code.
     """
     parser = argparse.ArgumentParser(
         prog="parsedwg-name-lemmas",
-        description="Рекурсивный обход каталога и лемматизация имен файлов/папок через NLTK.",
+        description="Recursively traverse a directory and lemmatize file/folder names with NLTK.",
     )
-    parser.add_argument("path", help="Путь к каталогу или файлу")
-    parser.add_argument("-o", "--output", help="Путь к JSON-файлу для сохранения результата")
+    parser.add_argument("path", help="Path to a directory or file")
+    parser.add_argument("-o", "--output", help="Path to the JSON file used to save the result")
     args = parser.parse_args(argv)
 
     rows = collect_name_lemmas(Path(args.path))

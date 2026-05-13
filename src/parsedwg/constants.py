@@ -1,4 +1,4 @@
-"""Константы, используемые во всём пакете."""
+"""Constants used across the package."""
 
 import enum
 
@@ -8,11 +8,9 @@ ERROR = 1
 NOT_FOUND = 2
 UNBOUND_ERROR = 3
 
-BUFFER_SIZE = 40
-
 
 class EntityType(int, enum.Enum):
-    """Типы файловых и DXF-сущностей."""
+    """File and DXF entity types."""
 
     # Folders and files
     FOLDER = 0
@@ -75,18 +73,18 @@ class EntityType(int, enum.Enum):
     MULTILEADER = 55
 
 ENTITY_TYPES = {e.name: e for e in EntityType}
+GRAPHICAL_TYPES = ["POINT", "LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE", "SPLINE", "SOLID", "HATCH"]
 
-
-# Словарь расшифровки материалов
+# Material hatch mapping
 ANSI_MAP = {
-    'ANSI31': 'Чугун / Кирпич',
-    'ANSI32': 'Сталь',
-    'ANSI33': 'Медь / Латунь',
-    'ANSI34': 'Пластик / Резина',
-    'ANSI35': 'Огнеупорный кирпич',
-    'ANSI36': 'Мрамор / Стекло',
-    'ANSI37': 'Свинец / Изоляция',
-    'ANSI38': 'Алюминий'
+    'ANSI31': 'Cast Iron / Brick',
+    'ANSI32': 'Steel',
+    'ANSI33': 'Copper / Brass',
+    'ANSI34': 'Plastic / Rubber',
+    'ANSI35': 'Fire Brick',
+    'ANSI36': 'Marble / Glass',
+    'ANSI37': 'Lead / Insulation',
+    'ANSI38': 'Aluminum'
 }
 
 type ResultRow = dict[str, object]

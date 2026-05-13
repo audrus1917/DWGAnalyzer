@@ -1,6 +1,6 @@
-"""Утилиты RAG: эмбеддинги через nomic-embed-text и генерация ответа через llama3.2.
+"""RAG utilities: embeddings via nomic-embed-text and answer generation via llama3.2.
 
-Для работы Ollama должен быть запущен локально на http://localhost:11434.
+Ollama must be running locally at http://localhost:11434.
 """
 
 from __future__ import annotations
@@ -53,16 +53,16 @@ _TERM_CONTEXT_SPLIT_RE = re.compile(
 
 
 async def _embed(text_input: str) -> list[float]:
-    """Получает текстовый эмбеддинг через Ollama /api/embed.
+    """Fetch a text embedding through Ollama /api/embed.
 
     Args:
-        text_input: Исходный текст для эмбеддинга.
+        text_input: Source text for embedding.
 
     Returns:
-        Вектор эмбеддинга.
+        Embedding vector.
 
     Raises:
-        ValueError: Если сервис не вернул эмбеддинг в ожидаемом формате.
+        ValueError: If the service did not return an embedding in the expected format.
     """
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         response = await client.post(
@@ -74,7 +74,7 @@ async def _embed(text_input: str) -> list[float]:
     # Ollama /api/embed returns {"embeddings": [[...]], ...}.
     raw = data.get("embeddings") or data.get("embedding")
     if not raw:
-        raise ValueError(f"Ollama не вернул эмбеддинг: {data}")
+        raise ValueError(f"Ollama did not return an embedding: {data}")
     first = raw[0]
     if isinstance(first, list):
         return first  # type: ignore[return-value]
@@ -82,22 +82,21 @@ async def _embed(text_input: str) -> list[float]:
 
 
 async def _generate(prompt: str, context_docs: list[str]) -> str:
-    """Задаёт LLM вопрос с контекстом из найденных документов.
+    """Ask the LLM a question with context from retrieved documents.
 
     Args:
-        prompt: Пользовательский запрос.
-        context_docs: Список релевантных документов-контекстов.
+        prompt: User query.
+        context_docs: Relevant context documents.
 
     Returns:
-        Текст ответа модели.
+        Model response text.
     """
     full_prompt = _build_generation_prompt(prompt, context_docs)
     system = (
-        "Ты — ассистент по технической документации и чертежам. "
-        "Целевой термин, который нужно пояснить, передаётся отдельно от "
-        "дополнительного контекста. "
-        "Отвечай на основе предоставленного контекста. "
-        "Если ответа в контексте нет, скажи об этом явно."
+        "You are an assistant for technical documentation and drawings. "
+        "The target term to explain is provided separately from any additional context. "
+        "Answer using the supplied context. "
+        "If the answer is not present in the context, state that explicitly."
     )
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         response = await client.post(
@@ -110,13 +109,13 @@ async def _generate(prompt: str, context_docs: list[str]) -> str:
 
 
 def _extract_target_term(question: str) -> tuple[str | None, str | None]:
-    """Извлекает целевой термин и дополнительный контекст из вопроса о термине.
+    """Extract the target term and extra context from a term-oriented question.
 
     Args:
-        question: Исходный вопрос пользователя.
+        question: Original user question.
 
     Returns:
-        Кортеж из целевого термина и дополнительного контекста.
+        Tuple of target term and additional context.
     """
     cleaned_question = question.strip()
     for pattern in _QUESTION_TERM_PATTERNS:
@@ -144,35 +143,34 @@ def _extract_target_term(question: str) -> tuple[str | None, str | None]:
 
 
 def _build_generation_prompt(question: str, context_docs: list[str]) -> str:
-    """Строит prompt, отделяющий целевой термин от остального контекста.
+    """Build a prompt that separates the target term from the remaining context.
 
     Args:
-        question: Исходный вопрос пользователя.
-        context_docs: Список найденных документов-контекстов.
+        question: Original user question.
+        context_docs: Retrieved context documents.
 
     Returns:
-        Полный prompt для генерации ответа.
+        Full prompt for answer generation.
     """
     target_term, extra_question_context = _extract_target_term(question)
     context = "\n\n".join(
         f"[{i + 1}] {doc}" for i, doc in enumerate(context_docs)
-    ) or "Контекст не найден."
+    ) or "No context found."
 
     if target_term:
-        additional_context = extra_question_context or "Не указан."
+        additional_context = extra_question_context or "Not provided."
         return (
-            f"Целевой термин:\n{target_term}\n\n"
-            f"Дополнительный контекст запроса:\n{additional_context}\n\n"
-            f"Контекст из документов:\n{context}\n\n"
-            "Сначала поясни именно целевой термин. Дополнительный контекст "
-            "используй только для уточнения ответа.\n\n"
-            "Ответ:"
+            f"Target term:\n{target_term}\n\n"
+            f"Additional query context:\n{additional_context}\n\n"
+            f"Document context:\n{context}\n\n"
+            "Explain the target term first. Use the additional context only to refine the answer.\n\n"
+            "Answer:"
         )
 
     return (
-        f"Запрос пользователя:\n{question.strip()}\n\n"
-        f"Контекст из документов:\n{context}\n\n"
-        "Ответ:"
+        f"User query:\n{question.strip()}\n\n"
+        f"Document context:\n{context}\n\n"
+        "Answer:"
     )
 
 
@@ -210,7 +208,7 @@ def _extract_table_rows_text(data: Any) -> str | None:
 
 
 def _entity_text(entity: Entity) -> str:
-    """Строит текст для эмбеддинга из полей сущности."""
+    """Build embedding text from entity fields."""
     parts = [entity.name]
     if entity.description:
         parts.append(entity.description)
@@ -234,15 +232,15 @@ async def index_entities(
     batch_size: int = 50,
     reindex: bool = False,
 ) -> int:
-    """Генерирует эмбеддинги для сущностей из БД и сохраняет их.
+    """Generate embeddings for database entities and save them.
 
     Args:
-        entity_type: если указан, индексирует только этот тип сущностей.
-        batch_size: размер пакета для запросов к Ollama.
-        reindex: пересоздаёт эмбеддинги даже для уже индексированных сущностей.
+        entity_type: When provided, index only this entity type.
+        batch_size: Batch size for Ollama requests.
+        reindex: Rebuild embeddings even for already indexed entities.
 
     Returns:
-        Количество проиндексированных записей.
+        Number of indexed records.
     """
     async with async_session_factory() as session:
         stmt = select(Entity).options(selectinload(Entity.embedding_data))
@@ -271,11 +269,11 @@ async def index_entities(
                 try:
                     vec = await _embed(txt)
                 except httpx.HTTPError as exc:
-                    logger.warning("Ошибка эмбеддинга для %s: %s", entity.id, exc)
+                    logger.warning("Embedding error for %s: %s", entity.id, exc)
                     continue
                 managed_entity = await session.get(Entity, entity.id)
                 if managed_entity is None:
-                    logger.warning("Сущность %s не найдена при сохранении эмбеддинга", entity.id)
+                    logger.warning("Entity %s was not found while saving the embedding", entity.id)
                     continue
                 if managed_entity.embedding_data is None:
                     managed_entity.embedding_data = EntityEmbedding(
@@ -291,7 +289,7 @@ async def index_entities(
                         )
                 total += 1
             await session.commit()
-        logger.info("Проиндексировано %d / %d", min(i + batch_size, len(entities)), len(entities))
+        logger.info("Indexed %d / %d", min(i + batch_size, len(entities)), len(entities))
 
     return total
 
@@ -306,9 +304,9 @@ async def similarity_search(
     entity_type: str | None = None,
     top_k: int = 5,
 ) -> list[dict]:
-    """Выполняет векторный поиск ближайших сущностей по косинусному расстоянию.
+    """Run vector search for the nearest entities by cosine distance.
 
-    Требует расширение pgvector и сохранённые эмбеддинги.
+    Requires the pgvector extension and stored embeddings.
     """
     vec = await _embed(query)
     # pgvector expects a literal like '[1.0,2.0,...]'.
@@ -360,17 +358,17 @@ async def hybrid_search(
     top_k: int = 5,
     alpha: float = 0.5,
 ) -> list[dict]:
-    """Выполняет гибридный поиск: BM25 + векторный поиск с объединённым ранжированием.
+    """Run hybrid search: BM25 plus vector search with merged ranking.
 
     Args:
-        query: текст запроса.
-        entity_type: фильтр по типу сущности.
-        top_k: число результатов.
-        alpha: вес BM25 (0..1); вес векторного поиска равен 1 - alpha.
-            Например, alpha=0.5 означает 50% BM25 и 50% векторной оценки.
+        query: Query text.
+        entity_type: Optional entity type filter.
+        top_k: Number of results.
+        alpha: BM25 weight (0..1); vector search weight is 1 - alpha.
+            For example, alpha=0.5 means 50% BM25 and 50% vector score.
 
     Returns:
-        Результаты, отсортированные по объединённой оценке.
+        Results sorted by the combined score.
     """
     from .db import search_entities
 
@@ -432,7 +430,7 @@ async def ask(
     entity_type: str | None = None,
     top_k: int = 5,
 ) -> dict:
-    """Выполняет RAG-запрос: ищет релевантные сущности и генерирует ответ.
+    """Run a RAG request: find relevant entities and generate an answer.
 
     Returns:
         {"answer": str, "sources": list[dict]}
@@ -467,7 +465,7 @@ async def ask(
         base = f"{source['name']}: {source['description']}" if source["description"] else source["name"]
         table_rows_text = table_rows_by_id.get(str(source.get("id")))
         if table_rows_text:
-            base = f"{base}\nТаблица:\n{table_rows_text}"
+            base = f"{base}\nTable:\n{table_rows_text}"
         context_docs.append(base)
 
     answer = await _generate(question, context_docs)

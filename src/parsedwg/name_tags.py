@@ -1,4 +1,4 @@
-"""Извлекает семантические теги из имён файлов и каталогов."""
+"""Extract semantic tags from file and directory names."""
 
 from __future__ import annotations
 
@@ -25,19 +25,19 @@ type _TagMeta = tuple[float, str]
 
 
 def _iter_entries(source_path: Path) -> list[Path]:
-    """Возвращает файл или рекурсивный список записей каталога.
+    """Return a file or the recursive list of directory entries.
 
     Args:
-        source_path: Путь к файлу или каталогу.
+        source_path: Path to a file or directory.
 
     Returns:
-        Список файловых и каталоговых записей.
+        List of file and directory entries.
 
     Raises:
-        FileNotFoundError: Если source_path не существует.
+        FileNotFoundError: If source_path does not exist.
     """
     if not source_path.exists():
-        raise FileNotFoundError(f"Путь {source_path} не найден.")
+        raise FileNotFoundError(f"Path {source_path} was not found.")
 
     if source_path.is_file():
         return [source_path]
@@ -46,26 +46,26 @@ def _iter_entries(source_path: Path) -> list[Path]:
 
 
 def _tokenize_name(path: Path) -> list[str]:
-    """Разбивает имя файла или каталога на токены.
+    """Split a file or directory name into tokens.
 
     Args:
-        path: Путь к файлу или каталогу.
+        path: Path to a file or directory.
 
     Returns:
-        Список токенов в нижнем регистре.
+        Lowercased token list.
     """
     text = path.stem if path.is_file() else path.name
     return [token.lower() for token in _TOKEN_RE.findall(text)]
 
 
 def _parse_numbers(raw_numbers: str) -> list[int]:
-    """Преобразует строку с номерами в список целых чисел.
+    """Convert a numeric string into a list of integers.
 
     Args:
-        raw_numbers: Строка с номерами и разделителями.
+        raw_numbers: String with numbers and separators.
 
     Returns:
-        Список извлечённых чисел.
+        Extracted integer list.
     """
     chunks = re.split(r"\s*(?:-|–|,|и)\s*", raw_numbers)
     numbers: list[int] = []
@@ -76,13 +76,13 @@ def _parse_numbers(raw_numbers: str) -> list[int]:
 
 
 def _extract_rule_tags(name_text: str) -> tuple[list[dict[str, str]], list[str], list[dict[str, object]]]:
-    """Извлекает сущности и теги из имени по набору правил.
+    """Extract entities and tags from a name using rule-based matching.
 
     Args:
-        name_text: Имя файла или каталога.
+        name_text: File or directory name.
 
     Returns:
-        Кортеж из сущностей, списка тегов и детализированных причин с confidence.
+        Tuple of entities, tag list, and detailed reasons with confidence scores.
     """
     text = name_text.lower()
     entities: list[dict[str, str]] = []
@@ -95,12 +95,12 @@ def _extract_rule_tags(name_text: str) -> tuple[list[dict[str, str]], list[str],
 
     if _ROOF_RE.search(text):
         entities.append({"type": "Кровля"})
-        _add_tag("кровля", 0.99, "Совпадение словоформы кровля/крыша.")
+        _add_tag("кровля", 0.99, "Matched a roof-related word form.")
 
     floor_numbers: list[int] = []
     for match in _FLOOR_CONTEXT_RE.finditer(text):
         entities.append({"type": "Этаж"})
-        _add_tag("этаж", 0.97, "Обнаружен контекст этаж/эт.")
+        _add_tag("этаж", 0.97, "Detected a floor context marker.")
         raw_numbers = match.group("nums")
         if raw_numbers:
             floor_numbers.extend(_parse_numbers(raw_numbers))
@@ -110,7 +110,7 @@ def _extract_rule_tags(name_text: str) -> tuple[list[dict[str, str]], list[str],
         _add_tag(
             f"этаж:{number}",
             0.95,
-            "Номер этажа извлечен из контекста этаж/эт и списка чисел.",
+            "Floor number extracted from the floor context and number list.",
         )
         entities.append({"type": "Этаж", "value": str(number)})
 
@@ -131,15 +131,15 @@ def _build_record(
     root: Path,
     ai_extractor: _TagsExtractorLike | None = None,
 ) -> dict[str, object]:
-    """Строит JSON-совместимую запись с тегами для файла или каталога.
+    """Build a JSON-compatible tagged record for a file or directory.
 
     Args:
-        path: Путь к записи.
-        root: Корневой путь для вычисления relative_path.
-        ai_extractor: Дополнительный AI-экстрактор тегов.
+        path: Entry path.
+        root: Root path used to compute relative_path.
+        ai_extractor: Optional AI tag extractor.
 
     Returns:
-        Словарь с токенами, сущностями и тегами.
+        Dictionary with tokens, entities, and tags.
     """
     name = path.name
     base_text = path.stem if path.is_file() else path.name
@@ -166,7 +166,7 @@ def _build_record(
                 {
                     "tag": tag,
                     "confidence": None,
-                    "reason": "Тег извлечен LLM (LangChain).",
+                    "reason": "Tag extracted by the LLM (LangChain).",
                     "source": "ai",
                 }
                 for tag in ai_tags

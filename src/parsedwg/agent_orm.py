@@ -1,4 +1,4 @@
-"""ORM-модели агентных задач."""
+"""ORM models for agent jobs."""
 
 from __future__ import annotations
 
