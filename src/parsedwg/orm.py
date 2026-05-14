@@ -59,9 +59,9 @@ class Category(Base):
         nullable=True,
     )
     name: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    short_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    full_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     aliases: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     parent: Mapped[Category | None] = relationship(
         "Category",
@@ -117,8 +117,7 @@ class Entity(Base):
     )
     geom: Mapped[str | None] = mapped_column(
         Geometry("GEOMETRY", srid=0),
-        nullable=True,
-        index=True,
+        nullable=True
     )
 
     parent: Mapped[Entity | None] = relationship(

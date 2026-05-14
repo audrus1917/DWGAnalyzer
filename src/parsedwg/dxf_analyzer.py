@@ -13,7 +13,8 @@ from ezdxf.tools.text import MTextEditor
 from ezdxf.addons.geo import GeoProxy
 import ezdxf_shapely
 
-from .constants import ENTITY_TYPES
+from src.parsedwg.constants import ENTITY_TYPES
+from src.parsedwg.schemas import BlockDescription
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +160,7 @@ class DXFAnalyzer:
 
         # Attach textual content when present.
         if text_value := cls.get_text(entity):
-            entity_data["description"] = re.sub(r"\s+", " ", text_value).strip()
+            entity_data["short_description"] = re.sub(r"\s+", " ", text_value).strip()
 
         # Preserve raw DXF attributes in a normalized form.
         dxf_attribs: dict[str, Any] = {}
@@ -301,7 +302,7 @@ class DXFAnalyzer:
                 entity_text = entity.get_mtext_content() if hasattr(entity, "get_mtext_content") else ""
                 if entity_text:
                     clean_text = MTextEditor(entity_text).text
-                    entity_data["description"] = re.sub(r"\s+", " ", clean_text).strip()
+                    entity_data["short_description"] = re.sub(r"\s+", " ", clean_text).strip()
 
                 # Build WKT for the MultiLineString.
                 multiline_wkt = f"MULTILINESTRING({', '.join(line_segments)})"
@@ -314,30 +315,27 @@ class DXFAnalyzer:
         cls,
         doc: Drawing,
         block_name,
-        data=None,
+        block_data=None,
         processed=None
     ):
-        if data is None:
-            data = {
-                "primitives_layers": set(),
-                "nested_blocks": set(),
-                "text_content": set(),
-                "attdefs": []  # List of attribute definitions.
-            }
+        """Recursively analyze a block definition to extract layers, nested blocks, and text."""
+        if block_data is None:
+            block_data = BlockDescription()
+
         if processed is None:
             processed = set()
 
         if block_name in processed:
-            return data
+            return block_data
         processed.add(block_name)
 
         block_def = doc.blocks.get(block_name)
         if not block_def:
-            return data
+            return block_data
 
         for entity in block_def:
             # 1. Layers.
-            data["primitives_layers"].add(entity.dxf.layer)
+            block_data.primitives_layers.add(entity.dxf.layer)
 
             # 2. Text content (TEXT and MTEXT).
             val = None
@@ -348,11 +346,11 @@ class DXFAnalyzer:
                 if callable(plain_text):
                     val = str(plain_text()).rstrip()
                 if val:
-                    data["text_content"].add(val)
+                    block_data.text_content.add(val)
 
             # 3. ATTDEFS (attribute definitions).
             if entity.dxftype() == 'ATTDEF':
-                data["attdefs"].append({
+                block_data.attdefs.append({
                     "tag": entity.dxf.tag,
                     "prompt": getattr(entity.dxf, 'prompt', ''), # User-facing prompt.
                     "default": entity.dxf.text # Default value.
@@ -361,17 +359,17 @@ class DXFAnalyzer:
             # 4. Recurse into nested inserts.
             if entity.dxftype() == 'INSERT':
                 nested_name = entity.dxf.name
-                data["nested_blocks"].add(nested_name)
-                cls.analyze_block(doc, nested_name, data, processed)
+                block_data.nested_blocks.add(nested_name)
+                cls.analyze_block(doc, nested_name, block_data, processed)
 
-        return data
+        return block_data
 
     @classmethod
-    def get_block_decsription(
+    def get_short_block_description(
         cls,
         doc: Drawing,
         block_name: str
-    ) -> dict[str, Any]:
+    ) -> BlockDescription:
         """Return a DXF block description.
 
         Args:
@@ -391,19 +389,8 @@ class DXFAnalyzer:
             logger.error("Block '%s' not found in the file.", block_name)
             raise ValueError(f"Block '{block_name}' not found in the file.")
 
-        internal = cls.analyze_block(doc, block_name)
-        block_info = {
-            "block_name": block_name
-        }
-
-        if primitives_layers := list(internal["primitives_layers"]):
-            block_info["primitives_layers"] = primitives_layers
-        if nested_blocks := list(internal["nested_blocks"]):
-            block_info["nested_blocks"] = nested_blocks
-        if text_content := list(internal["text_content"]):
-            block_info["text_content"] = text_content
-        if attdefs := internal["attdefs"]:
-            block_info["attdefs"] = attdefs
+        block_info: BlockDescription = cls.analyze_block(doc, block_name)
+        block_info.block_name = block_name
 
         inserts = msp.query(f'INSERT[name=="{block.name}"]')
         insert_samples = []
@@ -420,5 +407,5 @@ class DXFAnalyzer:
                 idx += 1
 
         if insert_samples:
-            block_info["insert_samples"] = insert_samples
+            block_info.insert_samples = insert_samples
         return block_info

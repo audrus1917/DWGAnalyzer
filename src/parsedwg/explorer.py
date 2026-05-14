@@ -552,7 +552,7 @@ class DXFExplorer:
             logger.error("Block '%s' was not found in the file.", block_name)
             raise ValueError(f"Block '{block_name}' was not found in the file.")
 
-        block_description = DXFAnalyzer.get_block_decsription(doc, block_name)
+        block_description = DXFAnalyzer.get_short_block_decsription(doc, block_name)
         return block_description
 
     def list_layer_names(self) -> list[str]:

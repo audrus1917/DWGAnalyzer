@@ -117,7 +117,7 @@ def _build_block_storage_payload(
     return str(description), block_data
 
 
-def _build_primitive_storage_payload(
+def get_primitive_payload(
     primitive_payload: dict[str, object],
     detail_level: str,
     block_name: str | None,
@@ -125,6 +125,8 @@ def _build_primitive_storage_payload(
     description: object,
     geometry: object,
 ) -> dict[str, object]:
+    """Build a primitive entity payload with variable detail level."""
+
     rank = _detail_rank(detail_level)
     data: dict[str, object] = {}
 
@@ -389,7 +391,7 @@ def collect_drawing_summary(drawing: Drawing) -> dict[str, Any]:
     for block in drawing.blocks:
         if _is_layout_block(block):
             continue
-        block_description = DXFAnalyzer.get_block_decsription(drawing, block.name)
+        block_description = DXFAnalyzer.get_short_block_decsription(drawing, block.name)
         table_stats = TextClusterAnalyzer.analyze_table(block)
         blocks_def = {
             "name": block.name,
@@ -570,6 +572,8 @@ def flush_primitives_batch(
             primitives_total,
         )
 
+    logger.debug("Primitive batch: %s", primitive_batch)
+
     session.add_all(primitive_batch)
     session.flush()
 
@@ -734,6 +738,7 @@ def drawing_to_db(
             block_links = summary.get("block_links", {})
             if not isinstance(block_links, dict):
                 block_links = {}
+                
             for block_name, linked_blocks in block_links.items():
                 block_entity_id = block_entities_by_name.get(block_name)
                 if block_entity_id:
@@ -819,7 +824,7 @@ def drawing_to_db(
 
                 description = primitive_payload.pop("description", None)
                 geometry = primitive_payload.pop("geom", None)
-                primitive_data = _build_primitive_storage_payload(
+                primitive_data = get_primitive_payload(
                     primitive_payload,
                     detail_level=detail_level,
                     block_name=_block_name,
@@ -827,6 +832,10 @@ def drawing_to_db(
                     description=description,
                     geometry=geometry,
                 )
+                logger.debug(f"Primitive data for entity '{name}'")
+                for key, value in primitive_data.items():
+                    logger.debug(f"  {key}: {value}")
+
                 primitive_entity = Entity(
                     parent_id=parent_entity_id,
                     file_id=file_entity.id,
