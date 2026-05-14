@@ -1,4 +1,4 @@
-"""Консольная точка входа для работы с DWG/DXF."""
+"""Console entry point for working with DWG/DXF."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 def _as_table(rows: list[ResultRow]) -> str:
     if not rows:
-        return "Нет данных."
+        return "No data."
 
     columns = list(rows[0].keys())
     prepared_rows = [[str(row.get(column, "")) for column in columns] for row in rows]
@@ -64,18 +64,18 @@ def handle_search_command(
     output_path: Path | None,
     parent_id: str | None = None,
 ) -> int:
-    """Выполняет полнотекстовый поиск по таблице сущностей PostgreSQL."""
+    """Run full-text search against the PostgreSQL entity table."""
     from .db import search_entities
 
     rows: list[ResultRow] = asyncio.run(search_entities(query, entity_type, limit, parent_id))
 
     if not rows:
-        logger.warning("Нет результатов.")
+        logger.warning("No results.")
         return constants.OK
 
     if output_path is not None:
         _save_rows_to_json(output_path, rows)
-        logger.info("JSON сохранён: %s", output_path)
+        logger.info("JSON saved: %s", output_path)
         return constants.OK
 
     print_as_table(rows)
@@ -87,11 +87,11 @@ def handle_index_command(
     batch_size: int,
     reindex: bool,
 ) -> int:
-    """Генерирует и сохраняет эмбеддинги для сущностей из БД."""
+    """Generate and save embeddings for entities from the database."""
     from .rag import index_entities
 
     count = asyncio.run(index_entities(entity_type, batch_size, reindex))
-    logger.debug(f"Проиндексировано: {count}")
+    logger.debug(f"Indexed: {count}")
     return constants.OK
 
 
@@ -101,48 +101,108 @@ def handle_ask_command(
     top_k: int,
     output_path: Path | None,
 ) -> int:
-    """Выполняет RAG-запрос: векторный поиск и генерацию ответа через llama."""
+    """Run a RAG query: vector search plus answer generation through llama."""
     from .rag import ask
 
     result: ResultRow = asyncio.run(ask(question, entity_type, top_k))
 
     if output_path is not None:
         _save_rows_to_json(output_path, [result])
-        logger.info("JSON сохранён: %s", output_path)
+        logger.info("JSON saved: %s", output_path)
         return constants.OK
 
     logger.debug(result["answer"])
     logger.debug("")
-    print("Источники:")
+    print("Sources:")
     print_as_table(result["sources"])  # type: ignore[arg-type]
     return constants.OK
 
 
 def handle_process_docs_command(source_path: Path) -> int:
-    """Рекурсивно индексирует PDF/DOCX/XLSX/CSV-документы в таблицу сущностей."""
+    """Recursively index PDF/DOCX/XLSX/CSV documents into the entity table."""
 
     summary = run_documents_ingest(source_path)
-    print(f"Найдено документов: {summary['doc_count']}")
-    print(f"Создано сущностей в БД: {summary['created_entities']}")
-    print(f"Источник: {summary['source']}")
+    print(f"Documents found: {summary['doc_count']}")
+    print(f"Entities created in DB: {summary['created_entities']}")
+    print(f"Source: {summary['source']}")
     return constants.OK
 
 
-def handle_export_block_png_command(
+def handle_agent_run_command(
+    input_ref: str,
+    profile: str,
+    ai_model: str,
+    ai_base_url: str,
+    ai_api_key: str,
+    workers: int,
+    dry: bool,
+    project_name: str | None,
+) -> int:
+    """Run the agent pipeline and print the completed job ID."""
+    from .agent_service import run_agent_job_sync
+
+    logger.debug("Start `agent_run`")
+    try:
+        job_id = run_agent_job_sync(
+            input_ref=input_ref,
+            profile=profile,
+            ai_model=ai_model,
+            ai_base_url=ai_base_url,
+            ai_api_key=ai_api_key,
+            workers=workers,
+            dry=dry,
+            project_name=project_name,
+        )
+    except (LookupError, OSError, RuntimeError, ValueError) as exc:
+        logger.error("Failed to execute agent-run: %s", exc)
+        return constants.ERROR
+
+    print(f"Agent job completed: {job_id}")
+    return constants.OK
+
+
+def handle_agent_status_command(job_id: int) -> int:
+    """Print a summary of an agent job and its steps."""
+    from .agent_service import get_agent_job_report
+
+    report = get_agent_job_report(job_id)
+    if report is None:
+        logger.error("Agent job %s was not found.", job_id)
+        return constants.ERROR
+
+    job = report.get("job") if isinstance(report, dict) else None
+    steps = report.get("steps") if isinstance(report, dict) else None
+    if not isinstance(job, dict):
+        logger.error("Invalid agent-status report format for job %s.", job_id)
+        return constants.ERROR
+
+    print(f"Agent job: {job.get('id', job_id)}")
+    print(f"Status: {job.get('status', '')}")
+    for step in steps if isinstance(steps, list) else []:
+        if not isinstance(step, dict):
+            continue
+        print(
+            f"{step.get('step_order', '?')}. {step.get('step_kind', '')}: "
+            f"{step.get('status', '')}"
+        )
+    return constants.OK
+
+
+def handle_export_block_command(
     drawing_path: Path,
     block_name: str,
     output_path: Path | None,
     dpi: int,
 ) -> int:
-    """Экспортирует выбранный блок в PNG."""
+    """Export the selected block to PNG."""
 
     try:
         explorer = DXFExplorer(drawing_path)
         saved_path = explorer.export_block_png(block_name, output_path=output_path, dpi=dpi)
-        print(f"PNG сохранён: {saved_path}")
+        print(f"PNG saved: {saved_path}")
         return constants.OK
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        logger.error("Не удалось экспортировать блок в PNG: %s", exc)
+        logger.error("Failed to export block to PNG: %s", exc)
         return constants.ERROR
 
 
@@ -151,15 +211,15 @@ def handle_export_block_svg_command(
     block_name: str,
     output_path: Path | None,
 ) -> int:
-    """Экспортирует выбранный блок в SVG."""
+    """Export the selected block to SVG."""
 
     try:
         explorer = DXFExplorer(drawing_path)
         saved_path = explorer.export_block_svg(block_name, output_path=output_path)
-        print(f"SVG сохранён: {saved_path}")
+        print(f"SVG saved: {saved_path}")
         return constants.OK
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        logger.error("Не удалось экспортировать блок в SVG: %s", exc)
+        logger.error("Failed to export block to SVG: %s", exc)
         return constants.ERROR
 
 
@@ -168,7 +228,7 @@ def handle_export_block_dxf_command(
     block_name: str,
     output_path: Path | None,
 ) -> int:
-    """Возвращает DXF-текст для выбранного блока."""
+    """Return DXF text for the selected block."""
 
     try:
         explorer = DXFExplorer(drawing_path)
@@ -180,13 +240,13 @@ def handle_export_block_dxf_command(
                 resolved_output_path = resolved_output_path.with_suffix(".dxf")
             resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
             resolved_output_path.write_text(dxf_text, encoding="utf-8")
-            print(f"DXF сохранён: {resolved_output_path}")
+            print(f"DXF saved: {resolved_output_path}")
             return constants.OK
 
         logger.debug(dxf_text)
         return constants.OK
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        logger.error("Не удалось экспортировать DXF-текст блока: %s", exc)
+        logger.error("Failed to export block DXF text: %s", exc)
         return constants.ERROR
 
 
@@ -194,13 +254,13 @@ def handle_extract_block_command(
     drawing_path: Path,
     block_name: str,
 ) -> int:
-    """Извлекает блок в отдельный файл через DXFExplorer."""
+    """Extract a block into a separate file through DXFExplorer."""
 
     try:
         explorer = DXFExplorer(drawing_path)
         return int(explorer.extract_block(block_name))
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        logger.error("Не удалось извлечь блок: %s", exc)
+        logger.error("Failed to extract block: %s", exc)
         return constants.ERROR
 
 
@@ -209,13 +269,13 @@ def handle_describe_block_command(
     block_name: str,
     output_path: Path | None,
 ) -> int:
-    """Возвращает JSON-описание блока."""
+    """Return a JSON description of a block."""
 
     try:
         explorer = DXFExplorer(drawing_path)
         payload = explorer.describe_block(block_name)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        logger.error("Не удалось описать блок: %s", exc)
+        logger.error("Failed to describe block: %s", exc)
         return constants.ERROR
 
     rendered = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -238,45 +298,45 @@ def handle_interpret_entities_command(
     workers: int = 1,
     dry: bool = False,
 ) -> int:
-    """Запрашивает у LLM интерпретации имён сущностей по id или типу.
+    """Request entity name interpretations from the LLM by id or type.
 
-    Сохраняет результат в поля интерпретации entity embedding.
+    Save the result into entity embedding interpretation fields.
 
     Args:
-        entity_ids: Явный список идентификаторов сущностей для интерпретации.
-        entity_type: Тип сущностей для выборки, если entity_ids не переданы.
-        extra_context: Дополнительный контекст для LLM.
-        ai_model: Имя модели LLM.
-        ai_base_url: Базовый URL AI-сервиса.
-        ai_api_key: Ключ доступа к AI-сервису.
-        workers: Максимальное число параллельных задач.
-        dry: Если true, не сохраняет результат в БД.
+        entity_ids: Explicit list of entity identifiers to interpret.
+        entity_type: Entity type to select if entity_ids are not provided.
+        extra_context: Additional context for the LLM.
+        ai_model: LLM model name.
+        ai_base_url: Base URL of the AI service.
+        ai_api_key: Access key for the AI service.
+        workers: Maximum number of parallel tasks.
+        dry: If true, do not save the result to the database.
 
     Returns:
-        Код завершения CLI-команды.
+        CLI command exit code.
 
     Raises:
-        RuntimeError: Может возникнуть во внутренних AI-вызовах и преобразуется в код ошибки.
-        ValueError: Может возникнуть во внутренних вызовах выборки, валидации и сохранения и преобразуется в код ошибки.
-        LookupError: Может возникнуть во внутренних вызовах БД и преобразуется в код ошибки.
-        TimeoutError: Может возникнуть во внутренних AI-вызовах и преобразуется в код ошибки.
+        RuntimeError: Can be raised by internal AI calls and converted to an error code.
+        ValueError: Can be raised by internal selection, validation, or save calls and converted to an error code.
+        LookupError: Can be raised by internal database calls and converted to an error code.
+        TimeoutError: Can be raised by internal AI calls and converted to an error code.
     """
 
-    logger.info("Стартуем")
+    logger.info("Starting")
 
     from .db import list_entities_for_semantic_categorization, save_short_interpretation
     from .langchain_name_tags import (
         build_name_meaning_prompt,
-        call_ollama_name_meaning,
+        get_name_meaning,
     )
 
     logger.debug("AI API key configured: %s", bool(ai_api_key))
 
     if bool(entity_ids) == bool(entity_type):
-        logger.error("Нужно указать либо --entity-id, либо --entity-type.")
+        logger.error("Specify either --entity-id or --entity-type.")
         return constants.UNBOUND_ERROR
     if workers <= 0:
-        logger.error("--workers должен быть больше 0.")
+        logger.error("--workers must be greater than 0.")
         return constants.UNBOUND_ERROR
 
     chat_url = get_chat_url(ai_base_url)
@@ -292,7 +352,7 @@ def handle_interpret_entities_command(
         if not entities:
             return {"rows": [], "failures": []}
         if not dry:
-            print(f"Выбрано сущностей: {len(entities)}")
+            print(f"Selected entities: {len(entities)}")
 
         semaphore = asyncio.Semaphore(workers)
 
@@ -303,7 +363,7 @@ def handle_interpret_entities_command(
                     extra_context=normalized_context,
                 )
                 logger.debug(
-                    "LLM запрос interpret-entities: entity_id=%s entity_name=%s model=%s chat_url=%s\n%s",
+                    "LLM request interpret-entities: entity_id=%s entity_name=%s model=%s chat_url=%s\n%s",
                     entity["id"],
                     entity["name"],
                     ai_model,
@@ -313,7 +373,7 @@ def handle_interpret_entities_command(
                 try:
                     text = await asyncio.wait_for(
                         asyncio.to_thread(
-                            call_ollama_name_meaning,
+                            get_name_meaning,
                             name=entity["name"],
                             chat_url=chat_url,
                             model=ai_model,
@@ -328,7 +388,7 @@ def handle_interpret_entities_command(
                         "entity_id": entity["id"],
                         "entity_name": entity["name"],
                         "error": (
-                            "Превышен таймаут ожидания ответа LLM для сущности "
+                            "Timed out while waiting for the LLM response for entity "
                             f"{entity['id']} ({entity['name']})."
                         ),
                     }
@@ -340,7 +400,7 @@ def handle_interpret_entities_command(
                         "error": str(exc),
                     }
                 logger.debug(
-                    "LLM ответ interpret-entities: entity_id=%s entity_name=%s\n%s",
+                    "LLM response interpret-entities: entity_id=%s entity_name=%s\n%s",
                     entity["id"],
                     entity["name"],
                     text,
@@ -372,7 +432,7 @@ def handle_interpret_entities_command(
                         }
                     )
                     logger.error(
-                        "Ошибка интерпретации сущности %s (%s): %s",
+                        "Entity interpretation error for %s (%s): %s",
                         entity_id or "-",
                         entity_name or "-",
                         item.get("error", ""),
@@ -391,7 +451,7 @@ def handle_interpret_entities_command(
                             )
                         else:
                             logger.debug(
-                                "Сохраняем интерпретацию для сущности %s (%s): %s",
+                                "Saving interpretation for entity %s (%s): %s",
                                 entity_id,
                                 entity_name,
                                 text,
@@ -408,7 +468,7 @@ def handle_interpret_entities_command(
                             }
                         )
                         logger.error(
-                            "Ошибка сохранения интерпретации сущности %s (%s): %s",
+                            "Failed to save interpretation for entity %s (%s): %s",
                             entity_id or "-",
                             entity_name or "-",
                             exc,
@@ -417,7 +477,7 @@ def handle_interpret_entities_command(
                 processed = len(rows) + len(failures)
                 if not dry:
                     progress_width = _write_progress_line(
-                        "Обработано {processed}/{total}: успешно {success}, ошибок {errors}".format(
+                        "Processed {processed}/{total}: success {success}, errors {errors}".format(
                             processed=processed,
                             total=total,
                             success=len(rows),
@@ -441,22 +501,22 @@ def handle_interpret_entities_command(
             failures = []
         if not rows:
             if failures:
-                logger.error("Не удалось интерпретировать ни одной сущности. Ошибок: %d", len(failures))
+                logger.error("Failed to interpret any entities. Errors: %d", len(failures))
                 return constants.ERROR
-            print("Нет сущностей для интерпретации.")
+            print("No entities to interpret.")
             return constants.OK
         if dry:
             print(json.dumps(rows + failures, ensure_ascii=False, indent=2))
             return constants.OK
-        print(f"Интерпретировано: {len(rows)}")
+        print(f"Interpreted: {len(rows)}")
         if failures:
-            print(f"Ошибок: {len(failures)}")
+            print(f"Errors: {len(failures)}")
         return constants.OK
     except RuntimeError as e:
-        logger.error("Ошибка AI-режима: %s", e)
+        logger.error("AI mode error: %s", e)
         return constants.ERROR
     except (LookupError, OSError, ValueError, TimeoutError) as e:
-        logger.error("Сбой интерпретации сущностей: %s", e)
+        logger.error("Entity interpretation failed: %s", e)
         return constants.UNBOUND_ERROR
 
 
@@ -471,27 +531,27 @@ def handle_interpret_blocks_command(
     workers: int = 1,
     dry: bool = False,
 ) -> int:
-    """Интерпретирует блоки и сохраняет краткие и полные интерпретации.
+    """Interpret blocks and save short and full interpretations.
 
     Args:
-        block_ids: Явный список идентификаторов блоков для интерпретации.
-        file_ref: Идентификатор файла или путь к нему, если by_path=true.
-        by_path: Если true, file_ref трактуется как source_ref файла.
-        extra_context: Дополнительный контекст для LLM.
-        ai_model: Имя модели LLM.
-        ai_base_url: Базовый URL AI-сервиса.
-        ai_api_key: Ключ доступа к AI-сервису.
-        workers: Максимальное число параллельных задач.
-        dry: Если true, не сохраняет результат в БД.
+        block_ids: Explicit list of block identifiers to interpret.
+        file_ref: File identifier or path when by_path=true.
+        by_path: If true, treat file_ref as the file source_ref.
+        extra_context: Additional context for the LLM.
+        ai_model: LLM model name.
+        ai_base_url: Base URL of the AI service.
+        ai_api_key: Access key for the AI service.
+        workers: Maximum number of parallel tasks.
+        dry: If true, do not save the result to the database.
 
     Returns:
-        Код завершения CLI-команды.
+        CLI command exit code.
 
     Raises:
-        RuntimeError: Может возникнуть во внутренних AI-вызовах и преобразуется в код ошибки.
-        ValueError: Может возникнуть во внутренних вызовах выборки, валидации и сохранения и преобразуется в код ошибки.
-        LookupError: Может возникнуть во внутренних вызовах БД и преобразуется в код ошибки.
-        TimeoutError: Может возникнуть во внутренних AI-вызовах и преобразуется в код ошибки.
+        RuntimeError: Can be raised by internal AI calls and converted to an error code.
+        ValueError: Can be raised by internal selection, validation, or save calls and converted to an error code.
+        LookupError: Can be raised by internal database calls and converted to an error code.
+        TimeoutError: Can be raised by internal AI calls and converted to an error code.
     """
 
     from .db import (
@@ -501,22 +561,22 @@ def handle_interpret_blocks_command(
         save_block_description,
         save_block_interpretations,
     )
-    from .langchain_name_tags import call_ollama_name_meaning
+    from .langchain_name_tags import get_name_meaning
 
     logger.debug("AI API key configured: %s", bool(ai_api_key))
 
     if bool(block_ids) == bool(file_ref):
-        logger.error("Нужно указать либо --block-id, либо file_ref.")
+        logger.error("Specify either --block-id or file_ref.")
         return constants.UNBOUND_ERROR
     if workers <= 0:
-        logger.error("--workers должен быть больше 0.")
+        logger.error("--workers must be greater than 0.")
         return constants.UNBOUND_ERROR
 
     resolved_file_id = file_ref
     if file_ref is not None and by_path:
         resolved_file_id = asyncio.run(get_file_id_by_source(file_ref))
         if not resolved_file_id:
-            print("Файл не найден в БД.")
+            print("File not found in the database.")
             return constants.NOT_FOUND
 
     chat_url = get_chat_url(ai_base_url)
@@ -531,11 +591,16 @@ def handle_interpret_blocks_command(
         if not blocks:
             return {"rows": [], "failures": []}
         if not dry:
-            print(f"Выбрано блоков: {len(blocks)}")
+            logger.debug(f"Selected blocks: {len(blocks)}")
 
         semaphore = asyncio.Semaphore(workers)
 
-        async def _process(block: dict[str, str]) -> dict[str, object]:
+        async def _process_block(block: dict[str, str]) -> dict[str, object]:
+            logger.debug(
+                f"Start processing block_id={block.get('id', '')}"
+                f" block_name={block.get('name', '')}"
+            )
+            
             async with semaphore:
                 block_id = block["id"]
                 block_name = block["name"]
@@ -558,7 +623,7 @@ def handle_interpret_blocks_command(
                         )
                     short_interpretation = await asyncio.wait_for(
                         asyncio.to_thread(
-                            call_ollama_name_meaning,
+                            get_name_meaning,
                             name=block_text_for_llm,
                             chat_url=chat_url,
                             model=ai_model,
@@ -570,11 +635,11 @@ def handle_interpret_blocks_command(
                     # Request the full block description from the LLM as well.
                     full_description = await asyncio.wait_for(
                         asyncio.to_thread(
-                            call_ollama_name_meaning,
+                            get_name_meaning,
                             name=block_text_for_llm,
                             chat_url=chat_url,
                             model=ai_model,
-                            extra_context=normalized_context + "\nДай максимально подробное описание назначения и структуры этого блока, с деталями для проектировщика.",
+                            extra_context=normalized_context + "\nGive the most detailed possible description of the purpose and structure of this block, including details useful for a designer.",
                             timeout_seconds=llm_timeout_seconds,
                         ),
                         timeout=llm_timeout_seconds + 10.0,
@@ -589,7 +654,7 @@ def handle_interpret_blocks_command(
                         "block_name": block_name,
                         "duration_seconds": duration_seconds,
                         "error": (
-                            "Превышен таймаут ожидания ответа LLM для блока "
+                            "Timed out while waiting for the LLM response for block "
                             f"{block_id} ({block_name})."
                         ),
                     }
@@ -617,7 +682,7 @@ def handle_interpret_blocks_command(
         failures: list[dict[str, object]] = []
         progress_width = 0
         total = len(blocks)
-        tasks = [asyncio.create_task(_process(block)) for block in blocks]
+        tasks = [asyncio.create_task(_process_block(block)) for block in blocks]
         try:
             for task in asyncio.as_completed(tasks):
                 item = await task
@@ -641,7 +706,7 @@ def handle_interpret_blocks_command(
                         }
                     )
                     logger.error(
-                        "Ошибка интерпретации блока %s (%s) за %s: %s",
+                        "Block interpretation error for %s (%s) after %s: %s",
                         block_id or "-",
                         block_name or "-",
                         duration_label,
@@ -689,7 +754,7 @@ def handle_interpret_blocks_command(
                             }
                         )
                         logger.error(
-                            "Ошибка сохранения интерпретации блока %s (%s): %s",
+                            "Failed to save interpretation for block %s (%s): %s",
                             block_id or "-",
                             block_name or "-",
                             exc,
@@ -697,13 +762,13 @@ def handle_interpret_blocks_command(
 
                 if not dry:
                     print(
-                        f"\nБлок {block_name or block_id or '-'} обработан за {duration_label}"
+                        f"\nBlock {block_name or block_id or '-'} processed in {duration_label}"
                     )
 
                 processed = len(rows) + len(failures)
                 if not dry:
                     progress_width = _write_progress_line(
-                        "Обработано {processed}/{total}: успешно {success}, ошибок {errors}".format(
+                        "Processed {processed}/{total}: success {success}, errors {errors}".format(
                             processed=processed,
                             total=total,
                             success=len(rows),
@@ -728,22 +793,22 @@ def handle_interpret_blocks_command(
             failures = []
         if not rows:
             if failures:
-                logger.error("Не удалось интерпретировать ни одного блока. Ошибок: %d", len(failures))
+                logger.error("Failed to interpret any blocks. Errors: %d", len(failures))
                 return constants.ERROR
-            print("Нет блоков для интерпретации.")
+            print("No blocks to interpret.")
             return constants.OK
         if dry:
             print(json.dumps(rows + failures, ensure_ascii=False, indent=2))
             return constants.OK
-        print(f"Интерпретировано блоков: {len(rows)}")
+        print(f"Interpreted blocks: {len(rows)}")
         if failures:
-            print(f"Ошибок: {len(failures)}")
+            print(f"Errors: {len(failures)}")
         return constants.OK
     except RuntimeError as e:
-        logger.error("Ошибка AI-режима: %s", e)
+        logger.error("AI mode error: %s", e)
         return constants.ERROR
     except (LookupError, OSError, ValueError, TimeoutError) as e:
-        logger.error("Сбой интерпретации блоков: %s", e)
+        logger.error("Block interpretation failed: %s", e)
         return constants.UNBOUND_ERROR
 
 
@@ -751,7 +816,7 @@ def handle_verify_extraction_command(
     drawing_path: Path,
     file_id: str | None = None,
 ) -> int:
-    """Сравнивает содержимое DWG/DXF-файла с тем, что уже сохранено в БД."""
+    """Compare DWG/DXF file contents with what is already stored in the database."""
 
     from .verify_extraction import format_verification_report, verify_extraction
 
@@ -760,10 +825,10 @@ def handle_verify_extraction_command(
         print(format_verification_report(report))
         return constants.OK if report["ok"] else constants.ERROR
     except LookupError as e:
-        logger.error("Файл не найден в БД: %s", e, exc_info=True)
+        logger.error("File not found in the database: %s", e, exc_info=True)
         return constants.NOT_FOUND
     except (FileNotFoundError, OSError, ValueError) as e:
-        logger.error("Ошибка верификации: %s", e)
+        logger.error("Verification error: %s", e)
         return constants.ERROR
 
 
@@ -805,12 +870,12 @@ def handle_project_add_command(
     description: str | None,
     created_by: str | None,
 ) -> int:
-    """Создаёт проект."""
+    """Create a project."""
     from .db import create_project
 
     project = asyncio.run(create_project(name=name, description=description, created_by=created_by))
-    print(f"Проект создан: {project['id']}")
-    print(f"Название: {project['name']}")
+    print(f"Project created: {project['id']}")
+    print(f"Name: {project['name']}")
     return constants.OK
 
 
@@ -820,7 +885,7 @@ def handle_project_update_command(
     description: str | None,
     created_by: str | None,
 ) -> int:
-    """Обновляет проект."""
+    """Update a project."""
     from .db import update_project
 
     project = asyncio.run(
@@ -832,32 +897,32 @@ def handle_project_update_command(
         )
     )
     if project is None:
-        print("Проект не найден.")
+        print("Project not found.")
         return constants.NOT_FOUND
 
-    print(f"Проект обновлён: {project['id']}")
-    print(f"Название: {project['name']}")
+    print(f"Project updated: {project['id']}")
+    print(f"Name: {project['name']}")
     return constants.OK
 
 
 def handle_project_delete_command(project_id: str, yes: bool) -> int:
-    """Удаляет проект с подтверждением."""
+    """Delete a project with confirmation."""
     from .db import delete_project
 
     if not yes:
         answer = input(
-            f"Удалить проект {project_id}? Введите YES для подтверждения: "
+            f"Delete project {project_id}? Type YES to confirm: "
         ).strip()
         if answer != "YES":
-            print("Удаление отменено.")
+            print("Deletion cancelled.")
             return constants.ERROR
 
     deleted = asyncio.run(delete_project(project_id=project_id))
     if not deleted:
-        print("Проект не найден.")
+        print("Project not found.")
         return constants.NOT_FOUND
 
-    print(f"Проект удалён: {project_id}")
+    print(f"Project deleted: {project_id}")
     return constants.OK
 
 
@@ -866,16 +931,16 @@ def handle_category_add_command(
     description: str | None,
     parent_id: str | None,
 ) -> int:
-    """Создаёт категорию."""
+    """Create a category."""
     from .db import create_category
 
     category = asyncio.run(
         create_category(name=name, description=description, parent_id=parent_id)
     )
-    print(f"Категория создана: {category['id']}")
-    print(f"Название: {category['name']}")
+    print(f"Category created: {category['id']}")
+    print(f"Name: {category['name']}")
     if category["parent_id"]:
-        print(f"Родитель: {category['parent_id']}")
+        print(f"Parent: {category['parent_id']}")
     return constants.OK
 
 
@@ -885,7 +950,7 @@ def handle_category_update_command(
     description: str | None,
     parent_id: str | None,
 ) -> int:
-    """Обновляет категорию."""
+    """Update a category."""
     from .db import update_category
 
     category = asyncio.run(
@@ -897,39 +962,39 @@ def handle_category_update_command(
         )
     )
     if category is None:
-        print("Категория не найдена.")
+        print("Category not found.")
         return constants.NOT_FOUND
 
-    print(f"Категория обновлена: {category['id']}")
-    print(f"Название: {category['name']}")
+    print(f"Category updated: {category['id']}")
+    print(f"Name: {category['name']}")
     if category["parent_id"]:
-        print(f"Родитель: {category['parent_id']}")
+        print(f"Parent: {category['parent_id']}")
     return constants.OK
 
 
 def handle_category_delete_command(category_id: str, yes: bool) -> int:
-    """Удаляет категорию с подтверждением."""
+    """Delete a category with confirmation."""
     from .db import delete_category
 
     if not yes:
         answer = input(
-            f"Удалить категорию {category_id}? Введите YES для подтверждения: "
+            f"Delete category {category_id}? Type YES to confirm: "
         ).strip()
         if answer != "YES":
-            print("Удаление отменено.")
+            print("Deletion cancelled.")
             return constants.ERROR
 
     deleted = asyncio.run(delete_category(category_id=category_id))
     if not deleted:
-        print("Категория не найдена.")
+        print("Category not found.")
         return constants.NOT_FOUND
 
-    print(f"Категория удалена: {category_id}")
+    print(f"Category deleted: {category_id}")
     return constants.OK
 
 
 def handle_category_list_command(parent_id: str | None) -> int:
-    """Показывает список категорий."""
+    """Show the category list."""
     from .db import list_categories
 
     rows: list[ResultRow] = []
@@ -943,7 +1008,7 @@ def handle_category_list_command(parent_id: str | None) -> int:
             }
         )
     if not rows:
-        print("Нет категорий.")
+        print("No categories.")
         return constants.OK
 
     print_as_table(rows)
@@ -955,7 +1020,7 @@ def handle_file_stat_from_db_command(
     by_path: bool,
     output_path: Path | None,
 ) -> int:
-    """Собирает XLSX-статистику для файла, уже загруженного в БД."""
+    """Collect XLSX statistics for a file already loaded into the database."""
 
     import uuid as _uuid
 
@@ -980,10 +1045,10 @@ def handle_file_stat_from_db_command(
                 try:
                     file_uuid = _uuid.UUID(file_ref)
                 except ValueError:
-                    return None, "Некорректный UUID file_id"
+                    return None, "Invalid file_id UUID"
                 file_entity = await session.get(Entity, file_uuid)
             if not file_entity:
-                return None, "file-сущность не найдена"
+                return None, "File entity not found"
 
             parent_names = []
             parent = file_entity.parent
@@ -1028,7 +1093,7 @@ def handle_file_stat_from_db_command(
 
     stat, err = asyncio.run(collect_db_stat())
     if err:
-        print(f"Ошибка: {err}")
+        print(f"Error: {err}")
         return constants.ERROR
     assert stat is not None
 
@@ -1043,17 +1108,17 @@ def handle_file_stat_from_db_command(
 
     ws_file = wb.active
     assert ws_file is not None
-    ws_file.title = "Файл"
-    ws_file.append(["Параметр", "Значение"])
+    ws_file.title = "File"
+    ws_file.append(["Parameter", "Value"])
     fill = PatternFill(fill_type="solid", fgColor="D9D9D9")
     font = Font(bold=True)
     for cell in ws_file[1]:
         cell.fill = fill
         cell.font = font
-    ws_file.append(["Имя файла", file_entity.name])
+    ws_file.append(["File name", file_entity.name])
     ws_file.append(["MD5", file_entity.entity_md5 or ""])
-    ws_file.append(["Родительские каталоги", " / ".join(parent_dirs)])
-    ws_file.append(["Проект", project])
+    ws_file.append(["Parent directories", " / ".join(parent_dirs)])
+    ws_file.append(["Project", project])
     ws_file.freeze_panes = "A2"
     for row in ws_file.iter_rows():
         for cell in row:
@@ -1063,8 +1128,8 @@ def handle_file_stat_from_db_command(
         width = max((len(line) for value in values for line in value.splitlines()), default=10)
         ws_file.column_dimensions[get_column_letter(col_idx)].width = min(width + 2, 60)
 
-    ws_blocks = wb.create_sheet("Блоки")
-    headers_blocks = ["Наименование", "Таблица", "Добавлен (раз)", "Слои"]
+    ws_blocks = wb.create_sheet("Blocks")
+    headers_blocks = ["Name", "Table", "Insert count", "Layers"]
     ws_blocks.append(headers_blocks)
     for cell in ws_blocks[1]:
         cell.fill = fill
@@ -1073,7 +1138,7 @@ def handle_file_stat_from_db_command(
     for block in blocks:
         ws_blocks.append([
             block.name,
-            "Да" if block.is_table else "Нет",
+            "Yes" if block.is_table else "No",
             "-",
             "-",
         ])
@@ -1085,7 +1150,7 @@ def handle_file_stat_from_db_command(
         width = max((len(line) for value in values for line in value.splitlines()), default=10)
         ws_blocks.column_dimensions[get_column_letter(col_idx)].width = min(width + 2, 60)
 
-    ws_tables = wb.create_sheet("Блоки-таблицы")
+    ws_tables = wb.create_sheet("Table Blocks")
     ws_tables.append(headers_blocks)
     for cell in ws_tables[1]:
         cell.fill = fill
@@ -1094,7 +1159,7 @@ def handle_file_stat_from_db_command(
     for block in table_blocks:
         ws_tables.append([
             block.name,
-            "Да",
+            "Yes",
             "-",
             "-",
         ])
@@ -1106,8 +1171,8 @@ def handle_file_stat_from_db_command(
         width = max((len(line) for value in values for line in value.splitlines()), default=10)
         ws_tables.column_dimensions[get_column_letter(col_idx)].width = min(width + 2, 60)
 
-    ws_prim = wb.create_sheet("Текстовые примитивы")
-    headers_prim = ["Блок", "Тип", "Текст", "Слой", "Локация"]
+    ws_prim = wb.create_sheet("Text Primitives")
+    headers_prim = ["Block", "Type", "Text", "Layer", "Location"]
     ws_prim.append(headers_prim)
     for cell in ws_prim[1]:
         cell.fill = fill
@@ -1136,7 +1201,7 @@ def handle_file_stat_from_db_command(
         else:
             output_path = Path(f"{file_ref}_dbstat.xlsx")
     wb.save(output_path)
-    print(f"Статистика по файлу из БД сохранена: {output_path}")
+    print(f"File statistics from the database were saved: {output_path}")
     return constants.OK
 
 
@@ -1145,7 +1210,7 @@ def handle_export_blocks_xlsx_command(
     by_path: bool,
     output_path: Path | None,
 ) -> int:
-    """Экспортирует сводную таблицу блоков файла из БД в XLSX."""
+    """Export a summary table of file blocks from the database to XLSX."""
 
     import openpyxl
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -1164,15 +1229,15 @@ def handle_export_blocks_xlsx_command(
     wb = openpyxl.Workbook()
     ws = wb.active
     assert ws is not None
-    ws.title = "Блоки"
+    ws.title = "Blocks"
 
     headers = [
-        "Название блока",
-        "Названия связанных слоев",
-        "Интерпретация полная",
-        "Полезные атрибуты",
-        "Интерпретация краткая",
-        "Количество вхождений блока в чертеж",
+        "Block name",
+        "Related layer names",
+        "Full interpretation",
+        "Useful attributes",
+        "Short interpretation",
+        "Block insert count in drawing",
     ]
     ws.append(headers)
 
@@ -1197,12 +1262,12 @@ def handle_export_blocks_xlsx_command(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
-    print(f"XLSX по блокам сохранён: {output_path}")
+    print(f"Blocks XLSX saved: {output_path}")
     return constants.OK
 
 
 def handle_export_interpreted_blocks_xlsx_command(output_path: Path | None) -> int:
-    """Экспортирует в XLSX все блоки с непустой short_interpretation."""
+    """Export all blocks with non-empty short_interpretation to XLSX."""
 
     import openpyxl
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -1213,11 +1278,11 @@ def handle_export_interpreted_blocks_xlsx_command(output_path: Path | None) -> i
     try:
         rows = asyncio.run(list_interpreted_blocks_for_export())
     except (LookupError, OSError, RuntimeError, ValueError) as exc:
-        logger.error("Не удалось собрать интерпретированные блоки: %s", exc)
+        logger.error("Failed to collect interpreted blocks: %s", exc)
         return constants.ERROR
 
     if not rows:
-        print("Нет блоков с непустой short_interpretation.")
+        print("No blocks with non-empty short_interpretation.")
         return constants.OK
 
     if output_path is None:
@@ -1258,7 +1323,7 @@ def handle_export_interpreted_blocks_xlsx_command(output_path: Path | None) -> i
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
-    print(f"XLSX по интерпретированным блокам сохранён: {output_path}")
+    print(f"Interpreted blocks XLSX saved: {output_path}")
     return constants.OK
 
 
@@ -1273,13 +1338,13 @@ def _collect_block_export_rows(
     if by_path:
         file_id = asyncio.run(get_file_id_by_source(file_ref)) or ""
         if not file_id:
-            print("Ошибка: file-сущность не найдена")
+            print("Error: file entity not found")
             return None
 
     try:
         blocks = asyncio.run(list_blocks_for_export(file_id))
     except (LookupError, OSError, ValueError) as exc:
-        logger.error("Не удалось собрать данные блоков для экспорта: %s", exc)
+        logger.error("Failed to collect block data for export: %s", exc)
         return None
 
     line_separator = "\n" if multiline else "; "
@@ -1307,12 +1372,12 @@ def _collect_block_export_rows(
 
         rows.append(
             {
-                "Название блока": str(block.get("name", "") or ""),
-                "Названия связанных слоев": layer_names,
-                "Интерпретация полная": full_interpretation.replace("\n", text_separator),
-                "Полезные атрибуты": formatted_attributes,
-                "Интерпретация краткая": str(block.get("short_interpretation", "") or ""),
-                "Количество вхождений блока в чертеж": insert_count,
+                "Block name": str(block.get("name", "") or ""),
+                "Related layer names": layer_names,
+                "Full interpretation": full_interpretation.replace("\n", text_separator),
+                "Useful attributes": formatted_attributes,
+                "Short interpretation": str(block.get("short_interpretation", "") or ""),
+                "Block insert count in drawing": insert_count,
             }
         )
     return rows
@@ -1323,19 +1388,19 @@ def handle_export_blocks_table_command(
     by_path: bool,
     output_path: Path | None,
 ) -> int:
-    """Печатает сводную текстовую таблицу блоков файла из БД."""
+    """Print a summary text table of file blocks from the database."""
     block_rows = _collect_block_export_rows(file_ref=file_ref, by_path=by_path, multiline=False)
     if block_rows is None:
         return constants.ERROR
     if not block_rows:
-        print("Нет блоков для экспорта.")
+        print("No blocks to export.")
         return constants.OK
 
     table_text = _as_table(block_rows)
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(table_text + "\n", encoding="utf-8")
-        print(f"Текстовая таблица по блокам сохранена: {output_path}")
+        print(f"Block text table saved: {output_path}")
         return constants.OK
 
     print(table_text)
@@ -1343,7 +1408,7 @@ def handle_export_blocks_table_command(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Точка входа CLI."""
+    """CLI entry point."""
 
     parser = build_args_parser()
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -1365,8 +1430,8 @@ def main(argv: list[str] | None = None) -> int:
                 output_path=Path(args.output) if args.output else None,
             )
 
-        case "export-block-png":
-            return_code = handle_export_block_png_command(
+        case "export-block" | "export-block-png":
+            return_code = handle_export_block_command(
                 drawing_path=Path(args.file_path),
                 block_name=args.block_name,
                 output_path=Path(args.output) if args.output else None,
@@ -1374,10 +1439,29 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         case "process":
+            if not args.dry and not args.project:
+                parser.error("the process command requires --project unless --dry is used")
             return_code = handle_process_command(
                 Path(args.path),
                 project_name=args.project,
+                dry=args.dry,
+                detail_level=args.detail_level,
             )
+
+        case "agent-run":
+            return_code = handle_agent_run_command(
+                input_ref=args.input_ref,
+                profile=args.profile,
+                ai_model=args.ai_model,
+                ai_base_url=args.ai_base_url,
+                ai_api_key=args.ai_api_key,
+                workers=args.workers,
+                dry=args.dry,
+                project_name=args.project_name,
+            )
+
+        case "agent-status":
+            return_code = handle_agent_status_command(job_id=args.job_id)
 
         case "interpret-entities":
             return_code = handle_interpret_entities_command(

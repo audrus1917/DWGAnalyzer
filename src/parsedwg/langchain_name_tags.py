@@ -1,6 +1,6 @@
-"""Извлекатель тегов для имён и текстов на базе LangChain.
+"""LangChain-based tag extractor for names and texts.
 
-Модуль импортируется только при явном включении AI-режима.
+This module is imported only when AI mode is explicitly enabled.
 """
 
 from __future__ import annotations
@@ -739,7 +739,7 @@ def build_name_meaning_prompt(
     )
 
 
-def call_ollama_name_meaning(
+def get_name_meaning(
     name: str,
     chat_url: str,
     model: str,

@@ -87,23 +87,23 @@ def _extract_dxf_text(path: Path) -> str:
 
 
 def convert_dwg(path: Path) -> Path:
-    """Конвертирует DWG в DXF и возвращает путь к временному DXF-файлу.
+    """Convert a DWG file to DXF and return the temporary DXF path.
 
     Args:
-        path: Путь к DWG-файлу.
+        path: Path to the DWG file.
 
     Returns:
-        Путь к созданному временному DXF-файлу.
+        Path to the created temporary DXF file.
 
     Raises:
-        RuntimeError: Если ODA File Converter недоступен в PATH.
+        RuntimeError: If ODA File Converter is not available in PATH.
     """
 
     converter = shutil.which("ODAFileConverter") or shutil.which("odafc")
     if converter is None:
         raise RuntimeError(
-            "Для обработки DWG требуется ODA File Converter в PATH. "
-            "Либо загрузите DXF-файл напрямую."
+            "DWG processing requires ODA File Converter in PATH. "
+            "Alternatively, load the DXF file directly."
         )
 
     converted = read_odafc(path)
@@ -113,17 +113,17 @@ def convert_dwg(path: Path) -> Path:
 
 
 def parse_drawing_file(path: str | Path) -> list[ParsedItem]:
-    """Разбирает DWG/DXF-файл и извлекает позиции.
+    """Parse a DWG/DXF file and extract items.
 
     Args:
-        path: Путь к файлу чертежа.
+        path: Path to the drawing file.
 
     Returns:
-        Список извлечённых позиций.
+        List of extracted items.
 
     Raises:
-        RuntimeError: Если для DWG недоступен ODA File Converter.
-        ValueError: Если формат файла не поддерживается.
+        RuntimeError: If ODA File Converter is unavailable for DWG.
+        ValueError: If the file format is unsupported.
     """
     source_path = Path(path)
     suffix = source_path.suffix.lower()
@@ -133,22 +133,22 @@ def parse_drawing_file(path: str | Path) -> list[ParsedItem]:
     elif suffix in {".dxf", ".dxb"}:
         text = _extract_dxf_text(source_path)
     else:
-        raise ValueError("Поддерживаются только файлы DWG и DXF.")
+        raise ValueError("Only DWG and DXF files are supported.")
 
     return parse_text_blob(text, source=source_path.suffix.lower().lstrip("."))
 
 
 def parse_note_file(path: str | Path) -> list[ParsedItem]:
-    """Разбирает текстовую или DOCX-пояснительную записку.
+    """Parse a text or DOCX explanatory note.
 
     Args:
-        path: Путь к пояснительной записке.
+        path: Path to the note file.
 
     Returns:
-        Список извлечённых позиций.
+        List of extracted items.
 
     Raises:
-        ValueError: Если формат файла не поддерживается.
+        ValueError: If the file format is unsupported.
     """
     source_path = Path(path)
     suffix = source_path.suffix.lower()
@@ -165,6 +165,6 @@ def parse_note_file(path: str | Path) -> list[ParsedItem]:
                     lines.append(" - ".join(values))
         text = "\n".join(lines)
     else:
-        raise ValueError("Поддерживаются TXT, RST, MD и DOCX пояснительные записки.")
+        raise ValueError("Only TXT, RST, MD, and DOCX explanatory notes are supported.")
 
     return parse_text_blob(text, source=source_path.suffix.lower().lstrip("."))

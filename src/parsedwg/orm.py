@@ -1,4 +1,4 @@
-"""Основные модели."""
+"""Core models."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def _get_now() -> datetime:
 
 
 class Project(Base):
-    """Проект — это набор сущностей, обычно представляющий один документ или источник данных."""
+    """A project is a group of entities that usually represents one document or data source."""
 
     __tablename__ = "project"
 
@@ -59,9 +59,9 @@ class Category(Base):
         nullable=True,
     )
     name: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    short_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    full_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     aliases: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     parent: Mapped[Category | None] = relationship(
         "Category",
@@ -82,7 +82,7 @@ class Category(Base):
 
 
 class Entity(Base):
-    """Сущность представляет единицу информации, извлечённую из документов."""
+    """An entity represents a unit of information extracted from documents."""
 
     __tablename__ = "entity"
 
@@ -105,7 +105,9 @@ class Entity(Base):
     entity_type: Mapped[EntityType] = mapped_column(Enum(EntityType), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(512), nullable=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    dxf_attribs: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     is_table: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     is_virtual: Mapped[bool | None] = mapped_column(Boolean, default=False, index=True)
     entity_md5: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -115,8 +117,7 @@ class Entity(Base):
     )
     geom: Mapped[str | None] = mapped_column(
         Geometry("GEOMETRY", srid=0),
-        nullable=True,
-        index=True,
+        nullable=True
     )
 
     parent: Mapped[Entity | None] = relationship(
@@ -157,7 +158,7 @@ class Entity(Base):
     )
 
 class EntityEmbedding(Base):
-    """Эмбеддинги и AI-интерпретации для сущности."""
+    """Embeddings and AI interpretations for an entity."""
     __tablename__ = "entity_embedding"
 
     entity_id: Mapped[int] = mapped_column(

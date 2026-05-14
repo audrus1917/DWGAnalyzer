@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(slots=True)
 class ParsedItem:
-    """Нормализованная строка, извлечённая из чертежа или заметки."""
+    """Normalized row extracted from a drawing or note."""
 
     name: str
     quantity: float

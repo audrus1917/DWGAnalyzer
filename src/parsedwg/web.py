@@ -14,7 +14,7 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 app = FastAPI(
     title="parsedwg",
-    description="MVP-сервис для извлечения позиций из DWG/DXF и формирования СО, ВОР и сметы.",
+    description="MVP service for extracting items from DWG/DXF and generating specification, work list, and estimate outputs.",
     version="0.1.0",
 )
 
@@ -35,14 +35,14 @@ async def health() -> dict[str, str]:
 
 @app.post("/process")
 async def process(drawing: UploadFile = File(...), note: UploadFile | None = File(None)) -> Response:
-    """Обрабатывает загруженные файлы и возвращает Excel-отчёт.
+    """Process uploaded files and return an Excel report.
 
     Raises:
-        HTTPException: Если не приложен файл чертежа, входные данные некорректны
-            или позиции не удалось распознать.
+        HTTPException: If the drawing file is missing, the input is invalid,
+            or no items could be recognized.
     """
     if not drawing.filename:
-        raise HTTPException(status_code=400, detail="Нужно приложить файл DWG или DXF.")
+        raise HTTPException(status_code=400, detail="Attach a DWG or DXF file.")
 
     with TemporaryDirectory() as temp_dir:
         workdir = Path(temp_dir)
@@ -62,7 +62,7 @@ async def process(drawing: UploadFile = File(...), note: UploadFile | None = Fil
     if not items:
         raise HTTPException(
             status_code=422,
-            detail="Не удалось распознать позиции. Проверьте подписи на чертеже и формат файла.",
+            detail="Could not recognize any items. Check drawing labels and the input file format.",
         )
 
     filename = f"{Path(drawing.filename).stem}-report.xlsx"

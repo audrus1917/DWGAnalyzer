@@ -8,7 +8,7 @@ from openpyxl.styles import Font
 
 from .models import ParsedItem
 
-HEADERS = ["Наименование", "Ед.", "Количество", "Источник"]
+HEADERS = ["Name", "Unit", "Quantity", "Source"]
 
 
 def _write_headers(sheet, headers: list[str]) -> None:
@@ -19,30 +19,30 @@ def _write_headers(sheet, headers: list[str]) -> None:
 
 
 def build_workbook_bytes(items: list[ParsedItem]) -> bytes:
-    """Строит Excel-книгу с листами СО, ВОР, сметы и сводки.
+    """Build an Excel workbook with specification, work list, estimate, and summary sheets.
 
     Args:
-        items: Список позиций для включения в отчёт.
+        items: Items to include in the report.
 
     Returns:
-        Байтовое содержимое готовой Excel-книги.
+        Byte content of the finished Excel workbook.
 
     Raises:
-        RuntimeError: Если не удалось создать стартовый лист Excel.
+        RuntimeError: If the initial Excel sheet could not be created.
     """
     workbook = Workbook()
 
     so_sheet = workbook.active
     if so_sheet is None:
-        raise RuntimeError("Не удалось создать стартовый лист Excel.")
-    so_sheet.title = "СО"
-    vor_sheet = workbook.create_sheet("ВОР")
-    estimate_sheet = workbook.create_sheet("Смета")
-    summary_sheet = workbook.create_sheet("Сводка")
+        raise RuntimeError("Failed to create the initial Excel sheet.")
+    so_sheet.title = "Specification"
+    vor_sheet = workbook.create_sheet("Work List")
+    estimate_sheet = workbook.create_sheet("Estimate")
+    summary_sheet = workbook.create_sheet("Summary")
 
     _write_headers(so_sheet, HEADERS)
     _write_headers(vor_sheet, HEADERS)
-    _write_headers(estimate_sheet, [*HEADERS[:3], "Цена", "Итого", "Источник"])
+    _write_headers(estimate_sheet, [*HEADERS[:3], "Unit Price", "Total", "Source"])
 
     so_row = 2
     vor_row = 2
@@ -64,13 +64,13 @@ def build_workbook_bytes(items: list[ParsedItem]) -> bytes:
         estimate_sheet.cell(row=estimate_row, column=6, value=item.source)
         estimate_row += 1
 
-    summary_sheet["A1"] = "Дата формирования"
+    summary_sheet["A1"] = "Generated at"
     summary_sheet["B1"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-    summary_sheet["A2"] = "Всего позиций"
+    summary_sheet["A2"] = "Total items"
     summary_sheet["B2"] = len(items)
-    summary_sheet["A3"] = "Оборудование и материалы"
+    summary_sheet["A3"] = "Equipment and materials"
     summary_sheet["B3"] = sum(1 for item in items if item.section in {"equipment", "materials"})
-    summary_sheet["A4"] = "Работы"
+    summary_sheet["A4"] = "Works"
     summary_sheet["B4"] = sum(1 for item in items if item.section == "works")
 
     buffer = BytesIO()

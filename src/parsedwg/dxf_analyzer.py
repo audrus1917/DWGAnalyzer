@@ -1,35 +1,39 @@
-"""Утилиты для анализа DXF и извлечения данных."""
+"""Utilities for DXF analysis and data extraction."""
 
-from typing import Any, Optional
-
+from typing import Any
+import sys
 import logging
 import re
 
+from ezdxf import entities as dfx_entities
 from ezdxf.document import Drawing
 from ezdxf import path
 from ezdxf.math import area as math_area
 from ezdxf.tools.text import MTextEditor
+from ezdxf.addons.geo import GeoProxy
+import ezdxf_shapely
 
-from .constants import ENTITY_TYPES
+from src.parsedwg.constants import ENTITY_TYPES
+from src.parsedwg.schemas import BlockDescription
 
 logger = logging.getLogger(__name__)
 
 
 class DXFAnalyzer:
-    """Анализирует DXF-содержимое и извлекает данные."""
+    """Analyze DXF content and extract structured data."""
 
     def __init__(self, drawing: Drawing):
         self.drawing = drawing
 
     @staticmethod
     def is_point_like(value: object) -> bool:
-        """Проверяет, похоже ли значение на точку.
+        """Return whether a value looks like a point.
 
         Args:
-            value: Проверяемое значение.
+            value: Value to inspect.
 
         Returns:
-            True, если значение похоже на точку.
+            True if the value looks like a point.
         """
 
         if hasattr(value, "x") and hasattr(value, "y"):
@@ -47,16 +51,16 @@ class DXFAnalyzer:
 
     @staticmethod
     def format_point(point: Any | None) -> list[float] | None:
-        """Приводит точечное значение к согласованному виду.
+        """Normalize a point-like value into a consistent coordinate list.
 
         Args:
-            point: Точка или tuple-like значение координат.
+            point: Point object or tuple-like coordinate value.
 
         Returns:
-            Список координат или None.
+            Coordinate list or None.
 
         Raises:
-            ValueError: Если point не является точкой и не приводится к координатам.
+            ValueError: If point is not point-like and cannot be converted.
         """
 
         if point is None:
@@ -74,21 +78,21 @@ class DXFAnalyzer:
                 py = float(point[1])
                 pz = float(point[2]) if len(point) >= 3 else 0.0
             except (TypeError, ValueError) as e:
-                logger.warning(f"Не удалось преобразовать точку: {e}")
+                logger.warning("Failed to convert point: %s", e)
                 raise
 
             return [px, py, pz]
-        raise ValueError(f"Значение не являетсяпохоже на точку: {point}")
-    
+        raise ValueError(f"Value is not point-like: {point}")
+
     @staticmethod
     def get_text(entity) -> str:
-        """Извлекает текст из сущностей TEXT или MTEXT, если он есть.
+        """Extract text from TEXT or MTEXT entities when present.
 
         Args:
-            entity: DXF-сущность.
+            entity: DXF entity.
 
         Returns:
-            Текст сущности или пустую строку.
+            Entity text or an empty string.
         """
 
         entity_type = entity.dxftype()
@@ -102,13 +106,13 @@ class DXFAnalyzer:
 
     @classmethod
     def get_virtual_entities(cls, entity):
-        """Рекурсивно собирает виртуальные сущности для INSERT.
+        """Recursively collect virtual entities for an INSERT.
 
         Args:
-            entity: DXF-сущность, потенциально содержащая virtual_entities.
+            entity: DXF entity that may expose virtual_entities.
 
         Returns:
-            Список виртуальных дочерних сущностей.
+            List of virtual child entities.
         """
         children = []
         for ch in entity.virtual_entities():
@@ -123,29 +127,29 @@ class DXFAnalyzer:
 
     @classmethod
     def get_entity_data(
-        cls, 
-        entity, 
-        parent, 
-        layout: Any | None = None, 
+        cls,
+        entity,
+        parent,
+        layout: Any | None = None,
         is_virtual: bool = False
     ) -> dict[str, Any] | None:
-        """Возвращает данные DXF-сущности.
+        """Return structured data for a DXF entity.
 
         Args:
-            entity: DXF-сущность.
-            parent: Родительский layout или блок.
-            layout: Layout, в котором расположена сущность.
+            entity: DXF entity.
+            parent: Parent layout or block.
+            layout: Layout that contains the entity.
 
         Returns:
-            Словарь с данными сущности или None для неподдерживаемого типа.
+            Entity payload, or None for an unsupported type.
         """
 
         dxftype = entity.dxftype()
 
         if dxftype not in ENTITY_TYPES:
-            logger.warning(f"Неизвестный тип сущности: {dxftype}. Будет обработан как PRIMITIVE.")
+            logger.warning("Unknown entity type: %s. It will be treated as PRIMITIVE.", dxftype)
             return None
-        
+
         entity_data = {
             "type": ENTITY_TYPES[dxftype],
             "parent": parent,
@@ -154,10 +158,11 @@ class DXFAnalyzer:
             "is_virtual": is_virtual
         }
 
-        # Если есть текст
+        # Attach textual content when present.
         if text_value := cls.get_text(entity):
-            entity_data["description"] = re.sub(r"\s+", " ", text_value).strip()
+            entity_data["short_description"] = re.sub(r"\s+", " ", text_value).strip()
 
+        # Preserve raw DXF attributes in a normalized form.
         dxf_attribs: dict[str, Any] = {}
         for attr_name, value in entity.dxf.all_existing_dxf_attribs().items():
             if cls.is_point_like(value):
@@ -166,12 +171,13 @@ class DXFAnalyzer:
                 dxf_attribs[attr_name] = value
         if dxf_attribs:
             entity_data["dxf_attribs"] = dxf_attribs
-            
+
+
         match dxftype:
             case "INSERT":
                 entity_data["target_block"] = entity.dxf.name
                 entity_data["attribs"] = {
-                    attr.dxf.tag: cls.format_point(attr.dxf.text) 
+                    attr.dxf.tag: cls.format_point(attr.dxf.text)
                     if cls.is_point_like(attr.dxf.text) else attr.dxf.text
                     for attr in entity.attribs
                 }
@@ -180,25 +186,48 @@ class DXFAnalyzer:
                 if children:
                     entity_data["children"] = [
                         cls.get_entity_data(
-                            ch, 
-                            parent=entity, 
-                            layout=layout, 
+                            ch,
+                            parent=entity,
+                            layout=layout,
                             is_virtual=True
                         ) for ch in children
                     ]
 
             case "LWPOLYLINE":
+                logger.debug("`LWPOLYLINE` case: %s", entity)
+                logger.debug("LWPOLYLINE is closed? %s", entity.is_closed)
                 points = entity.get_points("xy")
-                entity_data["points"] = [cls.format_point(point) for point in points]
+                logger.debug("Points: %s", points)
+                wkt_geom = None
+                try:
+                    wkt_geom = ezdxf_shapely.convert_lwpolyline(entity)
+                except Exception as e:
+                    logger.error("Error converting LWPOLYLINE: %s", e)
+                    dxf_geom = GeoProxy.from_dxf_entities(entity)
+                    print(dxf_geom)
+                    # shapely_geom = dxf_geom.geometry[0]
+                    # wkt_geom = shapely_geom.wkt
+
+                    # shapely_geom = proxy.geometry # Requires shapely
+                    # wkt_geom = shapely_geom.wkt
+                    # logger.debug(f"Closed 2-point LWPOLYLINE WKT: {wkt_geom}")
+
+                if wkt_geom is not None:
+                    entity_data["geom"] = wkt_geom
+                    logger.debug("LWPOLYLINE GEOM: %s", wkt_geom)
+
             case "POLYLINE":
-                points = [vertex.dxf.location.xyz for vertex in entity.vertices]
-                entity_data["points"] = [cls.format_point(point) for point in points]
-            case "LINE":
-                entity_data["start"] = cls.format_point(entity.dxf.start)
-                entity_data["end"] = cls.format_point(entity.dxf.end)
-                entity_data["geom"] = "LINESTRING({} {}, {} {})".format(
-                    entity.dxf.start.x, entity.dxf.start.y, entity.dxf.end.x, entity.dxf.end.y
-                )
+                logger.debug("POLYLINE is closed? %s", entity.is_closed)
+                logger.debug("Is instance of dfx_entities.Polyline? %s", isinstance(entity, dfx_entities.Polyline))
+                # geom = ezdxf_shapely.convert_(entity)
+                # if geom is not None:
+                #     entity_data["geom"] = geom.wkt
+                #     logger.debug("POLYLINE GEOM: %s", geom.wkt)
+            # case "LINE":
+            #     geom = ezdxf_shapely.convert_line(entity)
+            #     if geom is not None:
+            #         entity_data["geom"] = geom.wkt
+            #         logger.debug("LINE GEOM: %s", geom.wkt)
             case "CIRCLE":
                 entity_data["center"] = cls.format_point(entity.dxf.center)
                 entity_data["radius"] = entity.dxf.radius
@@ -231,24 +260,26 @@ class DXFAnalyzer:
                     entity_data["name"] = entity.dxf.pattern_name
                     hatch_path = path.make_path(entity)
                     vertices = list(hatch_path.flattening(distance=0.01))
-            
-                    # Формируем строку координат для WKT
+
+                    # Build the coordinate list for WKT.
                     coords = ", ".join([f"{p.x} {p.y}" for p in vertices])
-                        
-                    # Замыкаем полигон, если первая и последняя точки разные
+
+                    # Close the polygon if the first and last vertices differ.
                     if vertices[0] != vertices[-1]:
                         coords += f", {vertices[0].x} {vertices[0].y}"
-                            
+
+                    total_length = sum(p1.distance(p2) for p1, p2 in zip(vertices, vertices[1:]))
+                    entity_data["data"] = {}
+                    entity_data["data"]["length"] = total_length
                     entity_data["geom"] = f"POLYGON(({coords}))"
-                    entity_data["area"] = math_area(vertices)
-
-
+                    entity_data["data"]["area"] = math_area(vertices)
                 except TypeError as e:
-                    logger.warning(f"Не удалось обработать HATCH-сущность: {e}")
+                    logger.warning("Failed to process HATCH entity: %s", e)
                 except Exception as e:
-                    entity_data["points"] = []    
+                    logger.error("Error while processing HATCH entity: %s", e)
+
             case "MULTILEADER":
-                # Аннотации
+                # Annotation leader segments.
                 line_segments = []
                 for c_entity in entity.virtual_entities():
                     if c_entity.dxftype() == 'LINE':
@@ -260,7 +291,7 @@ class DXFAnalyzer:
                         for i in range(len(points) - 1):
                             start = points[i]
                             end = points[i + 1]
-                            line_segments.append(f"({start[0]} {start[1]}, {end[0]} {end[1]})")    
+                            line_segments.append(f"({start[0]} {start[1]}, {end[0]} {end[1]})")
                     elif c_entity.dxftype() == 'LWPOLYLINE':
                         points = c_entity.get_points("xy")
                         for i in range(len(points) - 1):
@@ -270,57 +301,43 @@ class DXFAnalyzer:
 
                 entity_text = entity.get_mtext_content() if hasattr(entity, "get_mtext_content") else ""
                 if entity_text:
-                    # FIXME: убрать
                     clean_text = MTextEditor(entity_text).text
-                    entity_data["description"] = re.sub(r"\s+", " ", clean_text).strip()
+                    entity_data["short_description"] = re.sub(r"\s+", " ", clean_text).strip()
 
-                # print(f"MLEADER: {entity_text}")
-                # for leader in entity.context.leaders:
-                #     for line in leader.lines:
-                #         # line.vertices — это список точек (Vector)
-                #         # Первая точка [0] — это кончик стрелки
-                #         arrow_tip = line.vertices[0]
-                        
-                #         print(f"ID: {entity.dxf.handle}")
-                #         print(f"Кончик стрелки (X, Y, Z): {arrow_tip}")
-
-                # Формируем WKT для MultiLineString
+                # Build WKT for the MultiLineString.
                 multiline_wkt = f"MULTILINESTRING({', '.join(line_segments)})"
                 entity_data["geom"] = f"{multiline_wkt}"
 
         return entity_data
-    
+
     @classmethod
     def analyze_block(
         cls,
         doc: Drawing,
-        block_name, 
-        data=None, 
+        block_name,
+        block_data=None,
         processed=None
     ):
-        if data is None:
-            data = {
-                "primitives_layers": set(), 
-                "nested_blocks": set(),
-                "text_content": set(),
-                "attdefs": []  # Список определений атрибутов
-            }
+        """Recursively analyze a block definition to extract layers, nested blocks, and text."""
+        if block_data is None:
+            block_data = BlockDescription()
+
         if processed is None:
             processed = set()
 
         if block_name in processed:
-            return data
+            return block_data
         processed.add(block_name)
 
         block_def = doc.blocks.get(block_name)
         if not block_def:
-            return data
+            return block_data
 
         for entity in block_def:
-            # 1. Слои
-            data["primitives_layers"].add(entity.dxf.layer)
-            
-            # 2. Текст (TEXT и MTEXT)
+            # 1. Layers.
+            block_data.primitives_layers.add(entity.dxf.layer)
+
+            # 2. Text content (TEXT and MTEXT).
             val = None
             if entity.dxftype() == 'TEXT':
                 val = entity.dxf.text.strip()
@@ -328,63 +345,52 @@ class DXFAnalyzer:
                 plain_text = getattr(entity, "plain_text", None)
                 if callable(plain_text):
                     val = str(plain_text()).rstrip()
-                if val: 
-                    data["text_content"].add(val)
-            
-            # 3. ATTDEFS (Определения атрибутов)
+                if val:
+                    block_data.text_content.add(val)
+
+            # 3. ATTDEFS (attribute definitions).
             if entity.dxftype() == 'ATTDEF':
-                data["attdefs"].append({
+                block_data.attdefs.append({
                     "tag": entity.dxf.tag,
-                    "prompt": getattr(entity.dxf, 'prompt', ''), # Подсказка для пользователя
-                    "default": entity.dxf.text # Значение по умолчанию
+                    "prompt": getattr(entity.dxf, 'prompt', ''), # User-facing prompt.
+                    "default": entity.dxf.text # Default value.
                 })
-            
-            # 4. Рекурсия для вложенных вставок
+
+            # 4. Recurse into nested inserts.
             if entity.dxftype() == 'INSERT':
                 nested_name = entity.dxf.name
-                data["nested_blocks"].add(nested_name)
-                cls.analyze_block(doc, nested_name, data, processed)
-                
-        return data
+                block_data.nested_blocks.add(nested_name)
+                cls.analyze_block(doc, nested_name, block_data, processed)
+
+        return block_data
 
     @classmethod
-    def get_block_decsription(
+    def get_short_block_description(
         cls,
-        doc: Drawing, 
+        doc: Drawing,
         block_name: str
-    ) -> dict[str, Any]:
-        """Возвращает описание DXF-блока.
+    ) -> BlockDescription:
+        """Return a DXF block description.
 
         Args:
-            doc: Загруженный чертёж ezdxf.
-            block_name: Имя блока.
+            doc: Loaded ezdxf drawing.
+            block_name: Block name.
 
         Returns:
-            Сводное описание блока.
+            Summary description of the block.
 
         Raises:
-            ValueError: Если блок с именем block_name не найден в файле.
+            ValueError: If block_name is not found in the file.
         """
 
         msp = doc.modelspace()
         block = doc.blocks.get(block_name)
         if block is None:
-            logger.error("Блок '%s' не найден в файле.", block_name)
-            raise ValueError(f"Блок '{block_name}' не найден в файле.")
+            logger.error("Block '%s' not found in the file.", block_name)
+            raise ValueError(f"Block '{block_name}' not found in the file.")
 
-        internal = cls.analyze_block(doc, block_name)
-        block_info = {
-            "block_name": block_name
-        }
-        
-        if primitives_layers := list(internal["primitives_layers"]):
-            block_info["primitives_layers"] = primitives_layers
-        if nested_blocks := list(internal["nested_blocks"]):
-            block_info["nested_blocks"] = nested_blocks
-        if text_content := list(internal["text_content"]):
-            block_info["text_content"] = text_content
-        if attdefs := internal["attdefs"]:
-            block_info["attdefs"] = attdefs
+        block_info: BlockDescription = cls.analyze_block(doc, block_name)
+        block_info.block_name = block_name
 
         inserts = msp.query(f'INSERT[name=="{block.name}"]')
         insert_samples = []
@@ -393,7 +399,7 @@ class DXFAnalyzer:
         for entity in inserts:
             if entity.dxf.layer:
                 insert_layers.append(entity.dxf.layer)
-            if entity.attribs and idx < 3:  # Собираем атрибуты максимум из 3 вставок для примера
+            if entity.attribs and idx < 3:  # Capture sample attributes from up to 3 inserts.
                 sample_attribs = {}
                 for attr in entity.attribs:
                     sample_attribs[attr.dxf.tag] = attr.dxf.text
@@ -401,5 +407,5 @@ class DXFAnalyzer:
                 idx += 1
 
         if insert_samples:
-            block_info["insert_samples"] = insert_samples
+            block_info.insert_samples = insert_samples
         return block_info

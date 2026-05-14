@@ -1,8 +1,8 @@
-"""create
+"""create all
 
-Revision ID: 8dd3a74ef6f6
+Revision ID: aa29b58a2b20
 Revises: 
-Create Date: 2026-05-06 18:12:00.412556
+Create Date: 2026-05-13 20:09:06.917573
 
 """
 from typing import Sequence, Union
@@ -11,11 +11,12 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-import pgvector
 import geoalchemy2
+import pgvector
+
 
 # revision identifiers, used by Alembic.
-revision: str = '8dd3a74ef6f6'
+revision: str = 'aa29b58a2b20'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -28,7 +29,8 @@ def upgrade() -> None:
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('parent_id', sa.Integer(), nullable=True),
     sa.Column('name', sa.String(length=512), nullable=False),
-    sa.Column('description', sa.Text(), nullable=True),
+    sa.Column('short_description', sa.Text(), nullable=True),
+    sa.Column('full_description', sa.Text(), nullable=True),
     sa.Column('aliases', postgresql.ARRAY(sa.String()), nullable=True),
     sa.ForeignKeyConstraint(['parent_id'], ['category.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
@@ -48,19 +50,24 @@ def upgrade() -> None:
     sa.Column('file_id', sa.Integer(), nullable=True),
     sa.Column('project_id', sa.Integer(), nullable=True),
     sa.Column('entity_type', sa.Enum('FOLDER', 'FILE', 'ZIPFILE', 'ZIPPED_FILE', 'BLOCK', 'LAYOUT', 'LAYER', '_3DFACE', '_3DSOLID', 'ACAD_PROXY_ENTITY', 'ARC', 'ATTDEF', 'ATTRIB', 'BODY', 'CIRCLE', 'COORDINATION_MODEL', 'DIMENSION', 'ELLIPSE', 'HATCH', 'HELIX', 'IMAGE', 'INSERT', 'LEADER', 'LIGHT', 'LINE', 'LWPOLYLINE', 'MESH', 'MLEADER', 'MLEADERSTYLE', 'MLINE', 'MTEXT', 'OLEFRAME', 'OLE2FRAME', 'POINT', 'POLYLINE', 'RAY', 'REGION', 'SECTION', 'SEQEND', 'SHAPE', 'SOLID', 'SPLINE', 'SUN', 'SURFACE', 'TABLE', 'TEXT', 'TOLERANCE', 'TRACE', 'UNDERLAY', 'VERTEX', 'VIEWPORT', 'WIPEOUT', 'XLINE', 'PRIMITIVE', 'ACAD_TABLE', 'MULTILEADER', name='entitytype'), nullable=False),
-    sa.Column('name', sa.String(length=512), nullable=False),
+    sa.Column('name', sa.String(length=512), nullable=True),
     sa.Column('description', sa.Text(), nullable=True),
     sa.Column('data', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('dxf_attribs', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
     sa.Column('is_table', sa.Boolean(), nullable=True),
+    sa.Column('is_virtual', sa.Boolean(), nullable=True),
     sa.Column('entity_md5', sa.String(length=32), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('geom', geoalchemy2.types.Geometry(srid=0, dimension=2, from_text='ST_GeomFromEWKT', name='geometry'), nullable=True),
     sa.ForeignKeyConstraint(['file_id'], ['entity.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['parent_id'], ['entity.id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['project_id'], ['project.id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('id')
     )
+    # op.create_index('idx_entity_geom', 'entity', ['geom'], unique=False, postgresql_using='gist')
     op.create_index(op.f('ix_entity_created_at'), 'entity', ['created_at'], unique=False)
     op.create_index(op.f('ix_entity_entity_type'), 'entity', ['entity_type'], unique=False)
+    op.create_index(op.f('ix_entity_is_virtual'), 'entity', ['is_virtual'], unique=False)
     op.create_index(op.f('ix_entity_name'), 'entity', ['name'], unique=False)
     op.create_table('category_to_entity',
     sa.Column('category_id', sa.Integer(), nullable=False),
@@ -86,32 +93,6 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['src_id'], ['entity.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('src_id', 'dst_id', 'link')
     )
-    op.create_table('primitives',
-    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
-    sa.Column('parent_id', sa.Integer(), nullable=False),
-    sa.Column('file_id', sa.Integer(), nullable=False),
-    sa.Column('project_id', sa.Integer(), nullable=True),
-    sa.Column('layer_id', sa.Integer(), nullable=True),
-    sa.Column('entity_type', sa.Enum('FOLDER', 'FILE', 'ZIPFILE', 'ZIPPED_FILE', 'BLOCK', 'LAYOUT', 'LAYER', '_3DFACE', '_3DSOLID', 'ACAD_PROXY_ENTITY', 'ARC', 'ATTDEF', 'ATTRIB', 'BODY', 'CIRCLE', 'COORDINATION_MODEL', 'DIMENSION', 'ELLIPSE', 'HATCH', 'HELIX', 'IMAGE', 'INSERT', 'LEADER', 'LIGHT', 'LINE', 'LWPOLYLINE', 'MESH', 'MLEADER', 'MLEADERSTYLE', 'MLINE', 'MTEXT', 'OLEFRAME', 'OLE2FRAME', 'POINT', 'POLYLINE', 'RAY', 'REGION', 'SECTION', 'SEQEND', 'SHAPE', 'SOLID', 'SPLINE', 'SUN', 'SURFACE', 'TABLE', 'TEXT', 'TOLERANCE', 'TRACE', 'UNDERLAY', 'VERTEX', 'VIEWPORT', 'WIPEOUT', 'XLINE', 'PRIMITIVE', name='entitytype'), nullable=False),
-    sa.Column('name', sa.String(length=512), nullable=True),
-    sa.Column('data', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    sa.Column('geom', geoalchemy2.types.Geometry(srid=4326, dimension=2, from_text='ST_GeomFromEWKT', name='geometry'), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
-    sa.ForeignKeyConstraint(['file_id'], ['entity.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['layer_id'], ['entity.id'], ondelete='SET NULL'),
-    sa.ForeignKeyConstraint(['parent_id'], ['entity.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['project_id'], ['project.id'], ondelete='SET NULL'),
-    sa.PrimaryKeyConstraint('id')
-    )
-    # op.create_index('idx_primitives_geom', 'primitives', ['geom'], unique=False, postgresql_using='gist')
-    op.create_index(op.f('ix_primitives_created_at'), 'primitives', ['created_at'], unique=False)
-    op.create_index(op.f('ix_primitives_entity_type'), 'primitives', ['entity_type'], unique=False)
-    op.create_index(op.f('ix_primitives_file_id'), 'primitives', ['file_id'], unique=False)
-    op.create_index(op.f('ix_primitives_geom'), 'primitives', ['geom'], unique=False)
-    op.create_index(op.f('ix_primitives_layer_id'), 'primitives', ['layer_id'], unique=False)
-    op.create_index(op.f('ix_primitives_name'), 'primitives', ['name'], unique=False)
-    op.create_index(op.f('ix_primitives_parent_id'), 'primitives', ['parent_id'], unique=False)
-    op.create_index(op.f('ix_primitives_project_id'), 'primitives', ['project_id'], unique=False)
     # op.drop_table('spatial_ref_sys')
     # ### end Alembic commands ###
 
@@ -128,22 +109,14 @@ def downgrade() -> None:
     sa.CheckConstraint('srid > 0 AND srid <= 998999', name=op.f('spatial_ref_sys_srid_check')),
     sa.PrimaryKeyConstraint('srid', name=op.f('spatial_ref_sys_pkey'))
     )
-    op.drop_index(op.f('ix_primitives_project_id'), table_name='primitives')
-    op.drop_index(op.f('ix_primitives_parent_id'), table_name='primitives')
-    op.drop_index(op.f('ix_primitives_name'), table_name='primitives')
-    op.drop_index(op.f('ix_primitives_layer_id'), table_name='primitives')
-    op.drop_index(op.f('ix_primitives_geom'), table_name='primitives')
-    op.drop_index(op.f('ix_primitives_file_id'), table_name='primitives')
-    op.drop_index(op.f('ix_primitives_entity_type'), table_name='primitives')
-    op.drop_index(op.f('ix_primitives_created_at'), table_name='primitives')
-    op.drop_index('idx_primitives_geom', table_name='primitives', postgresql_using='gist')
-    op.drop_table('primitives')
     op.drop_table('entity_to_entity')
     op.drop_table('entity_embedding')
     op.drop_table('category_to_entity')
     op.drop_index(op.f('ix_entity_name'), table_name='entity')
+    op.drop_index(op.f('ix_entity_is_virtual'), table_name='entity')
     op.drop_index(op.f('ix_entity_entity_type'), table_name='entity')
     op.drop_index(op.f('ix_entity_created_at'), table_name='entity')
+    # op.drop_index('idx_entity_geom', table_name='entity', postgresql_using='gist')
     op.drop_table('entity')
     op.drop_table('project')
     op.drop_index(op.f('ix_category_name'), table_name='category')

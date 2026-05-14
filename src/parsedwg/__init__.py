@@ -1,4 +1,4 @@
-"""Пакет parsedwg."""
+"""parsedwg package."""
 
 from .explorer import DXFExplorer
 from .models import ParsedItem
