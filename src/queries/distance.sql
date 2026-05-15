@@ -4,12 +4,9 @@ SELECT
     b.name,
     b.description,
     ST_AsText(b.geom),
-    ST_Distance(b.geom, a.geom) as dist
 FROM 
     entity AS b
 JOIN
-    entity AS a ON true
-WHERE a.id = 1525955
-ORDER BY 
-    a.geom <-> b.geom
-LIMIT 100;
+    entity AS a ON a.geom is not null AND ST_Intersects(a.geom, b.geom)
+WHERE a.id = 422755 
+LIMIT 10;

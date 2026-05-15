@@ -1,7 +1,7 @@
 import uuid
 from pathlib import Path
 
-from parsedwg.process_source import drawing_to_db
+from parsedwg.process_source import save_to_db
 from src.parsedwg.orm import Entity, EntityType
 
 
@@ -61,7 +61,7 @@ def test_drawing_to_db_sets_file_id_for_all_descendants(tmp_path: Path, monkeypa
 
     monkeypatch.setattr("parsedwg.process_source.session_factory", fake_session_factory)
 
-    drawing_to_db(tmp_path, [processed_entry], project_id=100)
+    save_to_db(tmp_path, [processed_entry], project_id=100)
 
     file_entity = next(entity for entity in added_entities if entity.entity_type == EntityType.FILE)
     descendants = [
@@ -135,7 +135,7 @@ def test_drawing_to_db_commits_primitives_in_batches(tmp_path: Path, monkeypatch
 
     monkeypatch.setattr("parsedwg.process_source.session_factory", fake_session_factory)
 
-    drawing_to_db(tmp_path, [processed_entry], project_id=100)
+    save_to_db(tmp_path, [processed_entry], project_id=100)
 
     assert primitive_entity_batch_sizes == [1000, 1]
     assert commit_calls == 2
@@ -212,7 +212,7 @@ def test_drawing_to_db_saves_high_detail_payloads(tmp_path: Path, monkeypatch) -
 
     monkeypatch.setattr("parsedwg.process_source.session_factory", fake_session_factory)
 
-    drawing_to_db(tmp_path, [processed_entry], project_id=100, detail_level="high")
+    save_to_db(tmp_path, [processed_entry], project_id=100, detail_level="high")
 
     block_entity = next(entity for entity in added_entities if entity.entity_type == EntityType.BLOCK)
     primitive_entity = next(entity for entity in added_entities if entity.entity_type == EntityType.TEXT)
@@ -306,7 +306,7 @@ def test_drawing_to_db_prunes_payloads_for_low_detail(tmp_path: Path, monkeypatc
 
     monkeypatch.setattr("parsedwg.process_source.session_factory", fake_session_factory)
 
-    drawing_to_db(tmp_path, [processed_entry], project_id=100, detail_level="low")
+    save_to_db(tmp_path, [processed_entry], project_id=100, detail_level="low")
 
     block_entity = next(entity for entity in added_entities if entity.entity_type == EntityType.BLOCK)
     primitive_entity = next(entity for entity in added_entities if entity.entity_type == EntityType.TEXT)

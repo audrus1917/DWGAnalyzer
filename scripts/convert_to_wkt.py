@@ -9,6 +9,7 @@ from pathlib import Path
 
 import ezdxf
 from ezdxf.entities.dxfgfx import DXFGraphic
+from ezdxf.math import Matrix44
 
 from ezdxf.addons.geo import GeoProxy
 
@@ -25,11 +26,17 @@ def convert_dxf(dxf_path):
     doc = ezdxf.readfile(dxf_path)
     msp = doc.modelspace()
 
+    projection_matrix = Matrix44.scale(1, 1, 0)
     # Выбираем все базовые графические примитивы
     entities = msp.query("POINT LINE LWPOLYLINE POLYLINE ARC CIRCLE SPLINE SOLID HATCH")
 
     entity: DXFGraphic
     for entity in entities:
+        try:
+            entity.transform(projection_matrix)
+        except (AttributeError, TypeError):
+            # Пропускаем объекты, которые не поддерживают трансформацию матрицей
+            pass
         try:
             logger.debug("" * 30)
             logger.debug(f"DXF type: {entity.dxftype()}, на слое: {entity.dxf.layer}")

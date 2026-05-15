@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Generator, Protocol, cast
 
-import hashlib
+import sys
 import logging
 import tempfile
 import zipfile
@@ -12,7 +12,7 @@ import zipfile
 from pathlib import Path
 
 from ezdxf.document import Drawing
-from sqlalchemy import func, select
+from sqlalchemy import func, select, exc as sa_exc
 
 from src.parsedwg.constants import ENTITY_TYPES, EntityType
 from src.parsedwg.db import session_factory
@@ -75,12 +75,8 @@ def _extract_primitive_location(primitive_payload: dict[str, object]) -> object 
     return None
 
 
-def _build_block_storage_payload(
-    block: dict[str, object],
-    detail_level: str,
-) -> tuple[str, dict[str, object]]:
-    rank = _detail_rank(detail_level)
-    block_data: dict[str, object] = {
+def get_block_payload(block: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    block_data: dict[str, Any] = {
         "entity_count": int(block.get("entity_count", 0) or 0),
     }
 
@@ -91,30 +87,22 @@ def _build_block_storage_payload(
     if not isinstance(description, dict):
         return str(description or ""), block_data
 
-    if rank >= 1:
-        for key in ("primitives_layers", "nested_blocks"):
-            value = description.get(key)
-            if value not in (None, "", [], {}):
-                block_data[key] = value
+    for key in ("primitives_layers", "nested_blocks"):
+        value = description.get(key)
+        if value not in (None, "", [], {}):
+            block_data[key] = value
 
-    if rank >= 2:
-        for key in ("text_content", "attdefs", "insert_samples"):
-            value = description.get(key)
-            if value not in (None, "", [], {}):
-                block_data[key] = value
+    for key in ("text_content", "attdefs", "insert_samples"):
+        value = description.get(key)
+        if value not in (None, "", [], {}):
+            block_data[key] = value
 
-    if rank == 0:
-        return "", block_data
-
-    if rank == 1:
-        compact_description = {
-            key: block_data[key]
-            for key in ("primitives_layers", "nested_blocks")
-            if key in block_data
-        }
-        return str(compact_description), block_data
-
-    return str(description), block_data
+    compact_description = {
+        key: block_data[key]
+        for key in ("primitives_layers", "nested_blocks")
+        if key in block_data
+    }
+    return str(compact_description), block_data
 
 
 def get_primitive_payload(
@@ -269,10 +257,13 @@ def _build_entity_text(text_value: str | None):
 
 
 def _build_entity_embedding(text_value: str | None) -> EntityEmbedding | None:
-    entity_text = _build_entity_text(text_value)
-    if entity_text is None:
-        return None
-    return EntityEmbedding(entity_text=entity_text)
+    # FIXME: required to solve
+    return None
+    # Make the separate CLI-command
+    # entity_text = _build_entity_text(text_value)
+    # if entity_text is None:
+    #     return None
+    # return EntityEmbedding(entity_text=entity_text)
 
 
 def _coerce_entity_type(value: object) -> EntityType:
@@ -391,7 +382,7 @@ def collect_drawing_summary(drawing: Drawing) -> dict[str, Any]:
     for block in drawing.blocks:
         if _is_layout_block(block):
             continue
-        block_description = DXFAnalyzer.get_short_block_decsription(drawing, block.name)
+        block_description = DXFAnalyzer.get_short_block_description(drawing, block.name)
         table_stats = TextClusterAnalyzer.analyze_table(block)
         blocks_def = {
             "name": block.name,
@@ -410,8 +401,8 @@ def collect_drawing_summary(drawing: Drawing) -> dict[str, Any]:
             }
         blocks.append(blocks_def)
 
-        if block_description and "primitives_layers" in block_description:
-            block_layers[block.name] = block_description["primitives_layers"]
+        if block_description and block_description.primitives_layers:
+            block_layers[block.name] = block_description.primitives_layers
 
         for entity in block:
             if entity.dxftype() == "INSERT":
@@ -572,10 +563,21 @@ def flush_primitives_batch(
             primitives_total,
         )
 
-    logger.debug("Primitive batch: %s", primitive_batch)
-
     session.add_all(primitive_batch)
-    session.flush()
+    try:
+        session.flush()
+    except sa_exc.SQLAlchemyError as exc:
+        logger.error("Error flushing primitive batch: %s", exc)
+        for x in primitive_batch:
+            logger.error(f"Failed primitive: {x.entity_type} - {x.geom}")
+
+        session.rollback()
+
+        # FIXME: temporary solution to skip problematic batches, should be
+        # improved with better error handling and data validation
+        sys.exit(1)
+
+        return 0
 
     for primitive_entity, layer_entity in primitive_layer_links:
         session.add(
@@ -593,7 +595,7 @@ def flush_primitives_batch(
     return created_count
 
 
-def drawing_to_db(
+def save_to_db(
     sources_path: str | Path,
     processed_entries: Generator[ProcessedEntry, None, None],
     project_id: int,
@@ -603,7 +605,7 @@ def drawing_to_db(
 
     Args:
         sources_path: Root scan path.
-        processed_entries: Processed entries with ready summaries.
+        processed_entries: Processed entries with ready-to-store summaries.
         project_id: Project identifier in the database.
 
     Returns:
@@ -714,10 +716,7 @@ def drawing_to_db(
             for block in summary["blocks"]:
                 block_name = str(block["name"])
 
-                block_description, block_data = _build_block_storage_payload(
-                    block,
-                    detail_level=detail_level,
-                )
+                block_description, block_data = get_block_payload(block)
 
                 block_entity = Entity(
                     parent_id=file_entity.id,
@@ -832,9 +831,6 @@ def drawing_to_db(
                     description=description,
                     geometry=geometry,
                 )
-                logger.debug(f"Primitive data for entity '{name}'")
-                for key, value in primitive_data.items():
-                    logger.debug(f"  {key}: {value}")
 
                 primitive_entity = Entity(
                     parent_id=parent_entity_id,
@@ -847,8 +843,11 @@ def drawing_to_db(
                     geom=geometry,
                     is_virtual=primitive_payload.get("is_virtual", False)
                 )
+
                 if primitive_data:
-                    primitive_entity.data = primitive_data
+                    # FIXME: required to solve it
+                    # primitive_entity.data = primitive_data
+                    pass
 
                 primitive_batch.append(primitive_entity)
 
@@ -902,7 +901,6 @@ def process_source(
     """
 
     logger.info("Starting processing")
-    _detail_rank(detail_level)
 
     project_id = None
     if not dry:
@@ -946,7 +944,7 @@ def process_source(
 
     created_entities = 0
     if not dry:
-        created_entities = drawing_to_db(
+        created_entities = save_to_db(
             sources_path,
             processed_entries,
             project_id=project_id,

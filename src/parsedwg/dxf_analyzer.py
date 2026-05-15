@@ -1,22 +1,25 @@
 """Utilities for DXF analysis and data extraction."""
 
 from typing import Any
-import sys
+
 import logging
 import re
 
-from ezdxf import entities as dfx_entities
 from ezdxf.document import Drawing
-from ezdxf import path
-from ezdxf.math import area as math_area
+from ezdxf.math import Matrix44
 from ezdxf.tools.text import MTextEditor
 from ezdxf.addons.geo import GeoProxy
-import ezdxf_shapely
+
+import shapely.geometry
+import shapely.validation
 
 from src.parsedwg.constants import ENTITY_TYPES
 from src.parsedwg.schemas import BlockDescription
 
 logger = logging.getLogger(__name__)
+
+# Матрица для проекции 3D примитивов на 2D плоскость (игнорируем Z-координату)
+PROJECTION_MATRIX = Matrix44.scale(1, 1, 0)
 
 
 class DXFAnalyzer:
@@ -145,10 +148,22 @@ class DXFAnalyzer:
         """
 
         dxftype = entity.dxftype()
-
         if dxftype not in ENTITY_TYPES:
             logger.warning("Unknown entity type: %s. It will be treated as PRIMITIVE.", dxftype)
             return None
+
+        if dxftype in [
+            "POINT", "LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE", 
+            "SPLINE", "SOLID", "HATCH"
+        ]:
+            try:
+                entity.transform(PROJECTION_MATRIX)
+            except (AttributeError, TypeError):
+                # Пропускаем объекты, которые не поддерживают трансформацию матрицей
+                pass
+            except Exception as e:
+                logger.warning("Failed to apply projection to entity: %s", e, exc_info=True)
+
 
         entity_data = {
             "type": ENTITY_TYPES[dxftype],
@@ -160,7 +175,7 @@ class DXFAnalyzer:
 
         # Attach textual content when present.
         if text_value := cls.get_text(entity):
-            entity_data["short_description"] = re.sub(r"\s+", " ", text_value).strip()
+            entity_data["description"] = re.sub(r"\s+", " ", text_value).strip()
 
         # Preserve raw DXF attributes in a normalized form.
         dxf_attribs: dict[str, Any] = {}
@@ -169,9 +184,22 @@ class DXFAnalyzer:
                 dxf_attribs[attr_name] = cls.format_point(value)
             else:
                 dxf_attribs[attr_name] = value
+
         if dxf_attribs:
             entity_data["dxf_attribs"] = dxf_attribs
 
+        if dxftype in [
+            "POINT", "LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE", 
+            "SPLINE", "SOLID", "HATCH"
+        ]:
+            proxy = GeoProxy.from_dxf_entities(entity)
+            shapely_geom = shapely.geometry.shape(proxy.__geo_interface__)
+            if not shapely_geom.is_valid:
+                shapely_geom = shapely.validation.make_valid(shapely_geom)
+
+            entity_data["area"] = shapely_geom.area
+            entity_data["length"] = shapely_geom.length
+            entity_data["geom"] = shapely_geom.wkt
 
         match dxftype:
             case "INSERT":
@@ -193,90 +221,10 @@ class DXFAnalyzer:
                         ) for ch in children
                     ]
 
-            case "LWPOLYLINE":
-                logger.debug("`LWPOLYLINE` case: %s", entity)
-                logger.debug("LWPOLYLINE is closed? %s", entity.is_closed)
-                points = entity.get_points("xy")
-                logger.debug("Points: %s", points)
-                wkt_geom = None
-                try:
-                    wkt_geom = ezdxf_shapely.convert_lwpolyline(entity)
-                except Exception as e:
-                    logger.error("Error converting LWPOLYLINE: %s", e)
-                    dxf_geom = GeoProxy.from_dxf_entities(entity)
-                    print(dxf_geom)
-                    # shapely_geom = dxf_geom.geometry[0]
-                    # wkt_geom = shapely_geom.wkt
-
-                    # shapely_geom = proxy.geometry # Requires shapely
-                    # wkt_geom = shapely_geom.wkt
-                    # logger.debug(f"Closed 2-point LWPOLYLINE WKT: {wkt_geom}")
-
-                if wkt_geom is not None:
-                    entity_data["geom"] = wkt_geom
-                    logger.debug("LWPOLYLINE GEOM: %s", wkt_geom)
-
-            case "POLYLINE":
-                logger.debug("POLYLINE is closed? %s", entity.is_closed)
-                logger.debug("Is instance of dfx_entities.Polyline? %s", isinstance(entity, dfx_entities.Polyline))
-                # geom = ezdxf_shapely.convert_(entity)
-                # if geom is not None:
-                #     entity_data["geom"] = geom.wkt
-                #     logger.debug("POLYLINE GEOM: %s", geom.wkt)
-            # case "LINE":
-            #     geom = ezdxf_shapely.convert_line(entity)
-            #     if geom is not None:
-            #         entity_data["geom"] = geom.wkt
-            #         logger.debug("LINE GEOM: %s", geom.wkt)
-            case "CIRCLE":
-                entity_data["center"] = cls.format_point(entity.dxf.center)
-                entity_data["radius"] = entity.dxf.radius
-                entity_data["geom"] = "POINT({} {})".format(
-                    entity.dxf.center.x, entity.dxf.center.y
-                )
-            case "ARC":
-                entity_data["center"] = cls.format_point(entity.dxf.center)
-                entity_data["radius"] = entity.dxf.radius
-                entity_data["start_angle"] = entity.dxf.start_angle
-                entity_data["end_angle"] = entity.dxf.end_angle
-                entity_data["geom"] = "POINT({} {})".format(
-                    entity.dxf.center.x, entity.dxf.center.y
-                )
-            case "ELLIPSE":
-                entity_data["center"] = cls.format_point(entity.dxf.center)
-                entity_data["major_axis"] = cls.format_point(entity.dxf.major_axis)
-                entity_data["ratio"] = entity.dxf.ratio
-                entity_data["start_param"] = entity.dxf.start_param
-                entity_data["end_param"] = entity.dxf.end_param
-                entity_data["geom"] = "POINT({} {})".format(
-                    entity.dxf.center.x, entity.dxf.center.y
-                )
             case "TEXT" | "MTEXT":
                 entity_data["geom"] = "POINT({} {})".format(
                     entity.dxf.insert.x, entity.dxf.insert.y
                 )
-            case "HATCH":
-                try:
-                    entity_data["name"] = entity.dxf.pattern_name
-                    hatch_path = path.make_path(entity)
-                    vertices = list(hatch_path.flattening(distance=0.01))
-
-                    # Build the coordinate list for WKT.
-                    coords = ", ".join([f"{p.x} {p.y}" for p in vertices])
-
-                    # Close the polygon if the first and last vertices differ.
-                    if vertices[0] != vertices[-1]:
-                        coords += f", {vertices[0].x} {vertices[0].y}"
-
-                    total_length = sum(p1.distance(p2) for p1, p2 in zip(vertices, vertices[1:]))
-                    entity_data["data"] = {}
-                    entity_data["data"]["length"] = total_length
-                    entity_data["geom"] = f"POLYGON(({coords}))"
-                    entity_data["data"]["area"] = math_area(vertices)
-                except TypeError as e:
-                    logger.warning("Failed to process HATCH entity: %s", e)
-                except Exception as e:
-                    logger.error("Error while processing HATCH entity: %s", e)
 
             case "MULTILEADER":
                 # Annotation leader segments.
@@ -302,7 +250,7 @@ class DXFAnalyzer:
                 entity_text = entity.get_mtext_content() if hasattr(entity, "get_mtext_content") else ""
                 if entity_text:
                     clean_text = MTextEditor(entity_text).text
-                    entity_data["short_description"] = re.sub(r"\s+", " ", clean_text).strip()
+                    entity_data["description"] = re.sub(r"\s+", " ", clean_text).strip()
 
                 # Build WKT for the MultiLineString.
                 multiline_wkt = f"MULTILINESTRING({', '.join(line_segments)})"

@@ -31,8 +31,9 @@ def handle_process_command(
         return constants.ERROR
 
     except RuntimeError as e:
-        logger.error("AI mode error: %s", e)
+        logger.error("AI mode error: %s", e, exc_info=True)
         return constants.ERROR
+    
     print(f"Files found: {summary['file_count']}")
     print(f"Processing mode: {summary['mode']}")
     print(f"Entities created in DB: {summary['created_entities']}")
