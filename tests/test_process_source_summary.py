@@ -44,10 +44,82 @@ def test_collect_dxf_summary_includes_text_primitives(tmp_path: Path) -> None:
     assert any(
         primitive["type"] == EntityType.MTEXT
         and primitive["description"] == "Многострочный текст"
+        and primitive["geom"] == "POINT (3 4)"
         and primitive["dxf_attribs"]["insert"] == [3.0, 4.0, 0.0]
         and primitive["layout"].name == "Sheet1"
         for primitive in primitives
     )
+    assert any(
+        primitive["type"] == EntityType.TEXT
+        and primitive["description"] == "Подпись"
+        and primitive["geom"] == "POINT (1 2)"
+        and primitive["layout"].name == "Model"
+        for primitive in primitives
+    )
+
+
+def test_get_entity_data_builds_multileader_geometry_from_virtual_entities() -> None:
+    doc = new()
+    parent = doc.modelspace()
+    line = parent.add_line((0, 0), (10, 0))
+    polyline = parent.add_lwpolyline([(10, 0), (10, 5), (15, 5)])
+
+    class FakeDxfNamespace:
+        layer = "A-ANNO"
+
+        @staticmethod
+        def all_existing_dxf_attribs() -> dict[str, object]:
+            return {}
+
+    class FakeMultileader:
+        dxf = FakeDxfNamespace()
+
+        @staticmethod
+        def dxftype() -> str:
+            return "MULTILEADER"
+
+        @staticmethod
+        def get_mtext_content() -> str:
+            return "Выноска\\Pтекст"
+
+        @staticmethod
+        def virtual_entities():
+            return [line, polyline]
+
+    entity_data = DXFAnalyzer.get_entity_data(FakeMultileader(), parent)
+
+    assert entity_data["type"] == EntityType.MULTILEADER
+    assert entity_data["description"] == "Выноска\\Pтекст"
+    assert entity_data["geom"] == "MULTILINESTRING ((0 0, 10 0), (10 0, 10 5, 15 5))"
+
+
+def test_get_entity_data_builds_multileader_geometry_from_polygon_virtual_entity() -> None:
+    doc = new()
+    parent = doc.modelspace()
+    polygon = parent.add_lwpolyline([(0, 0), (10, 0), (10, 5)], close=True)
+
+    class FakeDxfNamespace:
+        layer = "A-ANNO"
+
+        @staticmethod
+        def all_existing_dxf_attribs() -> dict[str, object]:
+            return {}
+
+    class FakeMultileader:
+        dxf = FakeDxfNamespace()
+
+        @staticmethod
+        def dxftype() -> str:
+            return "MULTILEADER"
+
+        @staticmethod
+        def virtual_entities():
+            return [polygon]
+
+    entity_data = DXFAnalyzer.get_entity_data(FakeMultileader(), parent)
+
+    assert entity_data["type"] == EntityType.MULTILEADER
+    assert entity_data["geom"] == "MULTILINESTRING ((0 0, 10 0, 10 5, 0 0))"
 
 
 def test_collect_dxf_summary_includes_insert_primitives_from_layouts(tmp_path: Path) -> None:

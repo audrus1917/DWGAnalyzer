@@ -29,7 +29,7 @@ from src.parsedwg.constants import ResultRow
 
 logging.basicConfig(
     level=logging.DEBUG,
-    format="%(asctime)s - %(filename)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s - %(message)s",
 )
 logging.getLogger("ezdxf").disabled = True
 logging.getLogger('fontTools.ttLib.ttFont').setLevel(logging.WARNING)
