@@ -25,9 +25,9 @@ async def run_interpret_blocks_step(
     started_at = time.perf_counter()
     file_id = file_ref if not by_path else await get_file_id_by_source(file_ref)
     if not file_id and project_name:
-        from .commands.process import handle_process_command
+        from .commands.parse import handle_parse_command
 
-        return_code = handle_process_command(Path(file_ref), project_name=project_name)
+        return_code = handle_parse_command(Path(file_ref), project_name=project_name)
         if return_code != constants.OK:
             raise RuntimeError(f"Failed to pre-process source: {file_ref}")
         file_id = await get_file_id_by_source(file_ref)

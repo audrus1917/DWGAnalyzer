@@ -1,17 +1,17 @@
-"""Handler for the `process` command."""
+"""Handler for the `parse` command."""
 
 import logging
 
 from pathlib import Path
 
-from src.parsedwg.process_source import process_source
+from src.parsedwg.process_source import parse_drawing
 
 from src.parsedwg import constants
 
 logger = logging.getLogger(__name__)
 
 
-def handle_process_command(
+def handle_parse_command(
     source_path: Path,
     project_name: str | None,
     dry: bool = False,
@@ -19,8 +19,9 @@ def handle_process_command(
 ) -> int:
     """Scan DWG/DXF input, store the entity tree, and link it to a project."""
 
+    logger.debug("Start parsing command")
     try:
-        summary = process_source(
+        summary = parse_drawing(
             source_path,
             project_name=project_name,
             dry=dry,

@@ -10,6 +10,8 @@ import time
 
 from pathlib import Path
 
+from gettext import gettext as _
+
 from src.parsedwg import constants
 from src.parsedwg.settings import settings
 from src.parsedwg.explorer import DXFExplorer
@@ -23,7 +25,7 @@ from src.parsedwg.utils import (
     get_chat_url
 )
 from src.parsedwg.utils.args import build_args_parser
-from src.parsedwg.commands.process import handle_process_command
+from parsedwg.commands.parse import handle_parse_command
 from src.parsedwg.constants import ResultRow
 
 
@@ -1438,10 +1440,11 @@ def main(argv: list[str] | None = None) -> int:
                 dpi=args.dpi,
             )
 
-        case "process":
+        case "parse":
             if not args.dry and not args.project:
-                parser.error("the process command requires --project unless --dry is used")
-            return_code = handle_process_command(
+                parser.error(_("The `parse` command requires --project unless --dry is used"))
+
+            return_code = handle_parse_command(
                 Path(args.path),
                 project_name=args.project,
                 dry=args.dry,

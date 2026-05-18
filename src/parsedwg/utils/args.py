@@ -3,6 +3,8 @@
 import argparse
 import logging
 
+from gettext import gettext as _
+
 from src.parsedwg.settings import settings
 
 
@@ -22,58 +24,61 @@ def build_args_parser() -> argparse.ArgumentParser:
     ai_common.add_argument(
         "--ai-model",
         default=settings.ai_model,
-        help="Model name for AI mode (default: llama3.1:8b).",
+        help=_("Model name for AI mode. Default: %(default)s.") % {"default": settings.ai_model},
     )
     ai_common.add_argument(
         "--ai-base-url",
         default=settings.ai_base_url,
-        help="OpenAI-compatible base URL for the model (default: Ollama).",
+        help=_("OpenAI-compatible base URL for the model. Default: %(default)s.") % {"default": settings.ai_base_url},
     )
     ai_common.add_argument(
         "--ai-api-key",
         default=settings.ai_api_key,
-        help="API key for the AI provider (for Ollama the default is fine).",
+        help=_(
+            "API key for the AI provider (for Ollama the default is fine). "
+            "Default: %(default)s."
+        ) % {"default": settings.ai_api_key},
     )
 
     parser = argparse.ArgumentParser(
         prog="parsedwg",
-        description="Work with DWG/DXF files: inspect data and run operations",
+        description=_("Work with DWG/DXF files: inspect data and run operations"),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     extract_block_parser = subparsers.add_parser(
         "extract-block",
         parents=[readfile_common],
-        help="Extract a block into a separate file.",
+        help=_("Extract a block into a separate file."),
     )
-    extract_block_parser.add_argument("block_name", help="Block name to extract")
+    extract_block_parser.add_argument("block_name", help=_("Block name to extract"))
 
     describe_block_parser = subparsers.add_parser(
         "describe-block",
         parents=[readfile_common, output_common],
-        help="Read a file and print a block description by name.",
+        help=_("Read a file and print a block description by name."),
     )
-    describe_block_parser.add_argument("block_name", help="Block name to describe")
+    describe_block_parser.add_argument("block_name", help=_("Block name to describe"))
 
     export_block_parser = subparsers.add_parser(
         "export-block",
         parents=[readfile_common, output_common],
-        help="Export the selected block to PNG.",
+        help=_("Export the selected block to PNG."),
     )
-    export_block_parser.add_argument("block_name", help="Block name to export")
+    export_block_parser.add_argument("block_name", help=_("Block name to export"))
     export_block_parser.add_argument(
         "--dpi",
         type=int,
         default=300,
-        help="PNG resolution for export (default: 300).",
+        help=_("PNG resolution for export (default: 300)."),
     )
 
     export_block_png_parser = subparsers.add_parser(
         "export-block-png",
         parents=[readfile_common, output_common],
-        help="Export the selected block to PNG.",
+        help=_("Export the selected block to PNG."),
     )
-    export_block_png_parser.add_argument("block_name", help="Block name to export")
+    export_block_png_parser.add_argument("block_name", help=_("Block name to export"))
     export_block_png_parser.add_argument(
         "--dpi",
         type=int,
@@ -81,18 +86,18 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="PNG resolution for export (default: 300).",
     )
 
-    process_parser = subparsers.add_parser(
-        "process",
+    parse_command_parser = subparsers.add_parser(
+        "parse",
         help=(
             "Walk a directory recursively, find DWG/DXF files (including ZIP)"
             " and load the block/layer tree into the database."
         ),
     )
-    process_parser.add_argument(
+    parse_command_parser.add_argument(
         "path",
         help="Path to a directory or file.",
     )
-    process_parser.add_argument(
+    parse_command_parser.add_argument(
         "--project",
         "-p",
         type=str,
@@ -100,12 +105,12 @@ def build_args_parser() -> argparse.ArgumentParser:
         default=None,
         help="Name of an existing project.",
     )
-    process_parser.add_argument(
+    parse_command_parser.add_argument(
         "--dry",
         action="store_true",
         help="Parse the source and print a summary without saving results to the database.",
     )
-    process_parser.add_argument(
+    parse_command_parser.add_argument(
         "--detail-level",
         choices=["low", "medium", "high"],
         default="high",

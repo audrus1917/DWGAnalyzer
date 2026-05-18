@@ -120,7 +120,7 @@ def test_main_ingest_docs_runs_pipeline(tmp_path, monkeypatch, capsys) -> None:
 
 
 def test_handle_process_command_prints_summary(tmp_path, monkeypatch, capsys) -> None:
-    from parsedwg.cli import handle_process_command
+    from parsedwg.cli import handle_parse_command
 
     source_dir = tmp_path / "tower_A"
     source_dir.mkdir(parents=True)
@@ -144,7 +144,7 @@ def test_handle_process_command_prints_summary(tmp_path, monkeypatch, capsys) ->
 
     monkeypatch.setattr("src.parsedwg.commands.process.process_source", fake_process_source)
 
-    exit_code = handle_process_command(source_dir, project_name="Башня А")
+    exit_code = handle_parse_command(source_dir, project_name="Башня А")
 
     assert exit_code == 0
     output = capsys.readouterr().out
@@ -154,7 +154,7 @@ def test_handle_process_command_prints_summary(tmp_path, monkeypatch, capsys) ->
 
 
 def test_handle_process_command_prints_dry_summary(tmp_path, monkeypatch, capsys) -> None:
-    from parsedwg.cli import handle_process_command
+    from parsedwg.cli import handle_parse_command
 
     source_dir = tmp_path / "tower_A"
     source_dir.mkdir(parents=True)
@@ -178,7 +178,7 @@ def test_handle_process_command_prints_dry_summary(tmp_path, monkeypatch, capsys
 
     monkeypatch.setattr("src.parsedwg.commands.process.process_source", fake_process_source)
 
-    exit_code = handle_process_command(source_dir, project_name=None, dry=True)
+    exit_code = handle_parse_command(source_dir, project_name=None, dry=True)
 
     assert exit_code == 0
     output = capsys.readouterr().out

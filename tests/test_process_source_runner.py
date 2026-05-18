@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from parsedwg.process_source import process_source
+from parsedwg.process_source import parse_drawing
 from src.parsedwg import errors
 
 
@@ -55,7 +55,7 @@ def test_process_source_uses_direct_pipeline_for_single_file(tmp_path: Path, mon
     monkeypatch.setattr("parsedwg.process_source.process_batch", fake_process_batch)
     monkeypatch.setattr("parsedwg.process_source.drawing_to_db", fake_drawing_to_db)
 
-    result = process_source(source, project_name="Sequential Project")
+    result = parse_drawing(source, project_name="Sequential Project")
 
     assert result == {
         "job_id": None,
@@ -93,7 +93,7 @@ def test_process_source_raises_for_empty_directory_with_no_drawings(tmp_path: Pa
     monkeypatch.setattr("parsedwg.process_source.session_factory", fake_session_factory)
 
     with pytest.raises(errors.FileNotFound):
-        process_source(tmp_path, project_name="Sequential Project")
+        parse_drawing(tmp_path, project_name="Sequential Project")
 
 
 def test_process_source_dry_skips_db_and_project_lookup(tmp_path: Path, monkeypatch) -> None:
@@ -126,7 +126,7 @@ def test_process_source_dry_skips_db_and_project_lookup(tmp_path: Path, monkeypa
     monkeypatch.setattr("parsedwg.process_source.process_batch", fake_process_batch)
     monkeypatch.setattr("parsedwg.process_source.drawing_to_db", fake_drawing_to_db)
 
-    result = process_source(source, dry=True)
+    result = parse_drawing(source, dry=True)
 
     assert result == {
         "job_id": None,
@@ -195,7 +195,7 @@ def test_process_source_passes_detail_level_to_db(tmp_path: Path, monkeypatch) -
     monkeypatch.setattr("parsedwg.process_source.process_batch", fake_process_batch)
     monkeypatch.setattr("parsedwg.process_source.drawing_to_db", fake_drawing_to_db)
 
-    result = process_source(source, project_name="Sequential Project", detail_level="medium")
+    result = parse_drawing(source, project_name="Sequential Project", detail_level="medium")
 
     assert result["detail_level"] == "medium"
     assert captured["detail_level"] == "medium"

@@ -878,7 +878,7 @@ def save_to_db(
     return created_entities
 
 
-def process_source(
+def parse_drawing(
     sources_path: Path,
     project_name: str | None = None,
     dry: bool = False,
@@ -963,4 +963,4 @@ def process_source(
     }
 
 
-__all__ = ["DWGTreeProcessor", "collect_dxf_summary", "process_source"]
+__all__ = ["DWGTreeProcessor", "collect_dxf_summary", "parse_drawing"]
