@@ -48,6 +48,7 @@ def read_drawing(path: Path):
         Drawing object loaded from the file.
     """
 
+    logger.debug(f"Read file: {path}")
     suffix = path.suffix.lower()
     if suffix == ".dwg":
         return read_odafc(path, "ACAD2018")

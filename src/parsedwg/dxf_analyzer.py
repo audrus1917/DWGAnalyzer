@@ -127,6 +127,82 @@ class DXFAnalyzer:
                 children.append(ch)
         return children
 
+    @staticmethod
+    def get_shapely_geometry(entity: Any) -> shapely.geometry.base.BaseGeometry | None: 
+        """Convert a DXF entity into a shapely geometry when possible."""
+
+        dxftype = entity.dxftype()
+        if dxftype in ("TEXT", "MTEXT"):
+            return shapely.geometry.Point(entity.dxf.insert.x, entity.dxf.insert.y)
+        
+        try:
+            proxy = GeoProxy.from_dxf_entities(entity)
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+        shapely_geom = shapely.geometry.shape(dict(proxy.__geo_interface__))
+        if not shapely_geom.is_valid:
+            shapely_geom = shapely.validation.make_valid(shapely_geom)
+        return shapely_geom
+
+    @classmethod
+    def get_multileader_geometry(cls, entity):
+        """Build a shapely MultiLineString from MULTILEADER virtual entities."""
+
+        line_parts: list[list[tuple[float, float]]] = []
+
+        for child in entity.virtual_entities():
+            child_geom = cls.get_shapely_geometry(child)
+            if child_geom is None:
+                continue
+
+            if isinstance(child_geom, shapely.geometry.LineString):
+                line_parts.append([
+                    (float(point[0]), float(point[1])) for point in child_geom.coords
+                ])
+            elif isinstance(child_geom, shapely.geometry.MultiLineString):
+                line_parts.extend([
+                    [(float(point[0]), float(point[1])) for point in line.coords]
+                    for line in child_geom.geoms
+                ])
+            elif isinstance(child_geom, shapely.geometry.Polygon):
+                line_parts.append([
+                    (float(point[0]), float(point[1]))
+                    for point in child_geom.exterior.coords
+                ])
+                line_parts.extend([
+                    [(float(point[0]), float(point[1])) for point in ring.coords]
+                    for ring in child_geom.interiors
+                ])
+
+        if not line_parts:
+            return None
+        return shapely.geometry.MultiLineString(line_parts)
+
+    @classmethod
+    def get_entity_points(cls, entity) -> list[list[float]]:
+        """Extract normalized vertex lists for entities that expose point sequences."""
+
+        dxftype = entity.dxftype()
+        if dxftype == "LWPOLYLINE":
+            get_points = getattr(entity, "get_points", None)
+            if callable(get_points):
+                return [cls.format_point(point) for point in get_points("xy")]
+
+        if dxftype == "POLYLINE":
+            get_points = getattr(entity, "points", None)
+            if callable(get_points):
+                return [cls.format_point(point) for point in get_points()]
+
+        if dxftype == "SOLID":
+            points: list[list[float]] = []
+            for attr_name in ("vtx0", "vtx1", "vtx2", "vtx3"):
+                if entity.dxf.hasattr(attr_name):
+                    points.append(cls.format_point(getattr(entity.dxf, attr_name)))
+            return points
+
+        return []
+
 
     @classmethod
     def get_entity_data(
@@ -188,18 +264,19 @@ class DXFAnalyzer:
         if dxf_attribs:
             entity_data["dxf_attribs"] = dxf_attribs
 
+        if points := cls.get_entity_points(entity):
+            entity_data["points"] = points
+
         if dxftype in [
             "POINT", "LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE", 
             "SPLINE", "SOLID", "HATCH"
         ]:
-            proxy = GeoProxy.from_dxf_entities(entity)
-            shapely_geom = shapely.geometry.shape(proxy.__geo_interface__)
-            if not shapely_geom.is_valid:
-                shapely_geom = shapely.validation.make_valid(shapely_geom)
+            shapely_geom = cls.get_shapely_geometry(entity)
 
-            entity_data["area"] = shapely_geom.area
-            entity_data["length"] = shapely_geom.length
-            entity_data["geom"] = shapely_geom.wkt
+            if shapely_geom is not None:
+                entity_data["area"] = shapely_geom.area
+                entity_data["length"] = shapely_geom.length
+                entity_data["geom"] = shapely_geom.wkt
 
         match dxftype:
             case "INSERT":
@@ -222,39 +299,19 @@ class DXFAnalyzer:
                     ]
 
             case "TEXT" | "MTEXT":
-                entity_data["geom"] = "POINT({} {})".format(
-                    entity.dxf.insert.x, entity.dxf.insert.y
-                )
+                if shapely_geom := cls.get_shapely_geometry(entity):
+                    entity_data["geom"] = shapely_geom.wkt
+            case "HATCH":
+                entity_data["name"] = entity.dxf.pattern_name
 
             case "MULTILEADER":
-                # Annotation leader segments.
-                line_segments = []
-                for c_entity in entity.virtual_entities():
-                    if c_entity.dxftype() == 'LINE':
-                        start = c_entity.dxf.start
-                        end = c_entity.dxf.end
-                        line_segments.append(f"({start.x} {start.y}, {end.x} {end.y})")
-                    elif c_entity.dxftype() == 'POLYLINE':
-                        points = [vertex.dxf.location.xyz for vertex in c_entity.vertices]
-                        for i in range(len(points) - 1):
-                            start = points[i]
-                            end = points[i + 1]
-                            line_segments.append(f"({start[0]} {start[1]}, {end[0]} {end[1]})")
-                    elif c_entity.dxftype() == 'LWPOLYLINE':
-                        points = c_entity.get_points("xy")
-                        for i in range(len(points) - 1):
-                            start = points[i]
-                            end = points[i + 1]
-                            line_segments.append(f"({start[0]} {start[1]}, {end[0]} {end[1]})")
-
                 entity_text = entity.get_mtext_content() if hasattr(entity, "get_mtext_content") else ""
                 if entity_text:
                     clean_text = MTextEditor(entity_text).text
                     entity_data["description"] = re.sub(r"\s+", " ", clean_text).strip()
 
-                # Build WKT for the MultiLineString.
-                multiline_wkt = f"MULTILINESTRING({', '.join(line_segments)})"
-                entity_data["geom"] = f"{multiline_wkt}"
+                if shapely_geom := cls.get_multileader_geometry(entity):
+                    entity_data["geom"] = shapely_geom.wkt
 
         return entity_data
 
