@@ -2,8 +2,8 @@ from pathlib import Path
 
 from ezdxf.filemanagement import new
 
-from parsedwg.dxf_analyzer import DXFAnalyzer
-from parsedwg.process_source import collect_drawing_summary, collect_dxf_summary
+from parsedwg.dxf_analyzer import DrawingAnalyzer
+from parsedwg.process_drawing import collect_drawing_summary, collect_dxf_summary
 from src.parsedwg.constants import EntityType
 
 
@@ -12,7 +12,7 @@ def test_describe_entity_includes_lwpolyline_points() -> None:
     parent = doc.modelspace()
     polyline = parent.add_lwpolyline([(10.0, 20.0), (30.0, 40.0)])
 
-    entity_data = DXFAnalyzer.get_entity_data(polyline, parent)
+    entity_data = DrawingAnalyzer.get_entity_data(polyline, parent)
 
     assert entity_data["type"] == EntityType.LWPOLYLINE
     assert entity_data["parent"] is parent
@@ -86,7 +86,7 @@ def test_get_entity_data_builds_multileader_geometry_from_virtual_entities() -> 
         def virtual_entities():
             return [line, polyline]
 
-    entity_data = DXFAnalyzer.get_entity_data(FakeMultileader(), parent)
+    entity_data = DrawingAnalyzer.get_entity_data(FakeMultileader(), parent)
 
     assert entity_data["type"] == EntityType.MULTILEADER
     assert entity_data["description"] == "Выноска\\Pтекст"
@@ -116,7 +116,7 @@ def test_get_entity_data_builds_multileader_geometry_from_polygon_virtual_entity
         def virtual_entities():
             return [polygon]
 
-    entity_data = DXFAnalyzer.get_entity_data(FakeMultileader(), parent)
+    entity_data = DrawingAnalyzer.get_entity_data(FakeMultileader(), parent)
 
     assert entity_data["type"] == EntityType.MULTILEADER
     assert entity_data["geom"] == "MULTILINESTRING ((0 0, 10 0, 10 5, 0 0))"

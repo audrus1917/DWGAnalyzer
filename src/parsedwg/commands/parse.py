@@ -4,9 +4,9 @@ import logging
 
 from pathlib import Path
 
-from src.parsedwg.process_source import parse_drawing
+from src.parsedwg.process_drawing import parse_drawing
 
-from src.parsedwg import constants
+from src.parsedwg import constants, errors
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,6 @@ def handle_parse_command(
 ) -> int:
     """Scan DWG/DXF input, store the entity tree, and link it to a project."""
 
-    logger.debug("Start parsing command")
     try:
         summary = parse_drawing(
             source_path,
@@ -27,12 +26,16 @@ def handle_parse_command(
             dry=dry,
             detail_level=detail_level,
         )
-    except ValueError as e:
-        logger.exception("Failed to process directory or file: %s", e)
+    except errors.FileNotFound as e:
+        logger.error("File not found: %s", e, exc_info=True)
         return constants.ERROR
 
-    except RuntimeError as e:
-        logger.error("AI mode error: %s", e, exc_info=True)
+    except errors.ObjectNotFound as e:
+        logger.error("Object not found: %s", e, exc_info=True)
+        return constants.ERROR
+
+    except errors.UnsupportedFileType as e:
+        logger.error("Unsupported file type: %s", e, exc_info=True)
         return constants.ERROR
     
     print(f"Files found: {summary['file_count']}")

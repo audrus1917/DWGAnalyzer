@@ -14,13 +14,15 @@ from pathlib import Path
 from ezdxf.document import Drawing
 from sqlalchemy import func, select, exc as sa_exc
 
+from src.parsedwg import errors
+from src.parsedwg.settings import settings
 from src.parsedwg.constants import ENTITY_TYPES, EntityType
 from src.parsedwg.db import session_factory
 from src.parsedwg.orm import Entity, EntityEmbedding, Project, EntityToEntity
-from src.parsedwg.dxf_analyzer import DXFAnalyzer
+from src.parsedwg.dxf_analyzer import DrawingAnalyzer
 from src.parsedwg.utils import safe_float, extract_from_zip, read_drawing, file_md5
 from src.parsedwg.table_analysis import TextClusterAnalyzer
-from src.parsedwg import errors
+from src.parsedwg.schemas import DrawingSource
 
 logger = logging.getLogger(__name__)
 
@@ -30,20 +32,6 @@ DEFAULT_DETAIL_LEVEL = "high"
 ENTITY_TYPE_ALIASES = {
     "MULTILEADER": "MLEADER",
 }
-
-type JobEntry = dict[str, str]
-type ProcessedEntry = dict[str, object]
-type NameTagsAIConfig = dict[str, str]
-
-
-def _detail_rank(detail_level: str) -> int:
-    try:
-        return DETAIL_LEVELS.index(detail_level)
-    except ValueError as exc:
-        raise ValueError(
-            f"Unknown detail level: {detail_level!r}. "
-            f"Expected one of: {', '.join(DETAIL_LEVELS)}."
-        ) from exc
 
 
 def _entity_type_name(value: object) -> str | None:
@@ -115,7 +103,6 @@ def get_primitive_payload(
 ) -> dict[str, object]:
     """Build a primitive entity payload with variable detail level."""
 
-    rank = _detail_rank(detail_level)
     data: dict[str, object] = {}
 
     if block_name:
@@ -136,46 +123,40 @@ def get_primitive_payload(
     if location is not None:
         data["location"] = location
 
-    if rank >= 1:
-        if layout_name:
-            data["layout"] = layout_name
-        if geometry not in (None, "", [], {}):
-            data["geom"] = geometry
-        for key in (
-            "target_block",
-            "center",
-            "radius",
-            "start_angle",
-            "end_angle",
-            "major_axis",
-            "ratio",
-            "start_param",
-            "end_param",
-        ):
-            value = primitive_payload.get(key)
-            if value not in (None, "", [], {}):
-                data[key] = value
+    if layout_name:
+        data["layout"] = layout_name
+    if geometry not in (None, "", [], {}):
+        data["geom"] = geometry
+    for key in (
+        "target_block",
+        "center",
+        "radius",
+        "start_angle",
+        "end_angle",
+        "major_axis",
+        "ratio",
+        "start_param",
+        "end_param",
+    ):
+        value = primitive_payload.get(key)
+        if value not in (None, "", [], {}):
+            data[key] = value
 
-        nested_data = primitive_payload.get("data")
-        if isinstance(nested_data, dict) and nested_data:
-            data.update(nested_data)
+    nested_data = primitive_payload.get("data")
+    if isinstance(nested_data, dict) and nested_data:
+        data.update(nested_data)
 
-    if rank >= 2:
-        for key in ("dxf_attribs", "attribs", "name"):
-            value = primitive_payload.get(key)
-            if value not in (None, "", [], {}):
-                data[key] = value
-        if primitive_payload.get("is_virtual"):
-            data["is_virtual"] = True
+    for key in ("dxf_attribs", "attribs", "name"):
+        value = primitive_payload.get(key)
+        if value not in (None, "", [], {}):
+            data[key] = value
+    if primitive_payload.get("is_virtual"):
+        data["is_virtual"] = True
 
     return data
 
 
-class NameTagsExtractor(Protocol):
-    def extract(self, text: str) -> list[str]: ...
-
-
-class DWGTreeProcessor:
+class DrawingProcessor:
     """Walk a source tree and build DWG/DXF processing jobs."""
 
     def __init__(self, source_path: Path, root_path: Path | None = None):
@@ -196,8 +177,7 @@ class DWGTreeProcessor:
         if not self.root_path.exists():
             raise FileNotFoundError(f"Path {self.root_path} was not found.")
 
-
-    def walk(self, sources_path: Path) -> Generator[JobEntry, None, None]:
+    def walk(self, sources_path: Path) -> Generator[DrawingSource, None, None]:
         """Walk a directory and yield DWG/DXF parsing jobs.
 
         Args:
@@ -212,14 +192,14 @@ class DWGTreeProcessor:
             if suffix in {".dwg", ".dxf", ".dxb"}:
                 parent_rel = file_path.parent.relative_to(sources_path)
                 parent_rel_str = "" if str(parent_rel) == "." else parent_rel.as_posix()
-                yield {
-                    "kind": "file",
-                    "root": str(sources_path),
-                    "source": str(file_path),
-                    "name": file_path.name,
-                    "file_type": suffix,
-                    "parent_rel": parent_rel_str,
-                }
+                yield DrawingSource(
+                    kind="file",
+                    root=str(sources_path),
+                    source=str(file_path),
+                    name=file_path.name,
+                    file_type=suffix,
+                    parent_rel=parent_rel_str,
+                )
                 continue
 
             if suffix != ".zip":
@@ -235,38 +215,34 @@ class DWGTreeProcessor:
                         member_suffix = Path(member_name).suffix.lower()
                         if member_suffix not in {".dwg", ".dxf", ".dxb"}:
                             continue
-                        yield {
-                            "kind": "zipped_file",
-                            "root": str(sources_path),
-                            "source": str(file_path),
-                            "member": member_name,
-                            "name": Path(member_name).name,
-                            "file_type": member_suffix,
-                            "zip_parent_rel": zip_parent_rel_str,
-                            "parent_rel": zip_parent_rel_str,
-                        }
+                        yield DrawingSource(
+                            kind="zipped_file",
+                            root=str(sources_path),
+                            source=str(file_path),
+                            member=member_name,
+                            name=Path(member_name).name,
+                            file_type=member_suffix,
+                            zip_parent_rel=zip_parent_rel_str,
+                            parent_rel=zip_parent_rel_str,
+                        )
             except zipfile.BadZipFile:
                 logger.warning("Skipping corrupted ZIP archive: %s", file_path)
 
 
+def build_entity_embedding(text_value: str | None) -> EntityEmbedding | None:
+    """Build an entity embedding from text content, if available."""
 
-def _build_entity_text(text_value: str | None):
-    if text_value is None or not text_value.strip():
-        return None
-    return func.to_tsvector("russian", text_value)
-
-
-def _build_entity_embedding(text_value: str | None) -> EntityEmbedding | None:
-    # FIXME: required to solve
-    return None
-    # Make the separate CLI-command
-    # entity_text = _build_entity_text(text_value)
-    # if entity_text is None:
-    #     return None
-    # return EntityEmbedding(entity_text=entity_text)
+    if settings.use_ts:
+        if text_value is None or not text_value.strip():
+            return None
+        entity_text = func.to_tsvector("russian", text_value)
+        if entity_text:
+            return EntityEmbedding(entity_text=entity_text)
 
 
-def _coerce_entity_type(value: object) -> EntityType:
+def coerce_entity_type(value: object) -> EntityType:
+    """Coerce a value into an EntityType, with some normalization and fallbacks."""
+
     if isinstance(value, EntityType):
         return value
     if isinstance(value, str):
@@ -325,7 +301,7 @@ def collect_layout_entities(doc) -> Generator[dict[str, Any] | None, None, None]
     for layout in doc.layouts:
         logger.debug("Processing layout: %s, entity count: %d", layout.name, len(layout))
         for dxf_entity in layout:
-            yield DXFAnalyzer.get_entity_data(
+            yield DrawingAnalyzer.get_entity_data(
                 dxf_entity, 
                 parent=layout,
                 layout=layout
@@ -347,8 +323,8 @@ def collect_drawing_summary(drawing: Drawing) -> dict[str, Any]:
     logger.debug("Block count: %d", len(drawing.blocks))
     logger.debug("Layer count: %d", len(drawing.layers))
     total_primitives: int = 0
-    for laout in drawing.layouts:
-        total_primitives += len(laout)
+    for layout in drawing.layouts:
+        total_primitives += len(layout)
     logger.debug("Primitive count across layouts: %d", total_primitives)
 
     layouts: list[dict[str, object]] = []
@@ -382,12 +358,12 @@ def collect_drawing_summary(drawing: Drawing) -> dict[str, Any]:
     for block in drawing.blocks:
         if _is_layout_block(block):
             continue
-        block_description = DXFAnalyzer.get_short_block_description(drawing, block.name)
+        block_data = DrawingAnalyzer.build_block_data(drawing, block)
         table_stats = TextClusterAnalyzer.analyze_table(block)
         blocks_def = {
             "name": block.name,
             "entity_count": sum(1 for _ in block),
-            "description": block_description or '',
+            # "description": block_description or '',
             "is_table": table_stats.is_table,
         }
         if table_stats.is_table:
@@ -401,8 +377,8 @@ def collect_drawing_summary(drawing: Drawing) -> dict[str, Any]:
             }
         blocks.append(blocks_def)
 
-        if block_description and block_description.primitives_layers:
-            block_layers[block.name] = block_description.primitives_layers
+        if block_data and block_data.get("primitives_layers"):
+            block_layers[block.name] = block_data["primitives_layers"]
 
         for entity in block:
             if entity.dxftype() == "INSERT":
@@ -425,22 +401,7 @@ def collect_drawing_summary(drawing: Drawing) -> dict[str, Any]:
     }
 
 
-def collect_dxf_summary(drawing_path: Path) -> dict[str, Any]:
-    """Collect layout, block, and primitive data from a DWG/DXF file.
-
-    Args:
-        drawing_path: Path to a DWG/DXF/DXB file.
-
-    Returns:
-        Summary of the drawing contents.
-    """
-
-    # Read the DWG/DXF file.
-    doc = read_drawing(drawing_path)
-    return collect_drawing_summary(doc)
-
-
-def process_entry(entry: JobEntry) -> ProcessedEntry:
+def process_entry(entry: DrawingSource) -> DrawingSource:
     """Process a single job entry and return its summary.
 
     Args:
@@ -452,50 +413,32 @@ def process_entry(entry: JobEntry) -> ProcessedEntry:
     Raises:
         ValueError: If a ZIP entry does not specify member.
     """
-    source = Path(entry["source"])
+    source = Path(entry.source)
 
     with tempfile.TemporaryDirectory(prefix="parsedwg-process-") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
 
         is_zip = ""
-        if entry["kind"] == "file":
-            source_ref = entry["source"]
+        if entry.kind == "file":
+            source_ref = entry.source
             working_path = source
             entity_md5 = file_md5(working_path)
         else:
             is_zip = " (zip)"
-            member_name = entry.get("member")
+            member_name = entry.member
             if member_name is None:
                 raise ValueError("Missing member for zipped_file entry.")
 
             working_path = extract_from_zip(source, member_name, temp_dir)
-            source_ref = f"{entry['source']}::{member_name}"
+            source_ref = f"{entry.source}::{member_name}"
             entity_md5 = file_md5(working_path)
 
         logger.info("Processing file: %s%s", source_ref, is_zip)
-        summary = collect_dxf_summary(working_path)
+        entry.entity_md5 = entity_md5
+        drawing = read_drawing(working_path)
+        entry.summary = collect_drawing_summary(drawing)
 
-    processed_entry: ProcessedEntry = {
-        **entry,
-        "source_ref": source_ref,
-        "entity_md5": entity_md5,
-        "summary": summary,
-    }
-    return processed_entry
-
-
-def process_batch(batch: list[JobEntry]) -> Generator[ProcessedEntry, None, None]:
-    """Process a batch of files sequentially and yield summaries.
-
-    Args:
-        batch: Batch of processing jobs.
-
-    Yields:
-        Processed entries with ready-to-store summaries.
-    """
-
-    for entry in batch:
-        yield process_entry(entry)
+    return entry
 
 
 def create_folders_tree(
@@ -509,7 +452,7 @@ def create_folders_tree(
         entity_type=EntityType.FOLDER,
         data={"path": str(root_path)},
         project_id=project_id,
-        embedding_data=_build_entity_embedding(f"Scan source: {root_path}"),
+        embedding_data=build_entity_embedding(f"Scan source: {root_path}"),
     )
     session.add(root_entity)
     session.flush()
@@ -529,7 +472,7 @@ def create_folders_tree(
             description=f"Directory: {dir_path}",
             entity_type=EntityType.FOLDER,
             data={"path": str(dir_path)},
-            embedding_data=_build_entity_embedding(f"Directory: {dir_path}"),
+            embedding_data=build_entity_embedding(f"Directory: {dir_path}"),
         )
         session.add(folder_entity)
         session.flush()
@@ -597,7 +540,7 @@ def flush_primitives_batch(
 
 def save_to_db(
     sources_path: str | Path,
-    processed_entries: Generator[ProcessedEntry, None, None],
+    processed_entries: Generator[DrawingSource, None, None],
     project_id: int,
     detail_level: str = DEFAULT_DETAIL_LEVEL,
 ) -> int:
@@ -624,14 +567,13 @@ def save_to_db(
         zip_entities: dict[str, Entity] = {}
 
         for entry in processed_entries:
-            source_ref = str(entry["source_ref"])
-            kind = str(entry["kind"])
-            logger.info("Saving entities for file: %s (%s)", source_ref, kind)
-            file_type = EntityType.FILE if kind == "file" else EntityType.ZIPPED_FILE
+            source_ref = str(entry.source)
+            logger.info("Saving entities for file: %s", source_ref)
+            file_type = EntityType.FILE if entry.kind == "file" else EntityType.ZIPPED_FILE
 
-            if kind == "zipped_file":
-                zip_source = str(entry["source"])
-                zip_parent_rel = str(entry.get("zip_parent_rel", ""))
+            if entry.kind == "zipped_file":
+                zip_source = str(entry.source)
+                zip_parent_rel = str(getattr(entry, "zip_parent_rel", ""))
                 zip_parent_entity = folders.get(zip_parent_rel)
                 if zip_parent_entity is None:
                     raise errors.FolderNotFound(f"Parent directory for ZIP not found: {zip_parent_rel}")
@@ -645,7 +587,7 @@ def save_to_db(
                         description=f"ZIP archive: {zip_source}",
                         entity_type=EntityType.ZIPFILE,
                         data={"path": zip_source},
-                        embedding_data=_build_entity_embedding(f"ZIP archive: {zip_source}"),
+                        embedding_data=build_entity_embedding(f"ZIP archive: {zip_source}"),
                     )
                     session.add(zip_entity)
                     session.flush()
@@ -653,7 +595,7 @@ def save_to_db(
                     created_entities += 1
                 parent_entity = zip_entity
             else:
-                parent_rel = str(entry.get("parent_rel", ""))
+                parent_rel = str(getattr(entry, "parent_rel", ""))
                 parent_entity = folders.get(parent_rel)
                 if parent_entity is None:
                     raise errors.FolderNotFound(f"Parent directory for file not found: {parent_rel}")
@@ -661,18 +603,18 @@ def save_to_db(
             file_entity = Entity(
                 parent_id=parent_entity.id,
                 project_id=project_id,
-                name=str(entry["name"]),
+                name=str(getattr(entry, "name", "")),
                 description=f"Source file: {source_ref}",
                 entity_type=file_type,
                 data={"source_ref": source_ref},
-                entity_md5=str(entry.get("entity_md5", "")) or None,
-                embedding_data=_build_entity_embedding(f"Source file: {source_ref}"),
+                entity_md5=str(getattr(entry, "entity_md5", "")) or None,
+                embedding_data=build_entity_embedding(f"Source file: {source_ref}"),
             )
             session.add(file_entity)
             session.flush()
             created_entities += 1
 
-            summary = cast(dict[str, list[dict[str, object]]], entry["summary"])
+            summary = cast(dict[str, list[dict[str, object]]], getattr(entry, "summary", {}))
             layer_entities_by_key: dict[str, Entity] = {}
             layout_entities_by_name: dict[str, int] = {}
             logger.info("Layouts (%d)", len(summary.get("layouts", [])))
@@ -686,7 +628,7 @@ def save_to_db(
                     description="",
                     entity_type=EntityType.LAYOUT,
                     data={},
-                    embedding_data=_build_entity_embedding(f"Layout {entry['name']}"),
+                    embedding_data=build_entity_embedding(f"Layout {layout_name}"),
                 )
                 session.add(layout_entity)
                 session.flush()
@@ -704,7 +646,7 @@ def save_to_db(
                     description="",
                     entity_type=EntityType.LAYER,
                     data=layer.get("data", {}),
-                    embedding_data=_build_entity_embedding(f"Layer {layer_name}"),
+                    embedding_data=build_entity_embedding(f"Layer {layer_name}"),
                 )
                 session.add(layer_entity)
                 session.flush()
@@ -727,7 +669,7 @@ def save_to_db(
                     entity_type=EntityType.BLOCK,
                     data=block_data,
                     is_table=bool(block.get("is_table")),
-                    embedding_data=_build_entity_embedding(f"Block {block_name}"),
+                    embedding_data=build_entity_embedding(f"Block {block_name}"),
                 )
                 session.add(block_entity)
                 session.flush()
@@ -838,8 +780,7 @@ def save_to_db(
                     project_id=project_id,
                     name=name,
                     description=description,
-                    entity_type=_coerce_entity_type(primitive_payload.get("type")),
-                    embedding_data=_build_entity_embedding(description),
+                    entity_type=coerce_entity_type(primitive_payload.get("type")),
                     geom=geometry,
                     is_virtual=primitive_payload.get("is_virtual", False)
                 )
@@ -895,8 +836,8 @@ def parse_drawing(
         Summary with created entity count and discovered file count.
 
     Raises:
-        RuntimeError: If project_name is missing when dry=False.
-        ValueError: If an unsupported file format is provided.
+        errors.ObjectNotFound: If project_name is missing when dry=False.
+        errors.UnsupportedFileType: If an unsupported file format is provided.
         errors.FileNotFound: If the path does not exist or contains no DWG/DXF/DXB files.
     """
 
@@ -911,36 +852,35 @@ def parse_drawing(
             project_id = result.scalar_one_or_none()
 
         if project_id is None:
-            raise RuntimeError(f"Project named '{project_name}' was not found.")
+            raise errors.ObjectNotFound(f"Project named '{project_name}' was not found.")
 
     if sources_path.is_file():
         logger.info("Processing file: %s", sources_path)
         suffix = sources_path.suffix.lower()
         if suffix not in {".dwg", ".dxf", ".dxb"}:
-            raise ValueError("Only DWG, DXF, and DXB files are supported.")
+            raise errors.UnsupportedFileType("Only DWG, DXF, and DXB files are supported.")
 
-        drawing_files = [
-            {
-                "kind": "file",
-                "source": str(sources_path),
-                "name": sources_path.name,
-                "file_type": suffix,
-                "parent_rel": "",
-            }
+        drawing_sources = [
+            DrawingSource(
+                kind="file",
+                root=str(sources_path),
+                source=str(sources_path),
+                name=sources_path.name,
+                file_type=suffix,
+                parent_rel="",
+            ),
         ]
     elif sources_path.is_dir():
         logger.info("Processing directory: %s", sources_path)
-        drawing_files = list(DWGTreeProcessor(sources_path).walk(sources_path))
-        if not drawing_files:
+        drawing_sources = list(DrawingProcessor(sources_path).walk(sources_path))
+        if not drawing_sources:
             raise errors.FileNotFound(
                 f"No DWG / DXF / DXB files were found in {sources_path} (including ZIP archives)."
             )
     else:
         raise errors.FileNotFound(f"Path {sources_path} was not found.")
 
-    logger.info("Files found for processing: %d", len(drawing_files))
-
-    processed_entries = process_batch(drawing_files)
+    processed_entries = (process_entry(entry) for entry in drawing_sources)
 
     created_entities = 0
     if not dry:
@@ -951,11 +891,10 @@ def parse_drawing(
             detail_level=detail_level,
         )
 
-    logger.info("Processing completed")
     return {
         "job_id": None,
         "project_id": project_id,
-        "file_count": len(drawing_files),
+        "file_count": len(drawing_sources),
         "workers": 1,
         "mode": "dry" if dry else "direct",
         "detail_level": detail_level,
@@ -963,4 +902,4 @@ def parse_drawing(
     }
 
 
-__all__ = ["DWGTreeProcessor", "collect_dxf_summary", "parse_drawing"]
+__all__ = ["DrawingProcessor", "parse_drawing"]

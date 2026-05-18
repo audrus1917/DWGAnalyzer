@@ -35,6 +35,7 @@ class Settings:
     ai_timeout_seconds: float
     ai_api_key: str
     tz_name: str = "UTC"
+    use_ts: bool = False
 
     @property
     def tz(self) -> pytz.BaseTzInfo:
@@ -71,7 +72,8 @@ settings = Settings(
     ai_embed_model=os.getenv("OLLAMA_EMBED_MODEL", os.getenv("AI_EMBED_MODEL", "nomic-embed-text")),
     ai_model=os.getenv("OLLAMA_LLM_MODEL", os.getenv("AI_MODEL", "llama3.1:8b")),
     ai_timeout_seconds=_as_float(os.getenv("AI_TIMEOUT_SECONDS"), default=120.0),
-    ai_api_key=os.getenv("AI_API_KEY", "ollama")
+    ai_api_key=os.getenv("AI_API_KEY", "ollama"),
+    use_ts=_as_bool(os.getenv("USE_TS"), default=False)
 )
 
 

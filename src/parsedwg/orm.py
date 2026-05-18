@@ -105,7 +105,6 @@ class Entity(Base):
     entity_type: Mapped[EntityType] = mapped_column(Enum(EntityType), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(512), nullable=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    full_description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     dxf_attribs: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

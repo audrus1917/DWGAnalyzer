@@ -19,7 +19,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from .dxf_analyzer import DXFAnalyzer
+from .dxf_analyzer import DrawingAnalyzer
 from .table_analysis import TableAnalysis, TextClusterAnalyzer
 
 logger = logging.getLogger(__name__)
@@ -552,7 +552,7 @@ class DXFExplorer:
             logger.error("Block '%s' was not found in the file.", block_name)
             raise ValueError(f"Block '{block_name}' was not found in the file.")
 
-        block_description = DXFAnalyzer.get_short_block_decsription(doc, block_name)
+        block_description = DrawingAnalyzer.get_short_block_decsription(doc, block_name)
         return block_description
 
     def list_layer_names(self) -> list[str]:
