@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import sys
-import time
 
 from pathlib import Path
 
@@ -14,19 +13,21 @@ from gettext import gettext as _
 
 from src.parsedwg import constants
 from src.parsedwg.settings import settings
+from src.parsedwg.constants import ENTITY_TYPE_NAMES
 from src.parsedwg.explorer import DXFExplorer
-from src.parsedwg.docs_ingest import run_documents_ingest
 from src.parsedwg.utils import (
     print_as_table,
     _write_progress_line,
     _finish_progress_line,
-    _format_duration_seconds,
     _save_rows_to_json,
-    get_chat_url
+    display
 )
 from src.parsedwg.utils.args import build_args_parser
-from parsedwg.commands.parse import handle_parse_command
+from src.parsedwg.commands.parse import handle_parse_command
 from src.parsedwg.constants import ResultRow
+from src.parsedwg.db import list_entities, save_short_interpretation
+from src.parsedwg.ai.docs_ingest import run_documents_ingest
+from src.parsedwg.ai.tags import get_name_meaning
 
 
 logging.basicConfig(
@@ -290,13 +291,9 @@ def handle_describe_block_command(
     return constants.OK
 
 
-def handle_interpret_entities_command(
+def handle_interpret_command(
     entity_ids: list[str] | None,
     entity_type: str | None,
-    extra_context: str = "",
-    ai_model: str = settings.ai_model,
-    ai_base_url: str = settings.ai_base_url,
-    ai_api_key: str = settings.ai_api_key,
     workers: int = 1,
     dry: bool = False,
 ) -> int:
@@ -307,10 +304,6 @@ def handle_interpret_entities_command(
     Args:
         entity_ids: Explicit list of entity identifiers to interpret.
         entity_type: Entity type to select if entity_ids are not provided.
-        extra_context: Additional context for the LLM.
-        ai_model: LLM model name.
-        ai_base_url: Base URL of the AI service.
-        ai_api_key: Access key for the AI service.
         workers: Maximum number of parallel tasks.
         dry: If true, do not save the result to the database.
 
@@ -324,15 +317,7 @@ def handle_interpret_entities_command(
         TimeoutError: Can be raised by internal AI calls and converted to an error code.
     """
 
-    logger.info("Starting")
-
-    from .db import list_entities_for_semantic_categorization, save_short_interpretation
-    from .langchain_name_tags import (
-        build_name_meaning_prompt,
-        get_name_meaning,
-    )
-
-    logger.debug("AI API key configured: %s", bool(ai_api_key))
+    display(_("Starting interpret command"))
 
     if bool(entity_ids) == bool(entity_type):
         logger.error("Specify either --entity-id or --entity-type.")
@@ -341,13 +326,10 @@ def handle_interpret_entities_command(
         logger.error("--workers must be greater than 0.")
         return constants.UNBOUND_ERROR
 
-    chat_url = get_chat_url(ai_base_url)
-    logger.debug("chat_url: %s", chat_url)
-    normalized_context = " ".join(extra_context.split())
     llm_timeout_seconds = settings.ai_timeout_seconds
 
     async def _run() -> dict[str, object]:
-        entities = await list_entities_for_semantic_categorization(
+        entities = await list_entities(
             entity_ids=entity_ids,
             entity_type=entity_type,
         )
@@ -358,28 +340,21 @@ def handle_interpret_entities_command(
 
         semaphore = asyncio.Semaphore(workers)
 
-        async def _process(entity: dict[str, str]) -> dict[str, object]:
+        async def _process_entity(entity: dict[str, str]) -> dict[str, object]:
+            extra_context = ""
+            if "entity_type" in entity:
+                entity_type_name = ENTITY_TYPE_NAMES.get(entity["entity_type"], None)
+                if entity_type_name:
+                    extra_context = f"Тип примитива={entity_type_name}"
             async with semaphore:
-                prompt = build_name_meaning_prompt(
-                    name=entity["name"],
-                    extra_context=normalized_context,
-                )
-                logger.debug(
-                    "LLM request interpret-entities: entity_id=%s entity_name=%s model=%s chat_url=%s\n%s",
-                    entity["id"],
-                    entity["name"],
-                    ai_model,
-                    chat_url,
-                    prompt,
-                )
                 try:
                     text = await asyncio.wait_for(
                         asyncio.to_thread(
                             get_name_meaning,
                             name=entity["name"],
-                            chat_url=chat_url,
-                            model=ai_model,
-                            extra_context=normalized_context,
+                            chat_url=settings.ai_base_url,
+                            model=settings.ai_model,
+                            extra_context=extra_context,
                             timeout_seconds=llm_timeout_seconds,
                         ),
                         timeout=llm_timeout_seconds + 5.0,
@@ -418,7 +393,7 @@ def handle_interpret_entities_command(
         failures: list[dict[str, object]] = []
         total = len(entities)
         progress_width = 0
-        tasks = [asyncio.create_task(_process(entity)) for entity in entities]
+        tasks = [asyncio.create_task(_process_entity(entity)) for entity in entities]
         try:
             for task in asyncio.as_completed(tasks):
                 item = await task
@@ -519,298 +494,6 @@ def handle_interpret_entities_command(
         return constants.ERROR
     except (LookupError, OSError, ValueError, TimeoutError) as e:
         logger.error("Entity interpretation failed: %s", e)
-        return constants.UNBOUND_ERROR
-
-
-def handle_interpret_blocks_command(
-    block_ids: list[str] | None,
-    file_ref: str | None,
-    by_path: bool,
-    extra_context: str = "",
-    ai_model: str = settings.ai_model,
-    ai_base_url: str = settings.ai_base_url,
-    ai_api_key: str = settings.ai_api_key,
-    workers: int = 1,
-    dry: bool = False,
-) -> int:
-    """Interpret blocks and save short and full interpretations.
-
-    Args:
-        block_ids: Explicit list of block identifiers to interpret.
-        file_ref: File identifier or path when by_path=true.
-        by_path: If true, treat file_ref as the file source_ref.
-        extra_context: Additional context for the LLM.
-        ai_model: LLM model name.
-        ai_base_url: Base URL of the AI service.
-        ai_api_key: Access key for the AI service.
-        workers: Maximum number of parallel tasks.
-        dry: If true, do not save the result to the database.
-
-    Returns:
-        CLI command exit code.
-
-    Raises:
-        RuntimeError: Can be raised by internal AI calls and converted to an error code.
-        ValueError: Can be raised by internal selection, validation, or save calls and converted to an error code.
-        LookupError: Can be raised by internal database calls and converted to an error code.
-        TimeoutError: Can be raised by internal AI calls and converted to an error code.
-    """
-
-    from .db import (
-        get_file_id_by_source,
-        get_full_description,
-        list_blocks_for_interpretation,
-        save_block_description,
-        save_block_interpretations,
-    )
-    from .langchain_name_tags import get_name_meaning
-
-    logger.debug("AI API key configured: %s", bool(ai_api_key))
-
-    if bool(block_ids) == bool(file_ref):
-        logger.error("Specify either --block-id or file_ref.")
-        return constants.UNBOUND_ERROR
-    if workers <= 0:
-        logger.error("--workers must be greater than 0.")
-        return constants.UNBOUND_ERROR
-
-    resolved_file_id = file_ref
-    if file_ref is not None and by_path:
-        resolved_file_id = asyncio.run(get_file_id_by_source(file_ref))
-        if not resolved_file_id:
-            print("File not found in the database.")
-            return constants.NOT_FOUND
-
-    chat_url = get_chat_url(ai_base_url)
-    normalized_context = " ".join(extra_context.split())
-    llm_timeout_seconds = settings.ai_timeout_seconds
-
-    async def _run() -> dict[str, object]:
-        blocks = await list_blocks_for_interpretation(
-            block_ids=block_ids,
-            file_id=resolved_file_id,
-        )
-        if not blocks:
-            return {"rows": [], "failures": []}
-        if not dry:
-            logger.debug(f"Selected blocks: {len(blocks)}")
-
-        semaphore = asyncio.Semaphore(workers)
-
-        async def _process_block(block: dict[str, str]) -> dict[str, object]:
-            logger.debug(
-                f"Start processing block_id={block.get('id', '')}"
-                f" block_name={block.get('name', '')}"
-            )
-            
-            async with semaphore:
-                block_id = block["id"]
-                block_name = block["name"]
-                block_file_id = block.get("file_id") or resolved_file_id
-                started_at = time.perf_counter()
-                try:
-                    block_payload = await get_full_description(
-                        block_name,
-                        file_id=block_file_id,
-                    )
-                    block_text_for_llm = (
-                        json.dumps(block_payload, ensure_ascii=False, sort_keys=True)
-                        if block_payload is not None
-                        else block_name
-                    )
-                    if not dry and block_payload is not None:
-                        await save_block_description(
-                            block_id=block_id,
-                            description=block_text_for_llm,
-                        )
-                    short_interpretation = await asyncio.wait_for(
-                        asyncio.to_thread(
-                            get_name_meaning,
-                            name=block_text_for_llm,
-                            chat_url=chat_url,
-                            model=ai_model,
-                            extra_context=normalized_context,
-                            timeout_seconds=llm_timeout_seconds,
-                        ),
-                        timeout=llm_timeout_seconds + 5.0,
-                    )
-                    # Request the full block description from the LLM as well.
-                    full_description = await asyncio.wait_for(
-                        asyncio.to_thread(
-                            get_name_meaning,
-                            name=block_text_for_llm,
-                            chat_url=chat_url,
-                            model=ai_model,
-                            extra_context=normalized_context + "\nGive the most detailed possible description of the purpose and structure of this block, including details useful for a designer.",
-                            timeout_seconds=llm_timeout_seconds,
-                        ),
-                        timeout=llm_timeout_seconds + 10.0,
-                    )
-                    block_description = block_text_for_llm
-                    full_interpretation = full_description
-                except TimeoutError:
-                    duration_seconds = round(time.perf_counter() - started_at, 3)
-                    return {
-                        "status": "error",
-                        "block_id": block_id,
-                        "block_name": block_name,
-                        "duration_seconds": duration_seconds,
-                        "error": (
-                            "Timed out while waiting for the LLM response for block "
-                            f"{block_id} ({block_name})."
-                        ),
-                    }
-                except (LookupError, OSError, RuntimeError, ValueError) as exc:
-                    duration_seconds = round(time.perf_counter() - started_at, 3)
-                    return {
-                        "status": "error",
-                        "block_id": block_id,
-                        "block_name": block_name,
-                        "duration_seconds": duration_seconds,
-                        "error": str(exc),
-                    }
-                duration_seconds = round(time.perf_counter() - started_at, 3)
-                return {
-                    "status": "ok",
-                    "block_id": block_id,
-                    "block_name": block_name,
-                    "duration_seconds": duration_seconds,
-                    "short_interpretation": short_interpretation,
-                    "description": block_description,
-                    "full_interpretation": full_interpretation,
-                }
-
-        rows: list[dict[str, object]] = []
-        failures: list[dict[str, object]] = []
-        progress_width = 0
-        total = len(blocks)
-        tasks = [asyncio.create_task(_process_block(block)) for block in blocks]
-        try:
-            for task in asyncio.as_completed(tasks):
-                item = await task
-                block_id = str(item.get("block_id", ""))
-                block_name = str(item.get("block_name", ""))
-                raw_duration_seconds = item.get("duration_seconds", 0.0)
-                duration_seconds = (
-                    float(raw_duration_seconds)
-                    if isinstance(raw_duration_seconds, (int, float))
-                    else 0.0
-                )
-                duration_label = _format_duration_seconds(duration_seconds)
-                if item.get("status") == "error":
-                    failures.append(
-                        {
-                            "status": "error",
-                            "block_id": block_id,
-                            "block_name": block_name,
-                            "duration_seconds": duration_seconds,
-                            "error": str(item.get("error", "")),
-                        }
-                    )
-                    logger.error(
-                        "Block interpretation error for %s (%s) after %s: %s",
-                        block_id or "-",
-                        block_name or "-",
-                        duration_label,
-                        item.get("error", ""),
-                    )
-                else:
-                    short_interpretation = str(item["short_interpretation"])
-                    block_description = str(item["description"])
-                    full_interpretation = str(item["full_interpretation"])
-                    try:
-                        if dry:
-                            rows.append(
-                                {
-                                    "status": "ok",
-                                    "block_id": block_id,
-                                    "block_name": block_name,
-                                    "duration_seconds": duration_seconds,
-                                    "short_interpretation": short_interpretation,
-                                    "description": block_description,
-                                    "full_interpretation": full_interpretation,
-                                }
-                            )
-                        else:
-                            await save_block_interpretations(
-                                block_id=block_id,
-                                short_interpretation=short_interpretation,
-                                full_interpretation=full_interpretation,
-                                description=block_description,
-                            )
-                            rows.append(
-                                {
-                                    "block_id": block_id,
-                                    "block_name": block_name,
-                                    "duration_seconds": duration_seconds,
-                                }
-                            )
-                    except (LookupError, OSError, RuntimeError, ValueError) as exc:
-                        failures.append(
-                            {
-                                "status": "error",
-                                "block_id": block_id,
-                                "block_name": block_name,
-                                "duration_seconds": duration_seconds,
-                                "error": str(exc),
-                            }
-                        )
-                        logger.error(
-                            "Failed to save interpretation for block %s (%s): %s",
-                            block_id or "-",
-                            block_name or "-",
-                            exc,
-                        )
-
-                if not dry:
-                    print(
-                        f"\nBlock {block_name or block_id or '-'} processed in {duration_label}"
-                    )
-
-                processed = len(rows) + len(failures)
-                if not dry:
-                    progress_width = _write_progress_line(
-                        "Processed {processed}/{total}: success {success}, errors {errors}".format(
-                            processed=processed,
-                            total=total,
-                            success=len(rows),
-                            errors=len(failures),
-                        ),
-                        previous_width=progress_width,
-                    )
-        finally:
-            if not dry:
-                _finish_progress_line(progress_width)
-
-        return {"rows": rows, "failures": failures}
-
-    logger.debug("Born to run")
-    try:
-        result = asyncio.run(_run())
-        rows = result.get("rows", [])
-        if not isinstance(rows, list):
-            rows = []
-        failures = result.get("failures", [])
-        if not isinstance(failures, list):
-            failures = []
-        if not rows:
-            if failures:
-                logger.error("Failed to interpret any blocks. Errors: %d", len(failures))
-                return constants.ERROR
-            print("No blocks to interpret.")
-            return constants.OK
-        if dry:
-            print(json.dumps(rows + failures, ensure_ascii=False, indent=2))
-            return constants.OK
-        print(f"Interpreted blocks: {len(rows)}")
-        if failures:
-            print(f"Errors: {len(failures)}")
-        return constants.OK
-    except RuntimeError as e:
-        logger.error("AI mode error: %s", e)
-        return constants.ERROR
-    except (LookupError, OSError, ValueError, TimeoutError) as e:
-        logger.error("Block interpretation failed: %s", e)
         return constants.UNBOUND_ERROR
 
 
@@ -1466,41 +1149,11 @@ def main(argv: list[str] | None = None) -> int:
         case "agent-status":
             return_code = handle_agent_status_command(job_id=args.job_id)
 
-        case "interpret-entities":
-            return_code = handle_interpret_entities_command(
+        case "interpret":
+            return_code = handle_interpret_command(
                 entity_ids=args.entity_ids,
                 entity_type=args.entity_type,
-                extra_context=args.extra_context,
-                ai_model=args.ai_model,
-                ai_base_url=args.ai_base_url,
-                ai_api_key=args.ai_api_key,
                 workers=args.workers,
-                dry=args.dry,
-            )
-
-        case "interpret-blocks":
-            return_code = handle_interpret_blocks_command(
-                block_ids=args.block_ids,
-                file_ref=args.file_ref,
-                by_path=args.by_path,
-                extra_context=args.extra_context,
-                ai_model=args.ai_model,
-                ai_base_url=args.ai_base_url,
-                ai_api_key=args.ai_api_key,
-                workers=args.workers,
-                dry=args.dry,
-            )
-
-        case "interpret-block":
-            return_code = handle_interpret_blocks_command(
-                block_ids=[args.entity_id],
-                file_ref=None,
-                by_path=False,
-                extra_context=args.extra_context,
-                ai_model=args.ai_model,
-                ai_base_url=args.ai_base_url,
-                ai_api_key=args.ai_api_key,
-                workers=1,
                 dry=args.dry,
             )
 

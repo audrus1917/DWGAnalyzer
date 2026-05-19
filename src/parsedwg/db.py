@@ -2,6 +2,7 @@
 
 from typing import Any, cast
 
+import re
 import logging
 import tempfile
 
@@ -10,11 +11,13 @@ from pathlib import Path
 
 from sqlalchemy import case, create_engine, func, or_, select, desc
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import Session, aliased, selectinload, sessionmaker as orm_sessionmaker
+from sqlalchemy.orm import aliased, selectinload, sessionmaker as orm_sessionmaker
 
-from .settings import settings
-from .orm import Category, Entity, EntityEmbedding, EntityType, Project
+from gettext import gettext as _
 
+from src.parsedwg.settings import settings
+from src.parsedwg.orm import Category, Entity, EntityEmbedding, EntityType, Project
+from src.parsedwg.ai.tags import get_interpretation_categories
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +34,7 @@ async_session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
 session_factory = orm_sessionmaker(sync_engine, expire_on_commit=False)
 
 
-def _parse_id(raw_id: str | int) -> int:
+def parse_id(raw_id: str | int) -> int:
     """Normalize an external id to an integer primary key.
 
     Args:
@@ -49,7 +52,7 @@ def _parse_id(raw_id: str | int) -> int:
     try:
         return int(raw_id)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"Invalid id: {raw_id}") from exc
+        raise ValueError(_("Invalid id: {raw_id}").format(raw_id=raw_id)) from exc
 
 
 def _get_short_interpretation(value: object) -> str | None:
@@ -96,7 +99,7 @@ async def _get_entity_with_embedding(session: AsyncSession, entity_id: str | int
     stmt = (
         select(Entity)
         .options(selectinload(Entity.embedding_data))
-        .where(Entity.id == _parse_id(entity_id))
+        .where(Entity.id == parse_id(entity_id))
     )
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
@@ -134,7 +137,7 @@ async def get_entity_name_by_id(entity_id: str) -> str | None:
         Entity name or None.
     """
     async with async_session_factory() as session:
-        entity = await session.get(Entity, _parse_id(entity_id))
+        entity = await session.get(Entity, parse_id(entity_id))
     return entity.name if entity is not None else None
 
 
@@ -152,10 +155,19 @@ async def save_short_interpretation(entity_id: str, text: str) -> None:
         LookupError: If the entity with the given id is not found.
         ValueError: If entity_id has an invalid format.
     """
+
+
     async with async_session_factory() as session:
         entity = await _get_entity_with_embedding(session, entity_id)
+
         if entity is None:
             raise LookupError(f"Entity {entity_id} was not found.")
+
+        categories = get_interpretation_categories(text)
+        
+        if categories:
+            entity.category = categories
+
         embedding_data = _ensure_embedding(entity)
         embedding_data.short_interpretation = text
         session.add(embedding_data)
@@ -177,7 +189,7 @@ async def save_block_description(block_id: str, description: str) -> None:
         ValueError: If block_id has an invalid format.
     """
     async with async_session_factory() as session:
-        entity = await session.get(Entity, _parse_id(block_id))
+        entity = await session.get(Entity, parse_id(block_id))
         if entity is None:
             raise LookupError(f"Block {block_id} was not found.")
         entity.description = description
@@ -254,12 +266,12 @@ async def list_blocks_for_interpretation(
     id_order: dict[int, int] = {}
 
     if block_ids:
-        parsed_ids = [_parse_id(block_id) for block_id in block_ids]
+        parsed_ids = [parse_id(block_id) for block_id in block_ids]
         id_order = {block_id: index for index, block_id in enumerate(parsed_ids)}
         stmt = stmt.where(Entity.id.in_(parsed_ids))
     else:
         assert file_id is not None
-        file_entity_id = _parse_id(file_id)
+        file_entity_id = parse_id(file_id)
         stmt = stmt.where(Entity.parent_id == file_entity_id).order_by(Entity.name.asc(), Entity.id.asc())
 
     async with async_session_factory() as session:
@@ -276,7 +288,7 @@ async def list_blocks_for_interpretation(
         for row in rows
     ]
     if id_order:
-        payload.sort(key=lambda item: id_order[_parse_id(item["id"])])
+        payload.sort(key=lambda item: id_order[parse_id(item["id"])])
     return payload
 
 
@@ -304,7 +316,7 @@ async def list_multileaders_for_nearest_lookup(
         )
     )
     if file_id is not None:
-        stmt = stmt.where(Entity.file_id == _parse_id(file_id))
+        stmt = stmt.where(Entity.file_id == parse_id(file_id))
 
     async with async_session_factory() as session:
         result = await session.execute(stmt)
@@ -426,7 +438,7 @@ async def get_full_description(
             )
         )
         if file_id is not None:
-            block_stmt = block_stmt.where(Entity.file_id == _parse_id(file_id))
+            block_stmt = block_stmt.where(Entity.file_id == parse_id(file_id))
         block_stmt = block_stmt.limit(1)
         logger.debug(f"Block query: {block_stmt}")
 
@@ -519,7 +531,7 @@ async def get_full_description_by_id(block_id: str) -> dict[str, object] | None:
     """
 
     async with async_session_factory() as session:
-        block = await session.get(Entity, _parse_id(block_id))
+        block = await session.get(Entity, parse_id(block_id))
         if block is None:
             return None
     return await get_full_description(block.name, file_id=str(block.file_id) if block.file_id else None)
@@ -534,7 +546,7 @@ async def list_blocks_for_export(file_id: str) -> list[dict[str, object]]:
     Returns:
         List of block descriptions for export.
     """
-    file_entity_id = _parse_id(file_id)
+    file_entity_id = parse_id(file_id)
     stmt = (
         select(Entity.name)
         .where(Entity.entity_type == EntityType.BLOCK)
@@ -592,7 +604,7 @@ async def get_table_blocks_by_file_id(file_id: str) -> list[dict[str, object]]:
         select(Entity.name, Entity.data)
         .where(Entity.entity_type == EntityType.BLOCK)
         .where(Entity.is_table.is_(True))
-        .where(Entity.parent_id == _parse_id(file_id))
+        .where(Entity.parent_id == parse_id(file_id))
         .order_by(Entity.name.asc())
     )
     async with async_session_factory() as session:
@@ -661,7 +673,7 @@ async def search_entities(
     if entity_type is not None:
         stmt = stmt.where(Entity.entity_type == entity_type)
     if parent_id is not None:
-        stmt = stmt.where(Entity.parent_id == _parse_id(parent_id))
+        stmt = stmt.where(Entity.parent_id == parse_id(parent_id))
 
     async with async_session_factory() as session:
         result = await session.execute(stmt)
@@ -791,7 +803,7 @@ def _get_category_payload(meanings: list[dict[str, object]]) -> tuple[str | None
     return name, aliases
 
 
-async def list_entities_for_semantic_categorization(
+async def list_entities(
     entity_ids: list[str] | None = None,
     entity_type: str | None = None,
     file_id: str | None = None,
@@ -815,23 +827,16 @@ async def list_entities_for_semantic_categorization(
         raise ValueError("Specify either entity_ids or entity_type.")
 
     stmt = select(Entity.id, Entity.name, Entity.description, Entity.entity_type)
-    order_by_name = False
-    id_order: dict[int, int] = {}
-    parsed_file_id = _parse_id(file_id) if file_id is not None else None
+    parsed_file_id = parse_id(file_id) if file_id is not None else None
 
     if entity_ids:
-        parsed_ids = [_parse_id(entity_id) for entity_id in entity_ids]
-        id_order = {entity_id: index for index, entity_id in enumerate(parsed_ids)}
+        parsed_ids = [parse_id(entity_id) for entity_id in entity_ids]
         stmt = stmt.where(Entity.id.in_(parsed_ids))
     else:
         stmt = stmt.where(Entity.entity_type == entity_type)
-        order_by_name = True
 
     if parsed_file_id is not None:
         stmt = stmt.where(Entity.file_id == parsed_file_id)
-
-    if order_by_name:
-        stmt = stmt.order_by(Entity.name.asc(), Entity.id.asc())
 
     async with async_session_factory() as session:
         result = await session.execute(stmt)
@@ -848,9 +853,6 @@ async def list_entities_for_semantic_categorization(
         }
         for row in rows
     ]
-
-    if id_order:
-        payload.sort(key=lambda item: id_order[_parse_id(item["id"])])
 
     return payload
 
@@ -873,7 +875,7 @@ async def assign_semantic_category(
         ValueError: If entity_id has an invalid format.
     """
 
-    entity_pk = _parse_id(entity_id)
+    entity_pk = parse_id(entity_id)
 
     async with async_session_factory() as session:
         entity_result = await session.execute(
@@ -975,7 +977,7 @@ async def create_category(
 ) -> dict[str, str]:
     """Create a category and return its main fields."""
 
-    parent_entity_id = _parse_id(parent_id) if parent_id is not None else None
+    parent_entity_id = parse_id(parent_id) if parent_id is not None else None
 
     async with async_session_factory() as session:
         category = Category(
@@ -1003,8 +1005,8 @@ async def update_category(
 ) -> dict[str, str] | None:
     """Update a category by id. Return None if the category is not found."""
 
-    category_entity_id = _parse_id(category_id)
-    parent_entity_id = _parse_id(parent_id) if parent_id is not None else None
+    category_entity_id = parse_id(category_id)
+    parent_entity_id = parse_id(parent_id) if parent_id is not None else None
 
     async with async_session_factory() as session:
         category = await session.get(Category, category_entity_id)
@@ -1031,7 +1033,7 @@ async def update_category(
 async def delete_category(category_id: str) -> bool:
     """Delete a category by id. Return True if deletion occurred."""
 
-    category_entity_id = _parse_id(category_id)
+    category_entity_id = parse_id(category_id)
 
     async with async_session_factory() as session:
         category = await session.get(Category, category_entity_id)
@@ -1048,7 +1050,7 @@ async def list_categories(parent_id: str | None = None) -> list[dict[str, str]]:
 
     stmt = select(Category).order_by(Category.name.asc())
     if parent_id is not None:
-        stmt = stmt.where(Category.parent_id == _parse_id(parent_id))
+        stmt = stmt.where(Category.parent_id == parse_id(parent_id))
 
     async with async_session_factory() as session:
         result = await session.execute(stmt)
@@ -1073,7 +1075,7 @@ async def update_project(
 ) -> dict[str, str] | None:
     """Update a project by id. Return None if the project is not found."""
     async with async_session_factory() as session:
-        project = await session.get(Project, _parse_id(project_id))
+        project = await session.get(Project, parse_id(project_id))
         if project is None:
             return None
 
@@ -1097,7 +1099,7 @@ async def update_project(
 async def delete_project(project_id: str) -> bool:
     """Delete a project by id. Return True if deletion occurred."""
     async with async_session_factory() as session:
-        project = await session.get(Project, _parse_id(project_id))
+        project = await session.get(Project, parse_id(project_id))
         if project is None:
             return False
 

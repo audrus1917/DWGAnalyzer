@@ -2,19 +2,20 @@
 
 from typing import Any
 
+import sys
 import logging
 import re
 
 from ezdxf.document import Drawing
 from ezdxf.math import Matrix44
-from ezdxf.tools.text import MTextEditor
+from ezdxf.tools.text import MTextEditor, plain_mtext
 from ezdxf.addons.geo import GeoProxy
+from ezdxf.entities.acad_table import read_acad_table_content
 
 import shapely.geometry
 import shapely.validation
 
 from src.parsedwg.constants import ENTITY_TYPES
-from src.parsedwg.schemas import BlockDescription
 from src.parsedwg.utils.geom import is_point_like, format_point
 
 logger = logging.getLogger(__name__)
@@ -70,13 +71,13 @@ class DrawingAnalyzer:
         return children
 
     @staticmethod
-    def get_shapely_geometry(entity: Any) -> shapely.geometry.base.BaseGeometry | None: 
+    def get_shapely_geometry(entity: Any) -> shapely.geometry.base.BaseGeometry | None:
         """Convert a DXF entity into a shapely geometry when possible."""
 
         dxftype = entity.dxftype()
         if dxftype in ("TEXT", "MTEXT"):
             return shapely.geometry.Point(entity.dxf.insert.x, entity.dxf.insert.y)
-        
+
         try:
             proxy = GeoProxy.from_dxf_entities(entity)
         except (AttributeError, TypeError, ValueError):
@@ -171,7 +172,7 @@ class DrawingAnalyzer:
             return None
 
         if dxftype in [
-            "POINT", "LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE", 
+            "POINT", "LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE",
             "SPLINE", "SOLID", "HATCH"
         ]:
             try:
@@ -210,7 +211,7 @@ class DrawingAnalyzer:
             entity_data["points"] = points
 
         if dxftype in [
-            "POINT", "LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE", 
+            "POINT", "LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE",
             "SPLINE", "SOLID", "HATCH"
         ]:
             shapely_geom = cls.get_shapely_geometry(entity)
@@ -221,6 +222,24 @@ class DrawingAnalyzer:
                 entity_data["geom"] = shapely_geom.wkt
 
         match dxftype:
+            case "ACAD_TABLE":
+                content = read_acad_table_content(entity)
+                table_data = []
+                first_header = ""
+                for row_idx, row in enumerate(content):
+                    table_row = []
+                    for col_idx, value in enumerate(row):
+                        value = value.strip() if isinstance(value, str) else value
+                        if row_idx == 0 and col_idx == 0 and isinstance(value, str) and value:
+                            first_header = value.strip()
+                        elif row_idx == 0 and col_idx > 0 and value and first_header:
+                            first_header = ""
+                        table_row.append(str(value))
+                    table_data.append(table_row)
+                entity_data["data"] = table_data
+                if first_header:
+                    entity_data["name"] = first_header
+                    
             case "INSERT":
                 entity_data["target_block"] = entity.dxf.name
                 entity_data["attribs"] = {
@@ -249,8 +268,9 @@ class DrawingAnalyzer:
             case "MULTILEADER":
                 entity_text = entity.get_mtext_content() if hasattr(entity, "get_mtext_content") else ""
                 if entity_text:
-                    clean_text = MTextEditor(entity_text).text
-                    entity_data["description"] = re.sub(r"\s+", " ", clean_text).strip()
+                    clean_text = plain_mtext(MTextEditor(entity_text).text)
+
+                    entity_data["name"] = re.sub(r"\s+", " ", clean_text).strip()
 
                 if shapely_geom := cls.get_multileader_geometry(entity):
                     entity_data["geom"] = shapely_geom.wkt

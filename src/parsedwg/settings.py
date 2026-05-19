@@ -53,7 +53,7 @@ def get_ai_settings(
     if not enabled:
         return None
 
-    from src.parsedwg.langchain_name_tags import ensure_langchain_available
+    from parsedwg.tags import ensure_langchain_available
 
     ensure_langchain_available()
     return {
