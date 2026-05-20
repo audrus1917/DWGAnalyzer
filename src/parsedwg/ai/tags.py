@@ -11,9 +11,10 @@ import json
 import logging
 import re
 
-from .settings import settings
+from src.parsedwg.settings import settings
 
 logger = logging.getLogger(__name__)
+
 
 
 _SYSTEM_PROMPT = (
@@ -70,136 +71,22 @@ _TEXT_TAGS_SCORED_HUMAN_PROMPT = (
 )
 
 
-# _NAME_MEANING_SYSTEM_PROMPT = (
-#     "You are a technical CAD data analyst. Your task is to determine an "
-#     "object's purpose from its name while ignoring technical indexes, prefixes, and digits."
-# )
-_NAME_MEANING_SYSTEM_PROMPT = (
-    "Ты — эксперт по обработке данных DXF и BIM. Твоя задача: расшифровать "
-    "смысл объекта, разделяя его геометрический тип и физическое назначение. "
-    "Контекст: Инженерная графика. Примитивы (HATCH, LINE и др.) всегда "
-    "переводи технически (Штриховка, Линия), а не буквально."
-)
-
-_NAME_MEANING_HUMAN_PROMPT_TEMPLATE = (
-    "Название сущности: \"{name}\"\n"
-    "Контекст: {context_line}\n\n"
-    "Инструкция:\n"
-    "1. Раздели название на части, используя символы подчеркивания (_) и дефиса (-).\n"
-    "2. Игнорируй служебную информацию: префиксы (RECOVER, COPY), даты и длинные числовые ID.\n"
-    "3. Сфокусируйся на словах, несущих физический смысл.\n"
-    "4. Выдели только основной тип объекта и его материал/свойство.\n"
-    "5. Игнорируй отдельные буквы (M, X, T) и числа (11, 01, 100).\n"
-    "6. Ответ строго в одну строку, без вступлений и маркированных списков.\n\n"
-    "Образец ответа: Категория: [тип]. Описание: [суть].\n"
-    "Ответ:"
-)
-
-_NAME_MEANING_SYSTEM_PROMPT = (
-    "Ты — эксперт-сметчик. Твой ответ должен быть строго в формате JSON."
-)
-
-_NAME_MEANING_HUMAN_PROMPT_TEMPLATE = (
-    "Распарси блок: \"{name}\"\n"
-    "Ответ:"
-)
-
-_NAME_MEANING_SYSTEM_PROMPT = (
-    "Действуй как лингвистический анализатор технических терминов. "
-    "Разбери название CAD-сущности по смысловым частям."
-)
-
-
-_NAME_MEANING_HUMAN_PROMPT_TEMPLATE = (
-    "Название сущности: \"{name}\"\n\n"
-    "Инструкция:\n"
-    "1. Выдели основную категорию объекта.\n"
-    "{context_line}"
-    "Пиши тезисно, строго по делу, без вступлений, не расшифровывай отдельные буквы и числа.\n"
-)
-
-_NAME_MEANING_SYSTEM_PROMPT = (
-    "Ты — BIM-ассистент. Анализируй строки элементов. "
-    "Выделяй: 1. Категорию (Revit), 2. Element ID, 3. Расположение (уровень/отметка). "
-    "Ответ давай в строгом техническом стиле, без воды."
-)
-
-_NAME_MEANING_HUMAN_PROMPT_TEMPLATE = (
-    "Определи категорию и параметры: '{name}'"
-)
-
-_NAME_MEANING_SYSTEM_PROMPT = (
-    "Ты — эксперт-сметчик. Твой ответ должен быть строго в формате JSON."
-)
-
-_NAME_MEANING_HUMAN_PROMPT_TEMPLATE = (
-    "Распарси блок: \"{name}\"\n"
-    "Ответ:"
-)
-
-_NAME_MEANING_SYSTEM_PROMPT = (
-    "Действуй как лингвистический анализатор технических терминов. "
-    "Разбери название CAD-сущности по смысловым частям."
-)
-
-
-_NAME_MEANING_HUMAN_PROMPT_TEMPLATE = (
-    "Название сущности: \"{name}\"\n\n"
-    "Инструкция:\n"
-    "1. Выдели основную категорию объекта.\n"
-    "{context_line}"
-    "Пиши тезисно, строго по делу, без вступлений, не расшифровывай отдельные буквы и числа.\n"
-)
-
-_NAME_MEANING_SYSTEM_PROMPT = (
-    "Ты — BIM-ассистент. Анализируй строки элементов. "
-    "Выделяй: 1. Категорию (Revit), 2. Element ID, 3. Расположение (уровень/отметка). "
-    "Ответ давай в строгом техническом стиле, без воды."
-)
-
-_NAME_MEANING_HUMAN_PROMPT_TEMPLATE = (
-    "Определи категорию и параметры: '{name}'"
-)
-
-_NAME_MEANING_SYSTEM_PROMPT = (
-    "Ты — эксперт по обработке данных DXF и BIM. Твоя задача: расшифровать "
-    "смысл объекта, разделяя его геометрический тип и физическое назначение. "
-    "Контекст: Инженерная графика. Примитивы (HATCH, LINE и др.) всегда "
-    "переводи технически (Штриховка, Линия), а не буквально."
-)
-
-_NAME_MEANING_HUMAN_PROMPT_TEMPLATE = (
-    "Название сущности: \"{name}\"\n"
-    "Контекст: {context_line}\n\n"
-    "Инструкция:\n"
-    "1. Раздели название на части, используя символы подчеркивания (_) и дефиса (-).\n"
-    "2. Игнорируй служебную информацию: префиксы (RECOVER, COPY), даты и длинные числовые ID.\n"
-    "3. Сфокусируйся на словах, несущих физический смысл.\n"
-    "4. Выдели только основной тип объекта и его материал/свойство.\n"
-    "5. Игнорируй отдельные буквы (M, X, T) и числа (11, 01, 100).\n"
-    "6. Ответ строго в одну строку, без вступлений и маркированных списков.\n\n"
-    "Образец ответа: Категория: [тип]. Описание: [суть].\n"
-    "Ответ:"
-)
-
 # Optimized system prompt for Llama 3.1 8B.
-_NAME_MEANING_SYSTEM_PROMPT = (
-    "Ты — эксперт по обработке данных DXF и BIM. Твоя задача: определять физический смысл объекта по его техническому имени. "
-    "ПРАВИЛО: Ответ строго в одну строку по шаблону: Категория: [тип]. Описание: [суть]. "
-    "Никаких вводных слов и пояснений. Примитивы (HATCH, LINE) переводи технически (Штриховка, Линия)."
+NAME_MEANING_SYSTEM_PROMPT = (
+    "Ты — эксперт по обработке данных DXF и BIM. Твоя задача: определять категории объекта по его техническому имени или описанию. "
+    "ПРАВИЛО: Ответ строго в одну строку по шаблону: Категории: [тип, тип, тип, тип, тип]. Описание: [суть]. "
+    "Никаких вводных слов и пояснений. Список категорий до 5 эелементов. Примитивы (HATCH, LINE) переводи технически (Штриховка, Линия)."
 )
 
 # Optimized request template.
-_NAME_MEANING_HUMAN_PROMPT_TEMPLATE = (
+NAME_MEANING_HUMAN_PROMPT_TEMPLATE = (
     "Проанализируй название объекта.\n\n"
     "ПРИМЕРЫ:\n"
-    "Вход: \"RECOVER_STEEL_BEAM_100-20_X\"\n"
-    "Ответ: Категория: Балка. Описание: Стальной профиль.\n\n"
-    "Вход: \"HATCH_CONCRETE_BASE_01\"\n"
-    "Ответ: Категория: Штриховка. Описание: Бетонное основание.\n\n"
+    "Вход: \"HATCH, Парапет\"\n"
+    "Ответ: Категории: Кровля, Ограждение, Штриховка.\n\n"
     "ДАННЫЕ:\n"
     "Название сущности: \"{name}\"\n"
-    "Контекст: {context_line}\n\n"
+    "Дополнительный контекст: {context_line}\n\n"
     "Инструкция:\n"
     "- Игнорируй префиксы (RECOVER, COPY), даты, ID и одиночные символы.\n"
     "- Сфокусируйся на материале и назначении.\n"
@@ -208,15 +95,24 @@ _NAME_MEANING_HUMAN_PROMPT_TEMPLATE = (
 )
 
 
+def get_interpretation_categories(text: str) -> list[str]:
+    categories: list[str] = []
+    if text:
+        _m = re.compile(r"^Категории:\s*(.*?)\.\s*Описание:\s*(.*)$", re.IGNORECASE).match(text.strip())
+        if _m:
+            categories = _m.group(1).split(",")
+            categories = [c.strip() for c in categories]
+    return categories
+
 @dataclass(frozen=True)
-class LangChainAgentConfig:
+class AgentConfig:
     model: str
     base_url: str
     api_key: str
     timeout_seconds: float = 60.0
 
 
-class LangChainNameTagsExtractor:
+class TagsExtractor:
     """Извлекает семантические теги через LLM, обёрнутую в LangChain."""
 
     def __init__(
@@ -232,7 +128,7 @@ class LangChainNameTagsExtractor:
         self._scored_text_tags_chain = scored_text_tags_chain or chain
 
     @classmethod
-    def from_config(cls, config: LangChainAgentConfig) -> "LangChainNameTagsExtractor":
+    def from_config(cls, config: AgentConfig) -> "TagsExtractor":
         ensure_langchain_available()
 
         output_parsers_module = importlib.import_module("langchain_core.output_parsers")
@@ -587,10 +483,10 @@ class LangChainNameTagsExtractor:
         return (0, -1.0)
 
 
-def extract_semantic_token_meanings_json(tokens: list[str], config: LangChainAgentConfig) -> str:
+def extract_semantic_token_meanings_json(tokens: list[str], config: AgentConfig) -> str:
     """Возвращает JSON-отображение token -> list[str] для переданных токенов."""
 
-    extractor = LangChainNameTagsExtractor.from_config(config)
+    extractor = TagsExtractor.from_config(config)
     return extractor.extract_token_meanings_json(tokens)
 
 
@@ -681,62 +577,95 @@ def _clean_cad_name_legacy(name):
 
 
 def clean_cad_name(name):
-    # 1. Try to fix a common encoding issue (cp1251 -> utf-8).
-    # If the name looks like mojibake, this block may help.
-    # If the data is already UTF-8, this step is skipped.
-    # Check for symbols that usually indicate broken encoding.
-    if any(c in name for c in "РЎР"):
-        name = name.encode('cp1252', errors='ignore').decode('cp1251', errors='ignore')
+    """Cleans CAD names by removing service noise, decoding mojibake, and 
+    normalizing separators.
+    """
+    
+    # if any(c in name for c in "РЎР"):
+    #     name = name.encode(
+    #         'cp1252', errors='ignore'
+    #     ).decode('cp1251', errors='ignore')
 
-    # 2. Remove service noise (RECOVER, COPY, and special symbols $, #, @, %).
     name = re.sub(r'^(RECOVER|COPY|TMP|TEMP)_+', '', name, flags=re.IGNORECASE)
     name = re.sub(r'[$\#@%&*^!]', '', name)
 
-    # 3. Remove timestamps and long IDs (6+ digits).
     name = re.sub(r'[_\-]?\d{6,}[_\-]?\d*', '', name)
 
-    # 4. Replace all separators with a single space to simplify LLM input.
-    # This turns "Wall_Gasconcrete-Hatch" into "Wall Gasconcrete Hatch".
     name = re.sub(r'[_\-\s]+', ' ', name).strip()
 
-    # 5. Optionally lowercase for consistency.
-    # For 8B models it is better to keep the original case, since it may encode word boundaries.
     cleaned_name = name
-    # logger.debug(f"Cleaned CAD name: '{cleaned_name}' from original '{name}'")
     return cleaned_name
 
 
 
-def build_name_meaning_system_prompt() -> str:
-    return _NAME_MEANING_SYSTEM_PROMPT
+def build_system_prompt() -> str:
+    return NAME_MEANING_SYSTEM_PROMPT
 
 
-def build_name_meaning_human_prompt(
+def build_human_prompt(
     name: str,
     extra_context: str = "",
 ) -> str:
     """Строит пользовательский prompt для анализа имени сущности."""
     context_line = (
-        f"Дополнительный контекст: {extra_context.strip()}\n"
+        f"{extra_context.strip()}\n"
         if extra_context.strip()
         else ""
     )
     name  = clean_cad_name(name)
-    return _NAME_MEANING_HUMAN_PROMPT_TEMPLATE.format(
+    return NAME_MEANING_HUMAN_PROMPT_TEMPLATE.format(
         name=name,
         context_line=context_line,
     )
 
 
-def build_name_meaning_prompt(
+def build_prompt(
     name: str,
     extra_context: str = "",
 ) -> str:
     """Строит полный текст prompt для обратной совместимости."""
+
+    logger.debug(f"{extra_context}")
     return (
-        f"{build_name_meaning_system_prompt()}\n\n"
-        f"{build_name_meaning_human_prompt(name=name, extra_context=extra_context)}"
+        f"{build_system_prompt()}\n\n"
+        f"{build_human_prompt(name=name, extra_context=extra_context)}"
     )
+
+
+def _derive_openai_chat_completions_url(base_url: str) -> str:
+    """Build an OpenAI-compatible /v1/chat/completions URL from a base URL."""
+
+    stripped = base_url.rstrip("/")
+    if stripped.endswith("/chat/completions"):
+        return stripped
+    if stripped.endswith("/v1"):
+        return stripped + "/chat/completions"
+    return stripped + "/v1/chat/completions"
+
+
+def _resolve_name_meaning_endpoint(url: str) -> tuple[str, str]:
+    """Resolve the actual endpoint and protocol for name-meaning calls.
+
+    Returns:
+        Tuple of (kind, resolved_url), where kind is either "ollama" or "openai".
+    """
+
+    stripped = url.strip().rstrip("/")
+    if not stripped:
+        raise ValueError("LLM URL must not be empty.")
+    if stripped.endswith("/api/chat"):
+        return "ollama", stripped
+    if stripped.endswith("/chat/completions"):
+        return "openai", stripped
+    if stripped.endswith("/v1"):
+        return "openai", _derive_openai_chat_completions_url(stripped)
+    if stripped.startswith("https://api.openai.com"):
+        return "openai", _derive_openai_chat_completions_url(stripped)
+    if stripped.startswith("https://") and "/v1" not in stripped:
+        return "openai", _derive_openai_chat_completions_url(stripped)
+    if stripped.startswith("http://localhost") or stripped.startswith("http://127.0.0.1"):
+        return "ollama", stripped + "/api/chat"
+    return "openai", _derive_openai_chat_completions_url(stripped)
 
 
 def get_name_meaning(
@@ -746,15 +675,26 @@ def get_name_meaning(
     extra_context: str = "",
     timeout_seconds: float = 60.0,
 ) -> str:
-    """Вызывает Ollama /api/chat и возвращает свободную интерпретацию имени.
+    """Возвращает свободную интерпретацию имени через Ollama или OpenAI-compatible chat.
 
     Raises:
         RuntimeError: Если сервис недоступен или вернул неожиданный либо пустой ответ.
     """
+    endpoint_kind, resolved_url = _resolve_name_meaning_endpoint(chat_url)
+    if endpoint_kind == "openai":
+        return call_openai_chat_completions_name_meaning(
+            name=name,
+            completions_url=resolved_url,
+            model=model,
+            extra_context=extra_context,
+            timeout_seconds=timeout_seconds,
+            api_key=settings.ai_api_key,
+        )
+
     import urllib.error
     import urllib.request
 
-    prompt_text = build_name_meaning_prompt(name=name, extra_context=extra_context)
+    prompt_text = build_prompt(name=name, extra_context=extra_context)
     payload = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": prompt_text}],
@@ -764,7 +704,7 @@ def get_name_meaning(
     api_key = settings.ai_api_key
 
     req = urllib.request.Request(
-        chat_url,
+        resolved_url,
         data=payload,
         headers={
             "Authorization": f"Bearer {api_key.strip()}" if api_key.strip() else "",},
@@ -774,7 +714,7 @@ def get_name_meaning(
         with urllib.request.urlopen(req, timeout=timeout_seconds) as response:
             body = json.loads(response.read().decode())
     except urllib.error.URLError as exc:
-        raise RuntimeError(f"Ошибка соединения с LLM ({chat_url}): {exc}") from exc
+        raise RuntimeError(f"Ошибка соединения с LLM ({resolved_url}): {exc}") from exc
 
     message = body.get("message", {})
     if not isinstance(message, dict):
@@ -801,8 +741,8 @@ def call_openai_chat_completions_name_meaning(
     import urllib.error
     import urllib.request
 
-    system_prompt = build_name_meaning_system_prompt()
-    human_prompt = build_name_meaning_human_prompt(name=name, extra_context=extra_context)
+    system_prompt = build_system_prompt()
+    human_prompt = build_human_prompt(name=name, extra_context=extra_context)
     logger.debug(
         "Prompts for OpenAI chat completions: system=%s human=%s",
         system_prompt,

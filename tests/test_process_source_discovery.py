@@ -1,7 +1,7 @@
 from pathlib import Path
 from zipfile import ZipFile
 
-from parsedwg.process_source import DWGTreeProcessor
+from parsedwg.process_drawing import DrawingProcessor
 
 
 def test_walk_finds_regular_and_zipped_dwg(tmp_path: Path) -> None:
@@ -17,7 +17,7 @@ def test_walk_finds_regular_and_zipped_dwg(tmp_path: Path) -> None:
         archive.writestr("inside/a/model.dwg", b"dwg")
         archive.writestr("inside/a/readme.txt", b"txt")
 
-    entries = list(DWGTreeProcessor(root).walk(root))
+    entries = list(DrawingProcessor(root).walk(root))
 
     assert len(entries) == 2
 

@@ -19,6 +19,12 @@ from src.parsedwg.constants import ResultRow
 logger = logging.getLogger(__name__)
 
 
+def display(value: Any, *args, **kwargs) -> None:
+    """Display a value in a human-readable form."""
+
+    print(value, *args, **kwargs)
+
+
 def extract_from_zip(zip_path: Path, member: str, temp_dir: Path) -> Path:
     """Extract a file from a ZIP archive into a temporary directory.
 

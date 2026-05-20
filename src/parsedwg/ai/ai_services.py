@@ -8,22 +8,12 @@ import logging
 import time
 from typing import Any, cast
 
-from .langchain_name_tags import LangChainAgentConfig, LangChainNameTagsExtractor
-from .settings import settings
-from .utils import _finish_progress_line, _format_duration_seconds, _write_progress_line
+from src.parsedwg.tags import AgentConfig, TagsExtractor
+from src.parsedwg.settings import settings
+from src.parsedwg.utils import _finish_progress_line, _format_duration_seconds, _write_progress_line
 
 
 logger = logging.getLogger(__name__)
-
-
-def derive_ollama_chat_url(base_url: str) -> str:
-    """Build the Ollama /api/chat URL from an OpenAI-compatible base URL."""
-
-    stripped = base_url.rstrip("/")
-    if stripped.endswith("/v1"):
-        stripped = stripped[:-3]
-    return stripped.rstrip("/") + "/api/chat"
-
 
 async def categorize_entities(
     entity_ids: list[str] | None,
@@ -38,7 +28,7 @@ async def categorize_entities(
 ) -> list[dict[str, object]]:
     """Extract semantic categories for entities and link them in the database."""
 
-    from .db import assign_semantic_category, list_entities_for_semantic_categorization
+    from src.parsedwg.db import assign_semantic_category, list_entities
 
     if bool(entity_ids) == bool(entity_type):
         raise ValueError("Specify either entity_ids or entity_type.")
@@ -66,7 +56,7 @@ async def categorize_entities(
             "meanings": normalized_meanings,
         }
 
-    list_entities = cast(Any, list_entities_for_semantic_categorization)
+    list_entities = cast(Any, list_entities)
     selected_entities = await list_entities(
         entity_ids=entity_ids,
         entity_type=entity_type,
@@ -77,8 +67,8 @@ async def categorize_entities(
     if not dry:
         print(f"Selected entities: {len(selected_entities)}")
 
-    extractor = LangChainNameTagsExtractor.from_config(
-        LangChainAgentConfig(
+    extractor = TagsExtractor.from_config(
+        AgentConfig(
             model=ai_model,
             base_url=ai_base_url,
             api_key=ai_api_key,
@@ -183,14 +173,14 @@ async def interpret_blocks(
 ) -> dict[str, object]:
     """Interpret blocks and save short and full interpretations."""
 
-    from .db import (
+    from src.parsedwg.db import (
         get_file_id_by_source,
         get_full_description,
         list_blocks_for_interpretation,
         save_block_description,
         save_block_interpretations,
     )
-    from .langchain_name_tags import get_name_meaning
+    from src.parsedwg.tags import get_name_meaning
 
     logger.debug("AI API key configured: %s", bool(ai_api_key))
 
@@ -205,7 +195,6 @@ async def interpret_blocks(
         if not resolved_file_id:
             raise LookupError("File was not found in the database.")
 
-    chat_url = derive_ollama_chat_url(ai_base_url)
     normalized_context = " ".join(extra_context.split())
     llm_timeout_seconds = settings.ai_timeout_seconds
 
@@ -245,7 +234,7 @@ async def interpret_blocks(
                     asyncio.to_thread(
                         get_name_meaning,
                         name=block_text_for_llm,
-                        chat_url=chat_url,
+                        chat_url=ai_base_url,
                         model=ai_model,
                         extra_context=normalized_context,
                         timeout_seconds=llm_timeout_seconds,
@@ -256,7 +245,7 @@ async def interpret_blocks(
                     asyncio.to_thread(
                         get_name_meaning,
                         name=block_text_for_llm,
-                        chat_url=chat_url,
+                        chat_url=ai_base_url,
                         model=ai_model,
                         extra_context=(
                             normalized_context

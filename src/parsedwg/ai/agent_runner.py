@@ -8,7 +8,8 @@ import logging
 from pathlib import Path
 from typing import Any, TypedDict
 
-from .agent_db import (
+from src.parsedwg.settings import settings
+from src.parsedwg.ai.agent_db import (
     create_agent_job,
     create_agent_job_steps,
     get_agent_job,
@@ -21,9 +22,9 @@ from .agent_db import (
     mark_step_running,
     mark_step_skipped,
 )
-from .agent_planner import AgentGraphPlanner
-from .agent_types import AgentJobStatus, AgentProfile, AgentStepKind
-from .agent_workers import (
+from src.parsedwg.ai.agent_planner import AgentGraphPlanner
+from src.parsedwg.ai.agent_types import AgentJobStatus, AgentProfile, AgentStepKind
+from src.parsedwg.ai.agent_workers import (
     run_categorize_entities_step,
     run_interpret_blocks_step,
     run_verify_extraction_step,
@@ -48,16 +49,13 @@ class _AgentGraphState(TypedDict):
 class AgentRunner:
     def __init__(
         self,
-        ai_model: str,
-        ai_base_url: str,
-        ai_api_key: str,
         workers: int,
         dry: bool,
         project_name: str | None = None,
     ) -> None:
-        self.ai_model = ai_model
-        self.ai_base_url = ai_base_url
-        self.ai_api_key = ai_api_key
+        self.ai_model = settings.ai_model
+        self.ai_base_url = settings.ai_base_url
+        self.ai_api_key = settings.ai_api_key
         self.workers = workers
         self.dry = dry
         self.project_name = project_name

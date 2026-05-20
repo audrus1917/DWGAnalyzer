@@ -1,7 +1,7 @@
 import uuid
 from pathlib import Path
 
-from parsedwg.process_source import save_to_db
+from parsedwg.process_drawing import save_to_db
 from src.parsedwg.orm import Entity, EntityType
 
 

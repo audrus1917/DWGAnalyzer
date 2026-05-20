@@ -105,10 +105,9 @@ class Entity(Base):
     entity_type: Mapped[EntityType] = mapped_column(Enum(EntityType), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(512), nullable=True, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    full_description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    dxf_attribs: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    category: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     is_table: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     is_virtual: Mapped[bool | None] = mapped_column(Boolean, default=False, index=True)
     entity_md5: Mapped[str | None] = mapped_column(String(32), nullable=True)

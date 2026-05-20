@@ -1,6 +1,11 @@
 """Utilities for working with MULTILEADER in DXF files."""
 
+from typing import Any
+
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 
 def get_mleader_target_point(mleader):
@@ -134,3 +139,62 @@ def find_closest_entity_in_entities(
             continue
 
     return closest_entity, min_dist
+
+
+def is_point_like(value: object) -> bool:
+    """Return whether a value looks like a point.
+
+    Args:
+        value: Value to inspect.
+
+    Returns:
+        True if the value looks like a point.
+    """
+
+    if hasattr(value, "x") and hasattr(value, "y"):
+        return True
+
+    if isinstance(value, (tuple, list)) and len(value) >= 2:
+        try:
+            float(value[0])
+            float(value[1])
+        except (TypeError, ValueError):
+            return False
+        return True
+
+    return False
+
+
+def format_point(point: Any | None) -> list[float] | None:
+    """Normalize a point-like value into a consistent coordinate list.
+
+    Args:
+        point: Point object or tuple-like coordinate value.
+
+    Returns:
+        Coordinate list or None.
+
+    Raises:
+        ValueError: If point is not point-like and cannot be converted.
+    """
+
+    if point is None:
+        return None
+
+    x = getattr(point, "x", None)
+    y = getattr(point, "y", None)
+    z = getattr(point, "z", 0.0)
+    if x is not None and y is not None:
+        return [x, y, z]
+
+    if isinstance(point, (tuple, list)) and len(point) >= 2:
+        try:
+            px = float(point[0])
+            py = float(point[1])
+            pz = float(point[2]) if len(point) >= 3 else 0.0
+        except (TypeError, ValueError) as e:
+            logger.warning("Failed to convert point: %s", e)
+            raise
+
+        return [px, py, pz]
+    raise ValueError(f"Value is not point-like: {point}")

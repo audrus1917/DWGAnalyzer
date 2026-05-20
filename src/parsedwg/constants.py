@@ -73,6 +73,7 @@ class EntityType(int, enum.Enum):
     MULTILEADER = 55
 
 ENTITY_TYPES = {e.name: e for e in EntityType}
+ENTITY_TYPE_NAMES = {e.value: e.name for e in EntityType}
 GRAPHICAL_TYPES = ["POINT", "LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE", "SPLINE", "SOLID", "HATCH"]
 
 # Material hatch mapping

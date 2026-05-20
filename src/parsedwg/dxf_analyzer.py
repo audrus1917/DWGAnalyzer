@@ -2,19 +2,21 @@
 
 from typing import Any
 
+import sys
 import logging
 import re
 
 from ezdxf.document import Drawing
 from ezdxf.math import Matrix44
-from ezdxf.tools.text import MTextEditor
+from ezdxf.tools.text import MTextEditor, plain_mtext
 from ezdxf.addons.geo import GeoProxy
+from ezdxf.entities.acad_table import read_acad_table_content
 
 import shapely.geometry
 import shapely.validation
 
 from src.parsedwg.constants import ENTITY_TYPES
-from src.parsedwg.schemas import BlockDescription
+from src.parsedwg.utils.geom import is_point_like, format_point
 
 logger = logging.getLogger(__name__)
 
@@ -22,70 +24,11 @@ logger = logging.getLogger(__name__)
 PROJECTION_MATRIX = Matrix44.scale(1, 1, 0)
 
 
-class DXFAnalyzer:
+class DrawingAnalyzer:
     """Analyze DXF content and extract structured data."""
 
     def __init__(self, drawing: Drawing):
         self.drawing = drawing
-
-    @staticmethod
-    def is_point_like(value: object) -> bool:
-        """Return whether a value looks like a point.
-
-        Args:
-            value: Value to inspect.
-
-        Returns:
-            True if the value looks like a point.
-        """
-
-        if hasattr(value, "x") and hasattr(value, "y"):
-            return True
-
-        if isinstance(value, (tuple, list)) and len(value) >= 2:
-            try:
-                float(value[0])
-                float(value[1])
-            except (TypeError, ValueError):
-                return False
-            return True
-
-        return False
-
-    @staticmethod
-    def format_point(point: Any | None) -> list[float] | None:
-        """Normalize a point-like value into a consistent coordinate list.
-
-        Args:
-            point: Point object or tuple-like coordinate value.
-
-        Returns:
-            Coordinate list or None.
-
-        Raises:
-            ValueError: If point is not point-like and cannot be converted.
-        """
-
-        if point is None:
-            return None
-
-        x = getattr(point, "x", None)
-        y = getattr(point, "y", None)
-        z = getattr(point, "z", 0.0)
-        if x is not None and y is not None:
-            return [x, y, z]
-
-        if isinstance(point, (tuple, list)) and len(point) >= 2:
-            try:
-                px = float(point[0])
-                py = float(point[1])
-                pz = float(point[2]) if len(point) >= 3 else 0.0
-            except (TypeError, ValueError) as e:
-                logger.warning("Failed to convert point: %s", e)
-                raise
-
-            return [px, py, pz]
-        raise ValueError(f"Value is not point-like: {point}")
 
     @staticmethod
     def get_text(entity) -> str:
@@ -128,13 +71,13 @@ class DXFAnalyzer:
         return children
 
     @staticmethod
-    def get_shapely_geometry(entity: Any) -> shapely.geometry.base.BaseGeometry | None: 
+    def get_shapely_geometry(entity: Any) -> shapely.geometry.base.BaseGeometry | None:
         """Convert a DXF entity into a shapely geometry when possible."""
 
         dxftype = entity.dxftype()
         if dxftype in ("TEXT", "MTEXT"):
             return shapely.geometry.Point(entity.dxf.insert.x, entity.dxf.insert.y)
-        
+
         try:
             proxy = GeoProxy.from_dxf_entities(entity)
         except (AttributeError, TypeError, ValueError):
@@ -187,18 +130,18 @@ class DXFAnalyzer:
         if dxftype == "LWPOLYLINE":
             get_points = getattr(entity, "get_points", None)
             if callable(get_points):
-                return [cls.format_point(point) for point in get_points("xy")]
+                return [format_point(point) for point in get_points("xy")]
 
         if dxftype == "POLYLINE":
             get_points = getattr(entity, "points", None)
             if callable(get_points):
-                return [cls.format_point(point) for point in get_points()]
+                return [format_point(point) for point in get_points()]
 
         if dxftype == "SOLID":
             points: list[list[float]] = []
             for attr_name in ("vtx0", "vtx1", "vtx2", "vtx3"):
                 if entity.dxf.hasattr(attr_name):
-                    points.append(cls.format_point(getattr(entity.dxf, attr_name)))
+                    points.append(format_point(getattr(entity.dxf, attr_name)))
             return points
 
         return []
@@ -229,7 +172,7 @@ class DXFAnalyzer:
             return None
 
         if dxftype in [
-            "POINT", "LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE", 
+            "POINT", "LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE",
             "SPLINE", "SOLID", "HATCH"
         ]:
             try:
@@ -256,8 +199,8 @@ class DXFAnalyzer:
         # Preserve raw DXF attributes in a normalized form.
         dxf_attribs: dict[str, Any] = {}
         for attr_name, value in entity.dxf.all_existing_dxf_attribs().items():
-            if cls.is_point_like(value):
-                dxf_attribs[attr_name] = cls.format_point(value)
+            if is_point_like(value):
+                dxf_attribs[attr_name] = format_point(value)
             else:
                 dxf_attribs[attr_name] = value
 
@@ -268,22 +211,40 @@ class DXFAnalyzer:
             entity_data["points"] = points
 
         if dxftype in [
-            "POINT", "LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE", 
+            "POINT", "LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE",
             "SPLINE", "SOLID", "HATCH"
         ]:
             shapely_geom = cls.get_shapely_geometry(entity)
 
             if shapely_geom is not None:
-                entity_data["area"] = shapely_geom.area
-                entity_data["length"] = shapely_geom.length
+                entity_data.setdefault("data", {})["area"] = shapely_geom.area
+                entity_data.setdefault("data", {})["length"] = shapely_geom.length
                 entity_data["geom"] = shapely_geom.wkt
 
         match dxftype:
+            case "ACAD_TABLE":
+                content = read_acad_table_content(entity)
+                table_data = []
+                first_header = ""
+                for row_idx, row in enumerate(content):
+                    table_row = []
+                    for col_idx, value in enumerate(row):
+                        value = value.strip() if isinstance(value, str) else value
+                        if row_idx == 0 and col_idx == 0 and isinstance(value, str) and value:
+                            first_header = value.strip()
+                        elif row_idx == 0 and col_idx > 0 and value and first_header:
+                            first_header = ""
+                        table_row.append(str(value))
+                    table_data.append(table_row)
+                entity_data["data"] = table_data
+                if first_header:
+                    entity_data["name"] = first_header
+                    
             case "INSERT":
                 entity_data["target_block"] = entity.dxf.name
                 entity_data["attribs"] = {
-                    attr.dxf.tag: cls.format_point(attr.dxf.text)
-                    if cls.is_point_like(attr.dxf.text) else attr.dxf.text
+                    attr.dxf.tag: format_point(attr.dxf.text)
+                    if is_point_like(attr.dxf.text) else attr.dxf.text
                     for attr in entity.attribs
                 }
 
@@ -307,8 +268,9 @@ class DXFAnalyzer:
             case "MULTILEADER":
                 entity_text = entity.get_mtext_content() if hasattr(entity, "get_mtext_content") else ""
                 if entity_text:
-                    clean_text = MTextEditor(entity_text).text
-                    entity_data["description"] = re.sub(r"\s+", " ", clean_text).strip()
+                    clean_text = plain_mtext(MTextEditor(entity_text).text)
+
+                    entity_data["name"] = re.sub(r"\s+", " ", clean_text).strip()
 
                 if shapely_geom := cls.get_multileader_geometry(entity):
                     entity_data["geom"] = shapely_geom.wkt
@@ -325,7 +287,7 @@ class DXFAnalyzer:
     ):
         """Recursively analyze a block definition to extract layers, nested blocks, and text."""
         if block_data is None:
-            block_data = BlockDescription()
+            block_data = {}
 
         if processed is None:
             processed = set()
@@ -340,7 +302,7 @@ class DXFAnalyzer:
 
         for entity in block_def:
             # 1. Layers.
-            block_data.primitives_layers.add(entity.dxf.layer)
+            block_data.setdefault("primitives_layers", set()).add(entity.dxf.layer)
 
             # 2. Text content (TEXT and MTEXT).
             val = None
@@ -351,11 +313,11 @@ class DXFAnalyzer:
                 if callable(plain_text):
                     val = str(plain_text()).rstrip()
                 if val:
-                    block_data.text_content.add(val)
+                    block_data.setdefault("text_content", set()).add(val)
 
             # 3. ATTDEFS (attribute definitions).
             if entity.dxftype() == 'ATTDEF':
-                block_data.attdefs.append({
+                block_data.setdefault("attdefs", []).append({
                     "tag": entity.dxf.tag,
                     "prompt": getattr(entity.dxf, 'prompt', ''), # User-facing prompt.
                     "default": entity.dxf.text # Default value.
@@ -364,22 +326,22 @@ class DXFAnalyzer:
             # 4. Recurse into nested inserts.
             if entity.dxftype() == 'INSERT':
                 nested_name = entity.dxf.name
-                block_data.nested_blocks.add(nested_name)
+                block_data.setdefault("nested_blocks", set()).add(nested_name)
                 cls.analyze_block(doc, nested_name, block_data, processed)
 
         return block_data
 
     @classmethod
-    def get_short_block_description(
+    def build_block_data(
         cls,
         doc: Drawing,
-        block_name: str
-    ) -> BlockDescription:
+        entity: Any
+    ) -> Any:
         """Return a DXF block description.
 
         Args:
             doc: Loaded ezdxf drawing.
-            block_name: Block name.
+            entity: DXF entity.
 
         Returns:
             Summary description of the block.
@@ -389,13 +351,14 @@ class DXFAnalyzer:
         """
 
         msp = doc.modelspace()
+        block_name = entity.dxf.name
         block = doc.blocks.get(block_name)
         if block is None:
             logger.error("Block '%s' not found in the file.", block_name)
             raise ValueError(f"Block '{block_name}' not found in the file.")
 
-        block_info: BlockDescription = cls.analyze_block(doc, block_name)
-        block_info.block_name = block_name
+        block_info = cls.analyze_block(doc, block_name)
+        block_info["block_name"] = block_name
 
         inserts = msp.query(f'INSERT[name=="{block.name}"]')
         insert_samples = []
@@ -412,5 +375,5 @@ class DXFAnalyzer:
                 idx += 1
 
         if insert_samples:
-            block_info.insert_samples = insert_samples
+            block_info["insert_samples"] = insert_samples
         return block_info

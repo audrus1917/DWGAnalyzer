@@ -13,8 +13,8 @@ from pypdf import PdfReader
 from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .db import async_session_factory
-from .orm import Entity, EntityEmbedding, EntityType
+from src.parsedwg.db import async_session_factory
+from src.parsedwg.orm import Entity, EntityEmbedding, EntityType
 
 SUPPORTED_DOC_SUFFIXES = {".pdf", ".docx", ".xlsx", ".csv"}
 

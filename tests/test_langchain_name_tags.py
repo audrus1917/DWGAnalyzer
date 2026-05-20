@@ -1,10 +1,10 @@
 import pytest
 
-from parsedwg.langchain_name_tags import LangChainNameTagsExtractor
-from parsedwg.langchain_name_tags import _build_prompt_template
-from parsedwg.langchain_name_tags import _build_scored_text_tags_prompt_template
-from parsedwg.langchain_name_tags import _build_scored_token_tags_prompt_template
-from parsedwg.langchain_name_tags import _build_token_tags_prompt_template
+from parsedwg.tags import TagsExtractor
+from parsedwg.tags import _build_prompt_template
+from parsedwg.tags import _build_scored_text_tags_prompt_template
+from parsedwg.tags import _build_scored_token_tags_prompt_template
+from parsedwg.tags import _build_token_tags_prompt_template
 
 
 def test_prompt_template_uses_only_text_variable() -> None:
@@ -51,7 +51,7 @@ def test_extract_token_meanings_parses_json_and_removes_duplicates() -> None:
             captured_payloads.append(payload)
             return '{"M_Doors": ["двери", "проемы", "двери"], "M_Wall_Glass": ["стекло"]}'
 
-    extractor = LangChainNameTagsExtractor(chain=StubChain(), token_tags_chain=StubChain())
+    extractor = TagsExtractor(chain=StubChain(), token_tags_chain=StubChain())
 
     meanings = extractor.extract_token_meanings(
         ["M_Doors", "M_Wall_Glass"],
@@ -75,7 +75,7 @@ def test_extract_token_meanings_json_returns_json_object() -> None:
         def invoke(self, _payload):
             return '{"M_Doors": ["двери", "проемы", "архитектура"]}'
 
-    extractor = LangChainNameTagsExtractor(chain=StubChain(), token_tags_chain=StubChain())
+    extractor = TagsExtractor(chain=StubChain(), token_tags_chain=StubChain())
 
     meanings_json = extractor.extract_token_meanings_json(["M_Doors"])
 
@@ -96,7 +96,7 @@ def test_extract_token_meanings_scored_parses_json_and_keeps_max_score() -> None
                 '{"tag": "вход", "weight": 1.4}]}'
             )
 
-    extractor = LangChainNameTagsExtractor(
+    extractor = TagsExtractor(
         chain=StubChain(),
         token_tags_chain=StubChain(),
         scored_token_tags_chain=StubChain(),
@@ -127,7 +127,7 @@ def test_extract_token_meanings_scored_json_accepts_plain_strings_fallback() -> 
         def invoke(self, _payload):
             return '{"M_Doors": ["двери", "проемы"]}'
 
-    extractor = LangChainNameTagsExtractor(
+    extractor = TagsExtractor(
         chain=StubChain(),
         token_tags_chain=StubChain(),
         scored_token_tags_chain=StubChain(),
@@ -164,7 +164,7 @@ def test_extract_scored_tags_parses_json_and_keeps_max_score() -> None:
                 '{"label": "пожаротушение", "confidence": "0.57"}]}'
             )
 
-    extractor = LangChainNameTagsExtractor(
+    extractor = TagsExtractor(
         chain=StubChain(),
         scored_text_tags_chain=StubChain(),
     )
@@ -194,7 +194,7 @@ def test_extract_name_meanings_json_returns_json_array() -> None:
             captured_payloads.append(payload)
             return '{"tags": [{"meaning": "насос", "score": 0.84}]}'
 
-    extractor = LangChainNameTagsExtractor(
+    extractor = TagsExtractor(
         chain=StubChain(),
         scored_text_tags_chain=StubChain(),
     )
@@ -224,7 +224,7 @@ def test_call_ollama_name_meaning_sends_prompt_and_returns_text() -> None:
     import json
     from unittest.mock import MagicMock, patch
 
-    from parsedwg.langchain_name_tags import get_name_meaning
+    from parsedwg.tags import get_name_meaning
 
     body = json.dumps({
         "message": {"role": "assistant", "content": "1. Насос\n2. Этаж: 4"}
@@ -258,7 +258,7 @@ def test_call_ollama_name_meaning_raises_on_connection_error() -> None:
     import urllib.error
     from unittest.mock import patch
 
-    from parsedwg.langchain_name_tags import get_name_meaning
+    from parsedwg.tags import get_name_meaning
 
     with patch(
         "urllib.request.urlopen",
@@ -275,11 +275,114 @@ def test_call_ollama_name_meaning_raises_on_connection_error() -> None:
             assert "Ошибка соединения" in str(exc)
 
 
+def test_get_name_meaning_routes_base_url_to_openai_chat_completions() -> None:
+    import json
+    from unittest.mock import MagicMock, patch
+
+    from parsedwg.tags import get_name_meaning
+
+    body = json.dumps({
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "Насос пожаротушения. 4-й этаж."
+                }
+            }
+        ]
+    }).encode()
+
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = body
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+
+    with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
+        result = get_name_meaning(
+            name="Насос 4 этаж",
+            chat_url="https://api.openai.com",
+            model="gpt-4o-mini",
+            extra_context="раздел ВК",
+        )
+
+    assert result == "Насос пожаротушения. 4-й этаж."
+    req = mock_urlopen.call_args[0][0]
+    req_body = json.loads(req.data.decode())
+    assert req.full_url == "https://api.openai.com/v1/chat/completions"
+    assert req_body["model"] == "gpt-4o-mini"
+    assert req_body["messages"][0]["role"] == "system"
+    assert req_body["messages"][1]["role"] == "user"
+
+
+def test_get_name_meaning_routes_local_ollama_base_url_to_api_chat() -> None:
+    import json
+    from unittest.mock import MagicMock, patch
+
+    from parsedwg.tags import get_name_meaning
+
+    body = json.dumps({
+        "message": {
+            "role": "assistant",
+            "content": "Категория: Насос. Описание: Пожаротушение."
+        }
+    }).encode()
+
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = body
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+
+    with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
+        result = get_name_meaning(
+            name="Насос 4 этаж",
+            chat_url="http://localhost:11434",
+            model="llama3.1:8b",
+        )
+
+    assert result == "Категория: Насос. Описание: Пожаротушение."
+    req = mock_urlopen.call_args[0][0]
+    assert req.full_url == "http://localhost:11434/api/chat"
+
+
+def test_get_name_meaning_routes_existing_completions_url_to_openai_chat_completions() -> None:
+    import json
+    from unittest.mock import MagicMock, patch
+
+    from parsedwg.tags import get_name_meaning
+
+    body = json.dumps({
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "Категория: Насос. Описание: Пожаротушение."
+                }
+            }
+        ]
+    }).encode()
+
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = body
+    mock_resp.__enter__ = lambda s: s
+    mock_resp.__exit__ = MagicMock(return_value=False)
+
+    with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
+        result = get_name_meaning(
+            name="Насос 4 этаж",
+            chat_url="https://api.openai.com/v1/chat/completions",
+            model="gpt-4.1-mini",
+        )
+
+    assert result == "Категория: Насос. Описание: Пожаротушение."
+    req = mock_urlopen.call_args[0][0]
+    assert req.full_url == "https://api.openai.com/v1/chat/completions"
+
+
 def test_call_openai_chat_completions_name_meaning_sends_prompt_and_returns_text() -> None:
     import json
     from unittest.mock import MagicMock, patch
 
-    from parsedwg.langchain_name_tags import call_openai_chat_completions_name_meaning
+    from parsedwg.tags import call_openai_chat_completions_name_meaning
 
     body = json.dumps({
         "choices": [
@@ -324,7 +427,7 @@ def test_call_openai_chat_completions_name_meaning_raises_on_connection_error() 
     import urllib.error
     from unittest.mock import patch
 
-    from parsedwg.langchain_name_tags import call_openai_chat_completions_name_meaning
+    from parsedwg.tags import call_openai_chat_completions_name_meaning
 
     with patch(
         "urllib.request.urlopen",

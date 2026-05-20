@@ -4,9 +4,11 @@ import logging
 
 from pathlib import Path
 
-from src.parsedwg.process_source import parse_drawing
+from gettext import gettext as _
 
-from src.parsedwg import constants
+from src.parsedwg import constants, errors
+from src.parsedwg.utils import display
+from src.parsedwg.process_drawing import DrawingProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -19,24 +21,28 @@ def handle_parse_command(
 ) -> int:
     """Scan DWG/DXF input, store the entity tree, and link it to a project."""
 
-    logger.debug("Start parsing command")
     try:
-        summary = parse_drawing(
+        summary = DrawingProcessor.parse_drawing_sources(
             source_path,
             project_name=project_name,
             dry=dry,
             detail_level=detail_level,
         )
-    except ValueError as e:
-        logger.exception("Failed to process directory or file: %s", e)
+    except errors.FileNotFound as e:
+        logger.error(_("File not found: %s"), e, exc_info=True)
         return constants.ERROR
 
-    except RuntimeError as e:
-        logger.error("AI mode error: %s", e, exc_info=True)
+    except errors.ObjectNotFound as e:
+        logger.error(_("Object not found: %s"), e, exc_info=True)
+        return constants.ERROR
+
+    except errors.UnsupportedFileType as e:
+        logger.error(_("Unsupported file type: %s"), e, exc_info=True)
         return constants.ERROR
     
-    print(f"Files found: {summary['file_count']}")
-    print(f"Processing mode: {summary['mode']}")
-    print(f"Entities created in DB: {summary['created_entities']}")
+    display(_("Files found: {file_count}").format(**summary))
+    display(_("Processing mode: {mode}").format(**summary))
+    display(_("Entities created in DB: {created_entities}").format(**summary))
+
     return constants.OK
 

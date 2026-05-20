@@ -20,26 +20,6 @@ def build_args_parser() -> argparse.ArgumentParser:
     output_common = argparse.ArgumentParser(add_help=False)
     output_common.add_argument("-o", "--output", default=None, help="Output file")
 
-    ai_common = argparse.ArgumentParser(add_help=False)
-    ai_common.add_argument(
-        "--ai-model",
-        default=settings.ai_model,
-        help=_("Model name for AI mode. Default: %(default)s.") % {"default": settings.ai_model},
-    )
-    ai_common.add_argument(
-        "--ai-base-url",
-        default=settings.ai_base_url,
-        help=_("OpenAI-compatible base URL for the model. Default: %(default)s.") % {"default": settings.ai_base_url},
-    )
-    ai_common.add_argument(
-        "--ai-api-key",
-        default=settings.ai_api_key,
-        help=_(
-            "API key for the AI provider (for Ollama the default is fine). "
-            "Default: %(default)s."
-        ) % {"default": settings.ai_api_key},
-    )
-
     parser = argparse.ArgumentParser(
         prog="parsedwg",
         description=_("Work with DWG/DXF files: inspect data and run operations"),
@@ -122,7 +102,6 @@ def build_args_parser() -> argparse.ArgumentParser:
 
     agent_run_parser = subparsers.add_parser(
         "agent-run",
-        parents=[ai_common],
         help="Run the agent pipeline for a file or directory.",
     )
     agent_run_parser.add_argument(
@@ -159,122 +138,48 @@ def build_args_parser() -> argparse.ArgumentParser:
     )
     agent_status_parser.add_argument("job_id", type=int, help="Agent job ID.")
 
-    interpret_entities_parser = subparsers.add_parser(
-        "interpret-entities",
-        parents=[ai_common],
-        help="Request LLM name interpretations for all entities of a type and save them to entity_embedding.short_interpretation.",
+    interpret_parser = subparsers.add_parser(
+        "interpret",
+        help=_(
+            "Request LLM name interpretations for all entities of a type and "
+            "save them to entity_embedding.short_interpretation."
+        ),
     )
-    interpret_entities_parser.add_argument(
+    interpret_parser.add_argument(
         "--entity-id",
         dest="entity_ids",
         action="append",
         default=None,
-        help="Entity ID. Can be provided multiple times.",
+        help=_("Entity ID. Can be provided multiple times."),
     )
-    interpret_entities_parser.add_argument(
+    interpret_parser.add_argument(
         "--entity-type",
         dest="entity_type",
         default=None,
-        help="Entity type from the entity_type field, for example BLOCK.",
+        help=_("Entity type from the entity_type field, for example BLOCK."),
     )
-    interpret_entities_parser.add_argument(
-        "--extra-context",
-        dest="extra_context",
-        default="",
-        help="Additional context for the LLM, for example a project section.",
-    )
-    interpret_entities_parser.add_argument(
+    interpret_parser.add_argument(
         "--workers",
         type=int,
         default=1,
-        help="Number of parallel AI requests (default: 1).",
+        help=_("Number of parallel AI requests (default: 1)."),
     )
-    interpret_entities_parser.add_argument(
+    interpret_parser.add_argument(
         "--dry",
         action="store_true",
-        help="Do not save to the database, print a JSON preview instead.",
+        help=_("Do not save to the database, print a JSON preview instead."),
     )
 
-    interpret_blocks_parser = subparsers.add_parser(
-        "interpret-blocks",
-        parents=[ai_common],
-        help=(
-            "Interpret block names and save results to "
-            "entity_embedding.short_interpretation and entity_embedding.full_interpretation."
-        ),
-    )
-    interpret_blocks_parser.add_argument(
-        "--block-id",
-        dest="block_ids",
-        action="append",
-        default=None,
-        help="Block ID. Can be provided multiple times.",
-    )
-    interpret_blocks_parser.add_argument(
-        "file_ref",
-        nargs="?",
-        default=None,
-        help="File entity ID or file path (when --by-path is used).",
-    )
-    interpret_blocks_parser.add_argument(
-        "--by-path",
-        action="store_true",
-        help="Look up the file entity by path instead of ID.",
-    )
-    interpret_blocks_parser.add_argument(
-        "--extra-context",
-        dest="extra_context",
-        default="",
-        help="Additional context for the LLM, for example a project section.",
-    )
-    interpret_blocks_parser.add_argument(
-        "--workers",
-        type=int,
-        default=1,
-        help="Number of parallel AI requests (default: 1).",
-    )
-    interpret_blocks_parser.add_argument(
-        "--dry",
-        action="store_true",
-        help="Do not save to the database, print a JSON preview instead.",
-    )
-
-    interpret_block_parser = subparsers.add_parser(
-        "interpret-block",
-        parents=[ai_common],
-        help=(
-            "Interpret one block name and save results to "
-            "entity_embedding.short_interpretation and entity_embedding.full_interpretation."
-        ),
-    )
-    interpret_block_parser.add_argument(
-        "--entity-id",
-        dest="entity_id",
-        required=True,
-        help="Block ID in the database.",
-    )
-    interpret_block_parser.add_argument(
-        "--extra-context",
-        dest="extra_context",
-        default="",
-        help="Additional context for the LLM, for example a project section.",
-    )
-    interpret_block_parser.add_argument(
-        "--dry",
-        action="store_true",
-        help="Do not save to the database, print a JSON preview instead.",
-    )
-
-    verify_extraction_parser = subparsers.add_parser(
-        "verify-extraction",
+    verify_parser = subparsers.add_parser(
+        "verify",
         parents=[readfile_common],
-        help="Compare a DWG/DXF file with entities stored in the current database.",
+        help=_("Compare a DWG/DXF file with entities stored in the current database."),
     )
-    verify_extraction_parser.add_argument(
+    verify_parser.add_argument(
         "--file-id",
         dest="file_id",
         default=None,
-        help="UUID of the file entity in the database.",
+        help=_("ID of the file entity in the database."),
     )
 
     project_add_parser = subparsers.add_parser(

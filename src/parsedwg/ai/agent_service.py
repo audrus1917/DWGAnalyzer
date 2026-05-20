@@ -4,24 +4,18 @@ from __future__ import annotations
 
 import asyncio
 
-from .agent_db import get_agent_job, list_agent_job_steps
-from .agent_runner import AgentRunner
+from src.parsedwg.ai.agent_db import get_agent_job, list_agent_job_steps
+from src.parsedwg.ai.agent_runner import AgentRunner
 
 
 def run_agent_job_sync(
     input_ref: str,
     profile: str,
-    ai_model: str,
-    ai_base_url: str,
-    ai_api_key: str,
     workers: int,
     dry: bool,
     project_name: str | None = None,
 ) -> int:
     runner = AgentRunner(
-        ai_model=ai_model,
-        ai_base_url=ai_base_url,
-        ai_api_key=ai_api_key,
         workers=workers,
         dry=dry,
         project_name=project_name,

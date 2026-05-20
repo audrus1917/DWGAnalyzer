@@ -14,7 +14,7 @@ from sqlalchemy.orm import aliased
 
 from .db import async_session_factory
 from .orm import Entity, EntityType
-from .process_source import collect_dxf_summary
+from .process_drawing import collect_dxf_summary
 
 
 type PrimitiveCountMap = dict[str, dict[str, int]]
