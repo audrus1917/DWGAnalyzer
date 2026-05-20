@@ -12,22 +12,16 @@ from pathlib import Path
 from gettext import gettext as _
 
 from src.parsedwg import constants
-from src.parsedwg.settings import settings
-from src.parsedwg.constants import ENTITY_TYPE_NAMES
 from src.parsedwg.explorer import DXFExplorer
 from src.parsedwg.utils import (
     print_as_table,
-    _write_progress_line,
-    _finish_progress_line,
     _save_rows_to_json,
-    display
 )
 from src.parsedwg.utils.args import build_args_parser
 from src.parsedwg.commands.parse import handle_parse_command
+from src.parsedwg.commands.interpret import handle_interpret_command
 from src.parsedwg.constants import ResultRow
-from src.parsedwg.db import list_entities, save_short_interpretation
 from src.parsedwg.ai.docs_ingest import run_documents_ingest
-from src.parsedwg.ai.tags import get_name_meaning
 
 
 logging.basicConfig(
@@ -134,24 +128,18 @@ def handle_process_docs_command(source_path: Path) -> int:
 def handle_agent_run_command(
     input_ref: str,
     profile: str,
-    ai_model: str,
-    ai_base_url: str,
-    ai_api_key: str,
     workers: int,
     dry: bool,
     project_name: str | None,
 ) -> int:
     """Run the agent pipeline and print the completed job ID."""
-    from .agent_service import run_agent_job_sync
+    from src.parsedwg.ai.agent_service import run_agent_job_sync
 
     logger.debug("Start `agent_run`")
     try:
         job_id = run_agent_job_sync(
             input_ref=input_ref,
             profile=profile,
-            ai_model=ai_model,
-            ai_base_url=ai_base_url,
-            ai_api_key=ai_api_key,
             workers=workers,
             dry=dry,
             project_name=project_name,
@@ -291,210 +279,6 @@ def handle_describe_block_command(
     return constants.OK
 
 
-def handle_interpret_command(
-    entity_ids: list[str] | None,
-    entity_type: str | None,
-    workers: int = 1,
-    dry: bool = False,
-) -> int:
-    """Request entity name interpretations from the LLM by id or type.
-
-    Save the result into entity embedding interpretation fields.
-
-    Args:
-        entity_ids: Explicit list of entity identifiers to interpret.
-        entity_type: Entity type to select if entity_ids are not provided.
-        workers: Maximum number of parallel tasks.
-        dry: If true, do not save the result to the database.
-
-    Returns:
-        CLI command exit code.
-
-    Raises:
-        RuntimeError: Can be raised by internal AI calls and converted to an error code.
-        ValueError: Can be raised by internal selection, validation, or save calls and converted to an error code.
-        LookupError: Can be raised by internal database calls and converted to an error code.
-        TimeoutError: Can be raised by internal AI calls and converted to an error code.
-    """
-
-    display(_("Starting interpret command"))
-
-    if bool(entity_ids) == bool(entity_type):
-        logger.error("Specify either --entity-id or --entity-type.")
-        return constants.UNBOUND_ERROR
-    if workers <= 0:
-        logger.error("--workers must be greater than 0.")
-        return constants.UNBOUND_ERROR
-
-    llm_timeout_seconds = settings.ai_timeout_seconds
-
-    async def _run() -> dict[str, object]:
-        entities = await list_entities(
-            entity_ids=entity_ids,
-            entity_type=entity_type,
-        )
-        if not entities:
-            return {"rows": [], "failures": []}
-        if not dry:
-            print(f"Selected entities: {len(entities)}")
-
-        semaphore = asyncio.Semaphore(workers)
-
-        async def _process_entity(entity: dict[str, str]) -> dict[str, object]:
-            extra_context = ""
-            if "entity_type" in entity:
-                entity_type_name = ENTITY_TYPE_NAMES.get(entity["entity_type"], None)
-                if entity_type_name:
-                    extra_context = f"Тип примитива={entity_type_name}"
-            async with semaphore:
-                try:
-                    text = await asyncio.wait_for(
-                        asyncio.to_thread(
-                            get_name_meaning,
-                            name=entity["name"],
-                            chat_url=settings.ai_base_url,
-                            model=settings.ai_model,
-                            extra_context=extra_context,
-                            timeout_seconds=llm_timeout_seconds,
-                        ),
-                        timeout=llm_timeout_seconds + 5.0,
-                    )
-                except TimeoutError:
-                    return {
-                        "status": "error",
-                        "entity_id": entity["id"],
-                        "entity_name": entity["name"],
-                        "error": (
-                            "Timed out while waiting for the LLM response for entity "
-                            f"{entity['id']} ({entity['name']})."
-                        ),
-                    }
-                except (OSError, RuntimeError, ValueError) as exc:
-                    return {
-                        "status": "error",
-                        "entity_id": entity["id"],
-                        "entity_name": entity["name"],
-                        "error": str(exc),
-                    }
-                logger.debug(
-                    "LLM response interpret-entities: entity_id=%s entity_name=%s\n%s",
-                    entity["id"],
-                    entity["name"],
-                    text,
-                )
-                return {
-                    "status": "ok",
-                    "entity_id": entity["id"],
-                    "entity_name": entity["name"],
-                    "text": text,
-                }
-
-        rows: list[dict[str, object]] = []
-        failures: list[dict[str, object]] = []
-        total = len(entities)
-        progress_width = 0
-        tasks = [asyncio.create_task(_process_entity(entity)) for entity in entities]
-        try:
-            for task in asyncio.as_completed(tasks):
-                item = await task
-                entity_id = str(item.get("entity_id", ""))
-                entity_name = str(item.get("entity_name", ""))
-                if item.get("status") == "error":
-                    failures.append(
-                        {
-                            "status": "error",
-                            "entity_id": entity_id,
-                            "entity_name": entity_name,
-                            "error": str(item.get("error", "")),
-                        }
-                    )
-                    logger.error(
-                        "Entity interpretation error for %s (%s): %s",
-                        entity_id or "-",
-                        entity_name or "-",
-                        item.get("error", ""),
-                    )
-                else:
-                    text = str(item["text"])
-                    try:
-                        if dry:
-                            rows.append(
-                                {
-                                    "entity_id": entity_id,
-                                    "entity_name": entity_name,
-                                    "text": text,
-                                    "status": "ok",
-                                }
-                            )
-                        else:
-                            logger.debug(
-                                "Saving interpretation for entity %s (%s): %s",
-                                entity_id,
-                                entity_name,
-                                text,
-                            )
-                            await save_short_interpretation(entity_id, text)
-                            rows.append({"entity_id": entity_id, "entity_name": entity_name})
-                    except (LookupError, OSError, RuntimeError, ValueError) as exc:
-                        failures.append(
-                            {
-                                "status": "error",
-                                "entity_id": entity_id,
-                                "entity_name": entity_name,
-                                "error": str(exc),
-                            }
-                        )
-                        logger.error(
-                            "Failed to save interpretation for entity %s (%s): %s",
-                            entity_id or "-",
-                            entity_name or "-",
-                            exc,
-                        )
-
-                processed = len(rows) + len(failures)
-                if not dry:
-                    progress_width = _write_progress_line(
-                        "Processed {processed}/{total}: success {success}, errors {errors}".format(
-                            processed=processed,
-                            total=total,
-                            success=len(rows),
-                            errors=len(failures),
-                        ),
-                        previous_width=progress_width,
-                    )
-        finally:
-            if not dry:
-                _finish_progress_line(progress_width)
-
-        return {"rows": rows, "failures": failures}
-
-    try:
-        result = asyncio.run(_run())
-        rows = result.get("rows", [])
-        if not isinstance(rows, list):
-            rows = []
-        failures = result.get("failures", [])
-        if not isinstance(failures, list):
-            failures = []
-        if not rows:
-            if failures:
-                logger.error("Failed to interpret any entities. Errors: %d", len(failures))
-                return constants.ERROR
-            print("No entities to interpret.")
-            return constants.OK
-        if dry:
-            print(json.dumps(rows + failures, ensure_ascii=False, indent=2))
-            return constants.OK
-        print(f"Interpreted: {len(rows)}")
-        if failures:
-            print(f"Errors: {len(failures)}")
-        return constants.OK
-    except RuntimeError as e:
-        logger.error("AI mode error: %s", e)
-        return constants.ERROR
-    except (LookupError, OSError, ValueError, TimeoutError) as e:
-        logger.error("Entity interpretation failed: %s", e)
-        return constants.UNBOUND_ERROR
 
 
 def handle_verify_extraction_command(

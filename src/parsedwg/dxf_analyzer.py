@@ -217,8 +217,8 @@ class DrawingAnalyzer:
             shapely_geom = cls.get_shapely_geometry(entity)
 
             if shapely_geom is not None:
-                entity_data["area"] = shapely_geom.area
-                entity_data["length"] = shapely_geom.length
+                entity_data.setdefault("data", {})["area"] = shapely_geom.area
+                entity_data.setdefault("data", {})["length"] = shapely_geom.length
                 entity_data["geom"] = shapely_geom.wkt
 
         match dxftype:

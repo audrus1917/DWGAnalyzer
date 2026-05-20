@@ -594,10 +594,6 @@ def flush_primitives_batch(
 
         session.rollback()
 
-        # FIXME: temporary solution to skip problematic batches, should be
-        # improved with better error handling and data validation
-        sys.exit(1)
-
         return 0
 
     for primitive_entity, layer_entity in primitive_layer_links:
@@ -828,16 +824,11 @@ class DrawingStore:
                         layout_name = layout_entity.name
 
                     parent_entity_id = None
-                    _block_name = None
-                    if hasattr(parent, "name") and isinstance(parent.name, str):
-                        _block_name = parent.name
-                    elif hasattr(parent, "dxf") and parent.dxf.hasattr("name") and isinstance(parent.dxf.name, str):
-                        _block_name = parent.dxf.name
                         
-                    if _block_name:
+                    if layout_name:
                         parent_entity_id = (
-                            block_entities_by_name.get(_block_name)
-                            if isinstance(_block_name, str)
+                            layout_entities_by_name.get(layout_name)
+                            if isinstance(layout_name, str)
                             else None
                         )
     
