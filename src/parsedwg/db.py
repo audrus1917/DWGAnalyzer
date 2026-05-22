@@ -806,7 +806,7 @@ def _get_category_payload(meanings: list[dict[str, object]]) -> tuple[str | None
 async def list_entities(
     entity_ids: list[str] | None = None,
     entity_type: str | None = None,
-    file_id: str | None = None,
+    file_id: int | None = None,
 ) -> list[dict[str, str]]:
     """Return entities for AI categorization by id or entity_type.
 
@@ -844,7 +844,7 @@ async def list_entities(
 
     payload = [
         {
-            "id": str(row["id"]),
+            "id": row["id"],
             "name": row["name"],
             "description": row["description"] or "",
             "entity_type": row["entity_type"].value

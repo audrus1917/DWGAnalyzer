@@ -15,6 +15,15 @@ def test_build_args_parser_accepts_export_interpreted_blocks_xlsx_command() -> N
     assert args.output == "blocks.xlsx"
 
 
+def test_build_args_parser_does_not_expose_agent_commands() -> None:
+    parser = build_args_parser()
+
+    help_text = parser.format_help()
+
+    assert "agent-run" not in help_text
+    assert "agent-status" not in help_text
+
+
 def test_handle_export_interpreted_blocks_xlsx_command_writes_expected_columns(
     tmp_path: Path,
     monkeypatch,

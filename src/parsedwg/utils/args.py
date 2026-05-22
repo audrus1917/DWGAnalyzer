@@ -5,8 +5,6 @@ import logging
 
 from gettext import gettext as _
 
-from src.parsedwg.settings import settings
-
 
 logger = logging.getLogger(__name__)
 
@@ -20,50 +18,36 @@ def build_args_parser() -> argparse.ArgumentParser:
     output_common = argparse.ArgumentParser(add_help=False)
     output_common.add_argument("-o", "--output", default=None, help="Output file")
 
+    filter_common = argparse.ArgumentParser(add_help=False)
+    filter_common.add_argument("--file-id", default=None, help="File ID filter")
+    filter_common.add_argument(
+        "--project",
+        "-p",
+        type=str,
+        dest="project",
+        default=None,
+        help="Name of an existing project.",
+    )
+
+
     parser = argparse.ArgumentParser(
         prog="parsedwg",
         description=_("Work with DWG/DXF files: inspect data and run operations"),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    extract_block_parser = subparsers.add_parser(
-        "extract-block",
-        parents=[readfile_common],
-        help=_("Extract a block into a separate file."),
-    )
-    extract_block_parser.add_argument("block_name", help=_("Block name to extract"))
-
-    describe_block_parser = subparsers.add_parser(
-        "describe-block",
-        parents=[readfile_common, output_common],
-        help=_("Read a file and print a block description by name."),
-    )
-    describe_block_parser.add_argument("block_name", help=_("Block name to describe"))
-
     export_block_parser = subparsers.add_parser(
-        "export-block",
+        "export",
         parents=[readfile_common, output_common],
-        help=_("Export the selected block to PNG."),
+        help=_("Export the selected block to PNG, SVG, DXF."),
     )
     export_block_parser.add_argument("block_name", help=_("Block name to export"))
     export_block_parser.add_argument(
-        "--dpi",
-        type=int,
-        default=300,
-        help=_("PNG resolution for export (default: 300)."),
-    )
-
-    export_block_png_parser = subparsers.add_parser(
-        "export-block-png",
-        parents=[readfile_common, output_common],
-        help=_("Export the selected block to PNG."),
-    )
-    export_block_png_parser.add_argument("block_name", help=_("Block name to export"))
-    export_block_png_parser.add_argument(
-        "--dpi",
-        type=int,
-        default=300,
-        help="PNG resolution for export (default: 300).",
+        "--format",
+        "-f",
+        choices=["png", "svg", "dxf"],
+        default="png",
+        help=_("Export format (default: png)."),
     )
 
     parse_command_parser = subparsers.add_parser(
@@ -100,49 +84,11 @@ def build_args_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    agent_run_parser = subparsers.add_parser(
-        "agent-run",
-        help="Run the agent pipeline for a file or directory.",
-    )
-    agent_run_parser.add_argument(
-        "input_ref",
-        help="Path to a file or directory for the agent run.",
-    )
-    agent_run_parser.add_argument(
-        "--profile",
-        choices=["full", "interpret-only"],
-        default="full",
-        help="Agent run profile (default: full).",
-    )
-    agent_run_parser.add_argument(
-        "--workers",
-        type=int,
-        default=1,
-        help="Number of parallel AI tasks (default: 1).",
-    )
-    agent_run_parser.add_argument(
-        "--dry",
-        action="store_true",
-        help="Build and execute the plan without saving AI results to the database.",
-    )
-    agent_run_parser.add_argument(
-        "--project",
-        dest="project_name",
-        default=None,
-        help="Project name used to attach agent-run results.",
-    )
-
-    agent_status_parser = subparsers.add_parser(
-        "agent-status",
-        help="Show the status of an agent job and its steps.",
-    )
-    agent_status_parser.add_argument("job_id", type=int, help="Agent job ID.")
-
     interpret_parser = subparsers.add_parser(
         "interpret",
+        parents=[filter_common],
         help=_(
-            "Request LLM name interpretations for all entities of a type and "
-            "save them to entity_embedding.short_interpretation."
+            "Request LLM name interpretations for all entities of a type and save them."
         ),
     )
     interpret_parser.add_argument(
@@ -172,14 +118,8 @@ def build_args_parser() -> argparse.ArgumentParser:
 
     verify_parser = subparsers.add_parser(
         "verify",
-        parents=[readfile_common],
+        parents=[readfile_common, filter_common],
         help=_("Compare a DWG/DXF file with entities stored in the current database."),
-    )
-    verify_parser.add_argument(
-        "--file-id",
-        dest="file_id",
-        default=None,
-        help=_("ID of the file entity in the database."),
     )
 
     project_add_parser = subparsers.add_parser(
@@ -298,11 +238,11 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="Path to a file or directory for recursive traversal.",
     )
 
-    subparsers.add_parser(
-        "export-interpreted-blocks-xlsx",
-        parents=[output_common],
-        help="Export all blocks with non-empty short_interpretation to XLSX.",
-    )
+    # subparsers.add_parser(
+    #     "export-interpreted-blocks-xlsx",
+    #     parents=[output_common],
+    #     help="Export all blocks with non-empty short_interpretation to XLSX.",
+    # )
 
     return parser
 

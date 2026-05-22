@@ -14,6 +14,7 @@ from src.parsedwg.ai.tags import get_name_meaning
 from src.parsedwg.utils import (
     _write_progress_line,
     _finish_progress_line,
+    display,
 )
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 def handle_interpret_command(
     entity_ids: list[str] | None,
     entity_type: str | None,
+    file_id: int | None = None,
     workers: int = 1,
     dry: bool = False,
 ) -> int:
@@ -32,6 +34,7 @@ def handle_interpret_command(
     Args:
         entity_ids: Explicit list of entity identifiers to interpret.
         entity_type: Entity type to select if entity_ids are not provided.
+        file_id: Optional file ID to filter entities by.
         workers: Maximum number of parallel tasks.
         dry: If true, do not save the result to the database.
 
@@ -60,20 +63,22 @@ def handle_interpret_command(
         entities = await list_entities(
             entity_ids=entity_ids,
             entity_type=entity_type,
+            file_id=file_id,
         )
+
         if not entities:
             return {"rows": [], "failures": []}
+        
         if not dry:
-            print(f"Selected entities: {len(entities)}")
+            display(_("Selected entities: %s") % len(entities))
 
         semaphore = asyncio.Semaphore(workers)
-
         async def _process_entity(entity: dict[str, str]) -> dict[str, object]:
             extra_context = ""
             if "entity_type" in entity:
                 entity_type_name = constants.ENTITY_TYPE_NAMES.get(entity["entity_type"], None)
-                if entity_type_name:
-                    extra_context = f"Тип примитива={entity_type_name}"
+                # if entity_type_name:
+                #     extra_context = f"Тип примитива={entity_type_name}"
             async with semaphore:
                 try:
                     text = await asyncio.wait_for(
@@ -208,14 +213,14 @@ def handle_interpret_command(
             if failures:
                 logger.error("Failed to interpret any entities. Errors: %d", len(failures))
                 return constants.ERROR
-            print("No entities to interpret.")
+            logger.warning("No entities to interpret.")
             return constants.OK
         if dry:
-            print(json.dumps(rows + failures, ensure_ascii=False, indent=2))
+            display(json.dumps(rows + failures, ensure_ascii=False, indent=2))
             return constants.OK
-        print(f"Interpreted: {len(rows)}")
+        display(f"Interpreted: {len(rows)}")
         if failures:
-            print(f"Errors: {len(failures)}")
+            display(f"Errors: {len(failures)}")
         return constants.OK
     except RuntimeError as e:
         logger.error("AI mode error: %s", e)
