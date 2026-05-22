@@ -125,120 +125,51 @@ def handle_process_docs_command(source_path: Path) -> int:
     return constants.OK
 
 
-def handle_agent_run_command(
-    input_ref: str,
-    profile: str,
-    workers: int,
-    dry: bool,
-    project_name: str | None,
-) -> int:
-    """Run the agent pipeline and print the completed job ID."""
-    from src.parsedwg.ai.agent_service import run_agent_job_sync
-
-    logger.debug("Start `agent_run`")
-    try:
-        job_id = run_agent_job_sync(
-            input_ref=input_ref,
-            profile=profile,
-            workers=workers,
-            dry=dry,
-            project_name=project_name,
-        )
-    except (LookupError, OSError, RuntimeError, ValueError) as exc:
-        logger.error("Failed to execute agent-run: %s", exc)
-        return constants.ERROR
-
-    print(f"Agent job completed: {job_id}")
-    return constants.OK
-
-
-def handle_agent_status_command(job_id: int) -> int:
-    """Print a summary of an agent job and its steps."""
-    from .agent_service import get_agent_job_report
-
-    report = get_agent_job_report(job_id)
-    if report is None:
-        logger.error("Agent job %s was not found.", job_id)
-        return constants.ERROR
-
-    job = report.get("job") if isinstance(report, dict) else None
-    steps = report.get("steps") if isinstance(report, dict) else None
-    if not isinstance(job, dict):
-        logger.error("Invalid agent-status report format for job %s.", job_id)
-        return constants.ERROR
-
-    print(f"Agent job: {job.get('id', job_id)}")
-    print(f"Status: {job.get('status', '')}")
-    for step in steps if isinstance(steps, list) else []:
-        if not isinstance(step, dict):
-            continue
-        print(
-            f"{step.get('step_order', '?')}. {step.get('step_kind', '')}: "
-            f"{step.get('status', '')}"
-        )
-    return constants.OK
-
-
 def handle_export_block_command(
     drawing_path: Path,
     block_name: str,
     output_path: Path | None,
-    dpi: int,
+    format: str,
 ) -> int:
-    """Export the selected block to PNG."""
+    """Export the selected block to the specified format."""
 
     try:
         explorer = DXFExplorer(drawing_path)
-        saved_path = explorer.export_block_png(block_name, output_path=output_path, dpi=dpi)
-        print(f"PNG saved: {saved_path}")
-        return constants.OK
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+    except FileNotFoundError as exc:
         logger.error("Failed to export block to PNG: %s", exc)
         return constants.ERROR
 
-
-def handle_export_block_svg_command(
-    drawing_path: Path,
-    block_name: str,
-    output_path: Path | None,
-) -> int:
-    """Export the selected block to SVG."""
-
-    try:
-        explorer = DXFExplorer(drawing_path)
-        saved_path = explorer.export_block_svg(block_name, output_path=output_path)
-        print(f"SVG saved: {saved_path}")
-        return constants.OK
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        logger.error("Failed to export block to SVG: %s", exc)
-        return constants.ERROR
-
-
-def handle_export_block_dxf_command(
-    drawing_path: Path,
-    block_name: str,
-    output_path: Path | None,
-) -> int:
-    """Return DXF text for the selected block."""
-
-    try:
-        explorer = DXFExplorer(drawing_path)
-        dxf_text = explorer.export_block_dxf(block_name)
-
-        if output_path is not None:
-            resolved_output_path = output_path
-            if resolved_output_path.suffix.lower() != ".dxf":
-                resolved_output_path = resolved_output_path.with_suffix(".dxf")
-            resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
-            resolved_output_path.write_text(dxf_text, encoding="utf-8")
-            print(f"DXF saved: {resolved_output_path}")
+    if format == "png":
+        try:
+            saved_path = explorer.export_block_png(block_name, output_path=output_path)
             return constants.OK
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            logger.error("Failed to export block to PNG: %s", exc)
+            return constants.ERROR
+    elif format == "svg":
+        try:
+            saved_path = explorer.export_block_svg(block_name, output_path=output_path)
+            return constants.OK
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            logger.error("Failed to export block to SVG: %s", exc)
+            return constants.ERROR
+    elif format == "dxf":
+        try:
+            dxf_text = explorer.export_block_dxf(block_name)
+            if output_path is not None:
+                resolved_output_path = output_path
+                if resolved_output_path.suffix.lower() != ".dxf":
+                    resolved_output_path = resolved_output_path.with_suffix(".dxf")
+                resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
+                resolved_output_path.write_text(dxf_text, encoding="utf-8")
+                print(f"DXF saved: {resolved_output_path}")
+                return constants.OK
 
-        logger.debug(dxf_text)
-        return constants.OK
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        logger.error("Failed to export block DXF text: %s", exc)
-        return constants.ERROR
+            logger.debug(dxf_text)
+            return constants.OK
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            logger.error("Failed to export block DXF text: %s", exc)
+            return constants.ERROR
 
 
 def handle_extract_block_command(
@@ -253,32 +184,6 @@ def handle_extract_block_command(
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         logger.error("Failed to extract block: %s", exc)
         return constants.ERROR
-
-
-def handle_describe_block_command(
-    drawing_path: Path,
-    block_name: str,
-    output_path: Path | None,
-) -> int:
-    """Return a JSON description of a block."""
-
-    try:
-        explorer = DXFExplorer(drawing_path)
-        payload = explorer.describe_block(block_name)
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        logger.error("Failed to describe block: %s", exc)
-        return constants.ERROR
-
-    rendered = json.dumps(payload, ensure_ascii=False, indent=2)
-    if output_path is not None:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(rendered, encoding="utf-8")
-        return constants.OK
-
-    print(rendered)
-    return constants.OK
-
-
 
 
 def handle_verify_extraction_command(
@@ -886,25 +791,12 @@ def main(argv: list[str] | None = None) -> int:
     return_code: int = 0
     match args.command:
 
-        case "extract-block":
-            return_code = handle_extract_block_command(
-                drawing_path=Path(args.file_path),
-                block_name=args.block_name,
-            )
-
-        case "describe-block":
-            return_code = handle_describe_block_command(
-                drawing_path=Path(args.file_path),
-                block_name=args.block_name,
-                output_path=Path(args.output) if args.output else None,
-            )
-
-        case "export-block" | "export-block-png":
+        case "export":
             return_code = handle_export_block_command(
                 drawing_path=Path(args.file_path),
                 block_name=args.block_name,
                 output_path=Path(args.output) if args.output else None,
-                dpi=args.dpi,
+                format=args.format,
             )
 
         case "parse":
@@ -917,21 +809,6 @@ def main(argv: list[str] | None = None) -> int:
                 dry=args.dry,
                 detail_level=args.detail_level,
             )
-
-        case "agent-run":
-            return_code = handle_agent_run_command(
-                input_ref=args.input_ref,
-                profile=args.profile,
-                ai_model=args.ai_model,
-                ai_base_url=args.ai_base_url,
-                ai_api_key=args.ai_api_key,
-                workers=args.workers,
-                dry=args.dry,
-                project_name=args.project_name,
-            )
-
-        case "agent-status":
-            return_code = handle_agent_status_command(job_id=args.job_id)
 
         case "interpret":
             return_code = handle_interpret_command(
