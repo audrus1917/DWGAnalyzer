@@ -129,7 +129,7 @@ def handle_export_block_command(
     drawing_path: Path,
     block_name: str,
     output_path: Path | None,
-    format: str,
+    output_format: str,
 ) -> int:
     """Export the selected block to the specified format."""
 
@@ -139,21 +139,21 @@ def handle_export_block_command(
         logger.error("Failed to export block to PNG: %s", exc)
         return constants.ERROR
 
-    if format == "png":
+    if output_format == "png":
         try:
-            saved_path = explorer.export_block_png(block_name, output_path=output_path)
+            explorer.export_block_png(block_name, output_path=output_path)
             return constants.OK
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             logger.error("Failed to export block to PNG: %s", exc)
             return constants.ERROR
-    elif format == "svg":
+    if output_format == "svg":
         try:
-            saved_path = explorer.export_block_svg(block_name, output_path=output_path)
+            explorer.export_block_svg(block_name, output_path=output_path)
             return constants.OK
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             logger.error("Failed to export block to SVG: %s", exc)
             return constants.ERROR
-    elif format == "dxf":
+    if output_format == "dxf":
         try:
             dxf_text = explorer.export_block_dxf(block_name)
             if output_path is not None:
@@ -170,6 +170,9 @@ def handle_export_block_command(
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             logger.error("Failed to export block DXF text: %s", exc)
             return constants.ERROR
+
+    logger.error("Unsupported export format: %s", output_format)
+    return constants.ERROR
 
 
 def handle_extract_block_command(
@@ -796,7 +799,7 @@ def main(argv: list[str] | None = None) -> int:
                 drawing_path=Path(args.file_path),
                 block_name=args.block_name,
                 output_path=Path(args.output) if args.output else None,
-                format=args.format,
+                output_format=args.format,
             )
 
         case "parse":
