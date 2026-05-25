@@ -5,14 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "parsedwg"
 version = "0.1.0"
-description = "MVP сервис для извлечения данных из DWG/DXF и формирования СО, ВОР и сметы"
+description = "MVP сервис для извлечения данных из чертежей форматов DWG/DXF"
 readme = "README.rst"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.115,<1.0",
-    "uvicorn[standard]>=0.30,<1.0",
-    "jinja2>=3.1,<4.0",
-    "python-multipart>=0.0.9,<1.0",
     "python-dotenv>=1.0,<2.0",
     "openpyxl>=3.1,<4.0",
     "pypdf>=5.0,<6.0",
@@ -22,22 +18,31 @@ dependencies = [
     "asyncpg>=0.29,<1.0",
     "psycopg[binary]>=3.2,<4.0",
     "pgvector>=0.3,<1.0",
-    "httpx>=0.27,<1.0",
-    "nltk>=3.9,<4.0",
     "redis>=5.0,<6.0",
     "tqdm>=4.66,<5.0",
-    "matplotlib>=3.9,<4.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3,<9.0",
     "alembic>=1.13,<2.0",
+    "pip-tools>=7.4,<8.0",
+]
+web = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.30,<1.0",
+    "jinja2>=3.1,<4.0",
+    "python-multipart>=0.0.9,<1.0",
 ]
 ai = [
+    "httpx>=0.27,<1.0",
     "langchain-core>=0.3,<1.0",
     "langchain-openai>=0.3,<1.0",
     "langgraph>=0.2,<1.0",
+    "nltk>=3.9,<4.0",
+]
+viz = [
+    "matplotlib>=3.9,<4.0",
 ]
 
 [project.scripts]
