@@ -116,7 +116,7 @@ def build_args_parser() -> argparse.ArgumentParser:
         help=_("Do not save to the database, print a JSON preview instead."),
     )
 
-    verify_parser = subparsers.add_parser(
+    subparsers.add_parser(
         "verify",
         parents=[readfile_common, filter_common],
         help=_("Compare a DWG/DXF file with entities stored in the current database."),
