@@ -1,4 +1,9 @@
+from pathlib import Path
+
+import pytest
+
 from parsedwg.cli import main
+from parsedwg.cli import handle_plot_entity_geom_command
 
 
 def test_main_project_list_prints_rows(monkeypatch, capsys) -> None:
@@ -114,3 +119,60 @@ def test_main_entity_list_handles_invalid_entity_type(monkeypatch, capsys) -> No
 
     assert exit_code == 1
     assert "Unknown entity type: NOPE" in capsys.readouterr().out
+
+
+def test_main_plot_entity_geom_passes_ids_and_output(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_handle_plot_entity_geom_command(
+        entity_ids: list[str],
+        output_path: Path | None,
+    ) -> int:
+        captured["entity_ids"] = entity_ids
+        captured["output_path"] = output_path
+        return 0
+
+    monkeypatch.setattr(
+        "parsedwg.cli.handle_plot_entity_geom_command",
+        fake_handle_plot_entity_geom_command,
+    )
+
+    output_path = tmp_path / "entities.png"
+    exit_code = main(["plot-entity-geom", "101", "102", "-o", str(output_path)])
+
+    assert exit_code == 0
+    assert captured == {
+        "entity_ids": ["101", "102"],
+        "output_path": output_path,
+    }
+
+
+def test_handle_plot_entity_geom_command_writes_image(tmp_path: Path, monkeypatch) -> None:
+    pytest.importorskip("matplotlib")
+    pytest.importorskip("shapely")
+
+    async def fake_list_entity_geometries(entity_ids: list[str]) -> list[dict[str, str]]:
+        assert entity_ids == ["101", "102"]
+        return [
+            {
+                "id": "101",
+                "name": "Line",
+                "entity_type": "PRIMITIVE",
+                "geom": "LINESTRING (0 0, 10 0, 10 5)",
+            },
+            {
+                "id": "102",
+                "name": "Roof",
+                "entity_type": "PRIMITIVE",
+                "geom": "POLYGON ((0 0, 4 0, 4 3, 0 0))",
+            },
+        ]
+
+    monkeypatch.setattr("parsedwg.db.list_entity_geometries", fake_list_entity_geometries)
+
+    output_path = tmp_path / "entities.png"
+    exit_code = handle_plot_entity_geom_command(["101", "102"], output_path)
+
+    assert exit_code == 0
+    assert output_path.exists()
+    assert output_path.stat().st_size > 0

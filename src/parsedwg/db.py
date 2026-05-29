@@ -843,6 +843,43 @@ async def list_entities_for_cli(
     ]
 
 
+async def list_entity_geometries(entity_ids: list[str]) -> list[dict[str, str]]:
+    """Return WKT geometries for the selected entity identifiers."""
+
+    if not entity_ids:
+        return []
+
+    parsed_ids = [parse_id(entity_id) for entity_id in entity_ids]
+    id_order = {entity_id: index for index, entity_id in enumerate(parsed_ids)}
+    stmt = (
+        select(
+            Entity.id,
+            Entity.name,
+            Entity.entity_type,
+            func.ST_AsText(Entity.geom).label("geom_wkt"),
+        )
+        .where(Entity.id.in_(parsed_ids))
+    )
+
+    async with async_session_factory() as session:
+        result = await session.execute(stmt)
+        rows = result.mappings().all()
+
+    payload = [
+        {
+            "id": str(row["id"]),
+            "name": str(row["name"] or ""),
+            "entity_type": row["entity_type"].value
+            if hasattr(row["entity_type"], "value")
+            else str(row["entity_type"]),
+            "geom": str(row["geom_wkt"] or ""),
+        }
+        for row in rows
+    ]
+    payload.sort(key=lambda item: id_order[parse_id(item["id"])])
+    return payload
+
+
 def _normalize_scored_meanings(meanings: list[dict[str, object]]) -> list[dict[str, object]]:
     normalized_by_meaning: dict[str, dict[str, object]] = {}
 

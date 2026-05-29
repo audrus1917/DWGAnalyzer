@@ -54,6 +54,85 @@ def _as_table(rows: list[ResultRow]) -> str:
     return "\n".join([header, separator, *body])
 
 
+def _plot_geometry(axis, geometry, color: object, label: str | None) -> None:
+    geom_type = getattr(geometry, "geom_type", "")
+
+    if geom_type in {"LineString", "LinearRing"}:
+        coords = [(float(point[0]), float(point[1])) for point in geometry.coords]
+        if len(coords) < 2:
+            return
+        xs = [point[0] for point in coords]
+        ys = [point[1] for point in coords]
+        axis.plot(xs, ys, color=color, linewidth=1.5)
+    elif geom_type == "MultiLineString":
+        for part in geometry.geoms:
+            _plot_geometry(axis, part, color, None)
+    elif geom_type == "Polygon":
+        exterior = [(float(point[0]), float(point[1])) for point in geometry.exterior.coords]
+        if len(exterior) >= 3:
+            xs = [point[0] for point in exterior]
+            ys = [point[1] for point in exterior]
+            axis.fill(xs, ys, facecolor=color, edgecolor=color, alpha=0.2, linewidth=1.5)
+        for interior in geometry.interiors:
+            ring = [(float(point[0]), float(point[1])) for point in interior.coords]
+            if len(ring) < 2:
+                continue
+            xs = [point[0] for point in ring]
+            ys = [point[1] for point in ring]
+            axis.plot(xs, ys, color=color, linewidth=1.0)
+    elif geom_type == "MultiPolygon":
+        for part in geometry.geoms:
+            _plot_geometry(axis, part, color, None)
+    elif geom_type == "Point":
+        axis.scatter([float(geometry.x)], [float(geometry.y)], color=color, s=24)
+    elif hasattr(geometry, "geoms"):
+        for part in geometry.geoms:
+            _plot_geometry(axis, part, color, None)
+
+    if label:
+        marker_point = geometry.representative_point()
+        axis.annotate(label, (float(marker_point.x), float(marker_point.y)), fontsize=8)
+
+
+def _render_entity_geometries(rows: list[ResultRow], output_path: Path | None) -> int:
+    if output_path is not None:
+        import matplotlib
+
+        matplotlib.use("Agg")
+
+    import matplotlib.pyplot as plt
+    from shapely import wkt
+
+    plotted_rows = [row for row in rows if str(row.get("geom", "")).strip()]
+    if not plotted_rows:
+        raise ValueError("Selected entities do not have geom values.")
+
+    figure, axis = plt.subplots(figsize=(10, 10))
+    cmap = plt.get_cmap("tab10")
+
+    for index, row in enumerate(plotted_rows):
+        geometry = wkt.loads(str(row["geom"]))
+        color = cmap(index % 10)
+        label = f"{row['id']} {row.get('name', '')}".strip()
+        _plot_geometry(axis, geometry, color, label)
+
+    axis.set_aspect("equal", adjustable="datalim")
+    axis.autoscale_view()
+    axis.grid(True, linewidth=0.3, alpha=0.5)
+    axis.set_title(f"Selected entities: {len(plotted_rows)}")
+    figure.tight_layout()
+
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        figure.savefig(output_path)
+        plt.close(figure)
+        print(f"Geometry plot saved: {output_path}")
+    else:
+        plt.show()
+
+    return len(plotted_rows)
+
+
 def handle_search_command(
     query: str,
     entity_type: str | None,
@@ -354,6 +433,32 @@ def handle_entity_list_command(
         return constants.OK
 
     print_as_table(rows)
+    return constants.OK
+
+
+def handle_plot_entity_geom_command(
+    entity_ids: list[str],
+    output_path: Path | None,
+) -> int:
+    """Render selected entity geometries from the geom field with matplotlib."""
+    from .db import list_entity_geometries
+
+    try:
+        rows = cast(list[ResultRow], asyncio.run(list_entity_geometries(entity_ids)))
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        return constants.ERROR
+
+    if not rows:
+        print("No entities.")
+        return constants.OK
+
+    try:
+        _render_entity_geometries(rows, output_path=output_path)
+    except (ImportError, RuntimeError, ValueError) as exc:
+        logger.error("Failed to plot entity geometries: %s", exc)
+        return constants.ERROR
+
     return constants.OK
 
 
@@ -916,6 +1021,12 @@ def main(argv: list[str] | None = None) -> int:
                 entity_type=args.entity_type,
                 project_name=args.project,
                 file_id=args.file_id,
+            )
+
+        case "plot-entity-geom":
+            return_code = handle_plot_entity_geom_command(
+                entity_ids=args.entity_ids,
+                output_path=Path(args.output) if args.output else None,
             )
 
         case "category-add":

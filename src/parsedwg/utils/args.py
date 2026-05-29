@@ -211,6 +211,17 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="File ID filter.",
     )
 
+    plot_entity_geom_parser = subparsers.add_parser(
+        "plot-entity-geom",
+        parents=[output_common],
+        help="Plot geom values for selected entity IDs through matplotlib.",
+    )
+    plot_entity_geom_parser.add_argument(
+        "entity_ids",
+        nargs="+",
+        help="Entity IDs to render.",
+    )
+
     category_add_parser = subparsers.add_parser(
         "category-add",
         help="Add a category.",
