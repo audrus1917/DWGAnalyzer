@@ -170,6 +170,58 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="Confirm deletion without an interactive prompt.",
     )
 
+    subparsers.add_parser(
+        "project-list",
+        help="Show the project list.",
+    )
+
+    file_list_parser = subparsers.add_parser(
+        "file-list",
+        help="Show file entities, optionally filtered by project.",
+    )
+    file_list_parser.add_argument(
+        "--project",
+        "-p",
+        dest="project",
+        default=None,
+        help="Project name filter.",
+    )
+
+    entity_list_parser = subparsers.add_parser(
+        "entity-list",
+        help="Show entities of a selected type with optional project and file filters.",
+    )
+    entity_list_parser.add_argument(
+        "--entity-type",
+        dest="entity_type",
+        required=True,
+        help="Entity type from the entity_type field, for example BLOCK.",
+    )
+    entity_list_parser.add_argument(
+        "--project",
+        "-p",
+        dest="project",
+        default=None,
+        help="Project name filter.",
+    )
+    entity_list_parser.add_argument(
+        "--file-id",
+        dest="file_id",
+        default=None,
+        help="File ID filter.",
+    )
+
+    plot_entity_geom_parser = subparsers.add_parser(
+        "plot-entity-geom",
+        parents=[output_common],
+        help="Plot geom values for selected entity IDs through matplotlib.",
+    )
+    plot_entity_geom_parser.add_argument(
+        "entity_ids",
+        nargs="+",
+        help="Entity IDs to render.",
+    )
+
     category_add_parser = subparsers.add_parser(
         "category-add",
         help="Add a category.",

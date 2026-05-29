@@ -725,6 +725,161 @@ async def create_project(
         }
 
 
+async def list_projects() -> list[dict[str, str]]:
+    """Return projects ordered by name."""
+
+    stmt = select(Project).order_by(Project.name.asc(), Project.id.asc())
+
+    async with async_session_factory() as session:
+        result = await session.execute(stmt)
+        projects = result.scalars().all()
+
+    return [
+        {
+            "id": str(project.id),
+            "name": project.name,
+            "description": project.description or "",
+            "created_by": project.created_by or "",
+            "created_at": project.created_at.isoformat(),
+        }
+        for project in projects
+    ]
+
+
+async def list_file_entities(project_name: str | None = None) -> list[dict[str, str]]:
+    """Return file entities, optionally filtered by project name."""
+
+    project_alias = aliased(Project)
+    stmt = (
+        select(
+            Entity.id,
+            Entity.name,
+            Entity.project_id,
+            Entity.created_at,
+            Entity.data["source_ref"].astext.label("source_ref"),
+            project_alias.name.label("project_name"),
+        )
+        .select_from(Entity)
+        .outerjoin(project_alias, Entity.project_id == project_alias.id)
+        .where(Entity.entity_type == EntityType.FILE)
+        .order_by(Entity.created_at.desc(), Entity.id.desc())
+    )
+
+    if project_name is not None:
+        stmt = stmt.where(project_alias.name == project_name)
+
+    async with async_session_factory() as session:
+        result = await session.execute(stmt)
+        rows = result.mappings().all()
+
+    return [
+        {
+            "id": str(row["id"]),
+            "name": str(row["name"] or ""),
+            "project_id": str(row["project_id"]) if row["project_id"] is not None else "",
+            "project": str(row["project_name"] or ""),
+            "source_ref": str(row["source_ref"] or ""),
+            "created_at": row["created_at"].isoformat() if row["created_at"] is not None else "",
+        }
+        for row in rows
+    ]
+
+
+async def list_entities_for_cli(
+    entity_type: str,
+    project_name: str | None = None,
+    file_id: str | None = None,
+) -> list[dict[str, str]]:
+    """Return entities filtered by type with optional project and file filters."""
+
+    normalized_entity_type = entity_type.strip().upper()
+    try:
+        entity_type_value = EntityType[normalized_entity_type]
+    except KeyError as exc:
+        raise ValueError(f"Unknown entity type: {entity_type}") from exc
+
+    project_alias = aliased(Project)
+    file_alias = aliased(Entity)
+    stmt = (
+        select(
+            Entity.id,
+            Entity.name,
+            Entity.description,
+            Entity.file_id,
+            Entity.project_id,
+            Entity.created_at,
+            project_alias.name.label("project_name"),
+            file_alias.name.label("file_name"),
+        )
+        .select_from(Entity)
+        .outerjoin(project_alias, Entity.project_id == project_alias.id)
+        .outerjoin(file_alias, Entity.file_id == file_alias.id)
+        .where(Entity.entity_type == entity_type_value)
+        .order_by(Entity.created_at.desc(), Entity.id.desc())
+    )
+
+    if project_name is not None:
+        stmt = stmt.where(project_alias.name == project_name)
+    if file_id is not None:
+        stmt = stmt.where(Entity.file_id == parse_id(file_id))
+
+    async with async_session_factory() as session:
+        result = await session.execute(stmt)
+        rows = result.mappings().all()
+
+    return [
+        {
+            "id": str(row["id"]),
+            "name": str(row["name"] or ""),
+            "description": str(row["description"] or ""),
+            "entity_type": normalized_entity_type,
+            "file_id": str(row["file_id"]) if row["file_id"] is not None else "",
+            "file_name": str(row["file_name"] or ""),
+            "project_id": str(row["project_id"]) if row["project_id"] is not None else "",
+            "project": str(row["project_name"] or ""),
+            "created_at": row["created_at"].isoformat() if row["created_at"] is not None else "",
+        }
+        for row in rows
+    ]
+
+
+async def list_entity_geometries(entity_ids: list[str]) -> list[dict[str, str]]:
+    """Return WKT geometries for the selected entity identifiers."""
+
+    if not entity_ids:
+        return []
+
+    parsed_ids = [parse_id(entity_id) for entity_id in entity_ids]
+    id_order = {entity_id: index for index, entity_id in enumerate(parsed_ids)}
+    stmt = (
+        select(
+            Entity.id,
+            Entity.name,
+            Entity.entity_type,
+            func.ST_AsText(Entity.geom).label("geom_wkt"),
+        )
+        .where(Entity.id.in_(parsed_ids))
+    )
+
+    async with async_session_factory() as session:
+        result = await session.execute(stmt)
+        rows = result.mappings().all()
+
+    payload = [
+        {
+            "id": str(row["id"]),
+            "name": str(row["name"] or ""),
+            "entity_type": row["entity_type"].value
+            if hasattr(row["entity_type"], "value")
+            else str(row["entity_type"]),
+            "geom": str(row["geom_wkt"] or ""),
+        }
+        for row in rows
+    ]
+    payload.sort(key=lambda item: id_order[parse_id(item["id"])])
+    return payload
+
+
 def _normalize_scored_meanings(meanings: list[dict[str, object]]) -> list[dict[str, object]]:
     normalized_by_meaning: dict[str, dict[str, object]] = {}
 

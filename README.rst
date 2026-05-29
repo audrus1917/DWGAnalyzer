@@ -39,7 +39,19 @@ parsedwg — извлечение данных из ``DWG``/``DXF``
 
    .. code-block:: bash
 
-      ./.venv/bin/pip install -e ".[dev]"
+    ./.venv/bin/pip install -e ".[dev,web]"
+
+  Для CLI без веб-интерфейса достаточно:
+
+  .. code-block:: bash
+
+    ./.venv/bin/pip install -e ".[dev]"
+
+  Для AI-возможностей и экспорта PNG/SVG дополнительно:
+
+  .. code-block:: bash
+
+    ./.venv/bin/pip install -e ".[dev,web,ai,viz]"
 
 2. Запустить веб-приложение:
 
@@ -52,6 +64,40 @@ parsedwg — извлечение данных из ``DWG``/``DXF``
    .. code-block:: text
 
       http://127.0.0.1:8000
+
+Lock-файлы
+==========
+
+Фиксированные зависимости генерируются из ``pyproject.toml`` через ``pip-tools``.
+Редактировать вручную нужно только ``pyproject.toml``.
+
+Выбирайте один lock-файл под нужный сценарий и устанавливайте его в чистое
+виртуальное окружение:
+
+.. code-block:: bash
+
+  ./.venv/bin/pip install -r requirements.txt
+
+.. code-block:: bash
+
+  ./.venv/bin/pip install -r requirements-dev.txt
+
+.. code-block:: bash
+
+  ./.venv/bin/pip install -r requirements-full.txt
+
+``requirements.txt`` фиксирует базовое ядро,
+``requirements-dev.txt`` добавляет инструменты разработки,
+``requirements-full.txt`` включает полный стек: ``dev + web + ai + viz``.
+
+Пересборка lock-файлов после изменения зависимостей:
+
+.. code-block:: bash
+
+  ./.venv/bin/pip install -e ".[dev]"
+  ./.venv/bin/pip-compile --strip-extras pyproject.toml -o requirements.txt
+  ./.venv/bin/pip-compile --strip-extras --extra dev pyproject.toml -o requirements-dev.txt
+  ./.venv/bin/pip-compile --strip-extras --extra dev --extra web --extra ai --extra viz pyproject.toml -o requirements-full.txt
 
 CLI-режим
 =========
