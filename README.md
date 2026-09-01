@@ -4,10 +4,20 @@ DWGAnalyzer is a Python application for inspecting and analyzing DWG/DXF
 drawings. The project is being rebuilt from a legacy prototype with a smaller,
 English-first architecture and GNU gettext localization.
 
-The current migration stage provides only the project foundation: package
-metadata, a CLI entry point, core error types, minimal domain models, and the
-localization boundary. Drawing discovery and parsing are intentionally not
-implemented yet.
+The current migration stage provides the project foundation and input layer.
+DWGAnalyzer can discover DWG/DXF files in files, directories, and ZIP archives,
+and can load drawings through `ezdxf`. Drawing entity parsing and analysis are
+intentionally not implemented yet.
+
+## Supported inputs
+
+- DXF files are read directly through `ezdxf`.
+- DWG files require ODA File Converter to be installed and available to
+  `ezdxf`.
+- Directories are scanned recursively in deterministic order.
+- ZIP archives may contain DWG and DXF files. Archive members are validated for
+  path traversal, encryption, symbolic links, excessive size, and suspicious
+  compression ratios before extraction.
 
 ## Development setup
 

@@ -19,3 +19,69 @@ msgstr "Показать версию программы и выйти."
 
 msgid "Show this help message and exit."
 msgstr "Показать это справочное сообщение и выйти."
+
+msgid "Input path does not exist: {path}"
+msgstr "Входной путь не существует: {path}"
+
+msgid "Unsupported input type: {path}"
+msgstr "Неподдерживаемый тип входных данных: {path}"
+
+msgid "Unable to read ZIP archive: {path}"
+msgstr "Не удалось прочитать ZIP-архив: {path}"
+
+msgid "ZIP archive contains too many entries: {path}"
+msgstr "ZIP-архив содержит слишком много элементов: {path}"
+
+msgid "Unsafe ZIP member path: {member}"
+msgstr "Небезопасный путь элемента ZIP-архива: {member}"
+
+msgid "Encrypted ZIP member is not supported: {member}"
+msgstr "Зашифрованный элемент ZIP-архива не поддерживается: {member}"
+
+msgid "ZIP member is a symbolic link: {member}"
+msgstr "Элемент ZIP-архива является символической ссылкой: {member}"
+
+msgid "ZIP member is too large: {member}"
+msgstr "Элемент ZIP-архива слишком велик: {member}"
+
+msgid "ZIP member has a suspicious compression ratio: {member}"
+msgstr "Элемент ZIP-архива имеет подозрительную степень сжатия: {member}"
+
+msgid "ZIP archive contains duplicate member path: {member}"
+msgstr "ZIP-архив содержит повторяющийся путь элемента: {member}"
+
+msgid "ZIP drawing data exceeds the allowed size: {path}"
+msgstr "Данные чертежей в ZIP-архиве превышают допустимый размер: {path}"
+
+msgid "Drawing source is not an archive member: {source}"
+msgstr "Источник чертежа не является элементом архива: {source}"
+
+msgid "Drawing was not found in ZIP archive: {source}"
+msgstr "Чертёж не найден в ZIP-архиве: {source}"
+
+msgid "Extraction target already exists: {path}"
+msgstr "Целевой файл извлечения уже существует: {path}"
+
+msgid "Unable to extract drawing from ZIP archive: {source}"
+msgstr "Не удалось извлечь чертёж из ZIP-архива: {source}"
+
+msgid "Drawing file does not exist: {path}"
+msgstr "Файл чертежа не существует: {path}"
+
+msgid "Unsupported drawing format: {path}"
+msgstr "Неподдерживаемый формат чертежа: {path}"
+
+msgid "Invalid or corrupted DXF drawing: {path}"
+msgstr "Некорректный или повреждённый чертёж DXF: {path}"
+
+msgid "Unable to decode DXF drawing: {path}"
+msgstr "Не удалось декодировать чертёж DXF: {path}"
+
+msgid "Unable to read DXF drawing: {path}"
+msgstr "Не удалось прочитать чертёж DXF: {path}"
+
+msgid "ODA File Converter is required to read DWG drawings."
+msgstr "Для чтения чертежей DWG требуется ODA File Converter."
+
+msgid "Unable to convert DWG drawing: {path}"
+msgstr "Не удалось преобразовать чертёж DWG: {path}"
