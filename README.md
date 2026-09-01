@@ -9,8 +9,8 @@ parser-independent drawing summaries, and structural drawing analysis.
 DWGAnalyzer can discover DWG/DXF files in files, directories, and ZIP archives,
 load drawings through `ezdxf`, and extract layout, layer, block, text, and block
 reference metadata. It can build inventory counts, inspect block reachability,
-and detect inconsistent references. Reporting is intentionally not implemented
-yet.
+detect inconsistent references, and produce localized text or stable JSON
+reports from the command line.
 
 ## Supported inputs
 
@@ -27,14 +27,40 @@ yet.
 - `dwganalyzer.io` discovers inputs, extracts archive members, and loads
   drawings.
 - `dwganalyzer.parsers` converts loaded drawings into stable domain summaries.
-- `dwganalyzer.services` analyzes summaries without depending on `ezdxf`.
+- `dwganalyzer.services` coordinates processing and analyzes summaries without
+  depending on `ezdxf` in the analysis layer.
+- `dwganalyzer.reporting` renders localized text and non-localized JSON.
 - `dwganalyzer.models` contains immutable data shared across those boundaries.
 - `dwganalyzer.i18n` is the single gettext initialization point.
 
 Parser output intentionally contains no `ezdxf` entities. Geometry processing,
-persistence, and reporting belong to later migration stages. Analysis findings
-use stable machine-readable codes; localization belongs to the reporting
-boundary.
+persistence, and visualization belong to later migration stages. Analysis
+findings use stable machine-readable codes; only their text representation is
+localized at the reporting boundary.
+
+## Command-line usage
+
+Analyze one drawing, a directory tree, or a ZIP archive:
+
+```bash
+dwganalyzer analyze path/to/drawing.dxf
+dwganalyzer analyze path/to/drawings/
+dwganalyzer analyze path/to/drawings.zip
+```
+
+Request JSON for machine processing or select Russian text output:
+
+```bash
+dwganalyzer analyze path/to/drawings/ --format json
+dwganalyzer analyze path/to/drawing.dxf --language ru
+```
+
+Text reports include aggregate status, per-drawing inventory, block usage, and
+structural findings. JSON field names, error codes, and finding codes are
+stable and are never translated; `schema_version` identifies the JSON contract.
+The command exits with status `0` when all discovered drawings are analyzed and
+status `1` on an input or per-drawing processing failure. Invalid CLI arguments
+use the standard argparse status `2`.
 
 ## Development setup
 
@@ -55,6 +81,7 @@ Display the current CLI help:
 
 ```bash
 ./.venv/bin/dwganalyzer
+./.venv/bin/dwganalyzer analyze --help
 ```
 
 ## Localization
@@ -69,4 +96,26 @@ Compile the Russian catalog after editing it:
 msgfmt \
   src/dwganalyzer/i18n/locale/ru/LC_MESSAGES/dwganalyzer.po \
   --output-file=src/dwganalyzer/i18n/locale/ru/LC_MESSAGES/dwganalyzer.mo
+```
+
+To update source messages, create a temporary template and merge it into the
+catalog:
+
+```bash
+find src/dwganalyzer -name '*.py' -print | sort > /tmp/dwganalyzer-i18n-files
+xgettext --language=Python --keyword=_ --keyword=ngettext:1,2 \
+  --files-from=/tmp/dwganalyzer-i18n-files \
+  --output=/tmp/dwganalyzer.pot
+msgmerge --update \
+  src/dwganalyzer/i18n/locale/ru/LC_MESSAGES/dwganalyzer.po \
+  /tmp/dwganalyzer.pot
+```
+
+To add another language, initialize its catalog from the same template, place
+it below `src/dwganalyzer/i18n/locale/<language>/LC_MESSAGES/`, translate it,
+and compile it with `msgfmt`:
+
+```bash
+msginit --input=/tmp/dwganalyzer.pot --locale=de \
+  --output-file=src/dwganalyzer/i18n/locale/de/LC_MESSAGES/dwganalyzer.po
 ```

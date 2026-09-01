@@ -143,3 +143,27 @@ class DrawingAnalysis:
     unused_blocks: tuple[str, ...] = ()
     missing_blocks: tuple[str, ...] = ()
     findings: tuple[AnalysisFinding, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessingFailure:
+    """Expected failure while processing one discovered drawing."""
+
+    source: str
+    code: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisBatch:
+    """Results of processing all drawings discovered below one input path."""
+
+    input_path: str
+    analyses: tuple[DrawingAnalysis, ...] = ()
+    failures: tuple[ProcessingFailure, ...] = ()
+
+    @property
+    def discovered_count(self) -> int:
+        """Return the total number of discovered drawings."""
+
+        return len(self.analyses) + len(self.failures)
