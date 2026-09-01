@@ -28,11 +28,76 @@ class DrawingSource:
 
 
 @dataclass(frozen=True, slots=True)
+class LayoutSummary:
+    """Parser-independent layout metadata."""
+
+    name: str
+    is_modelspace: bool
+    tab_order: int
+    entity_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class LayerSummary:
+    """Parser-independent layer metadata."""
+
+    name: str
+    color: int
+    linetype: str
+    lineweight: int
+    is_on: bool
+    is_frozen: bool
+    is_locked: bool
+
+
+@dataclass(frozen=True, slots=True)
+class AttributeValue:
+    """Tag and value attached to a block reference."""
+
+    tag: str
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
+class AttributeDefinition:
+    """Attribute definition declared by a block."""
+
+    tag: str
+    prompt: str
+    default: str
+
+
+@dataclass(frozen=True, slots=True)
+class BlockSummary:
+    """Direct metadata from a block definition."""
+
+    name: str
+    entity_count: int
+    layers: tuple[str, ...] = ()
+    nested_blocks: tuple[str, ...] = ()
+    text: tuple[str, ...] = ()
+    attribute_definitions: tuple[AttributeDefinition, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class EntitySummary:
+    """Normalized representation of an entity placed in a layout."""
+
+    entity_type: str
+    layout: str
+    layer: str | None = None
+    text: str | None = None
+    block_name: str | None = None
+    attributes: tuple[AttributeValue, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class DrawingSummary:
-    """Minimal parser-independent summary of a drawing."""
+    """Parser-independent drawing metadata and layout entities."""
 
     source: str
-    layouts: tuple[str, ...] = ()
-    layers: tuple[str, ...] = ()
-    blocks: tuple[str, ...] = ()
+    layouts: tuple[LayoutSummary, ...] = ()
+    layers: tuple[LayerSummary, ...] = ()
+    blocks: tuple[BlockSummary, ...] = ()
+    entities: tuple[EntitySummary, ...] = ()
     entity_count: int = 0
