@@ -28,3 +28,4 @@ def test_cli_shows_russian_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert result == 0
     assert "Анализатор чертежей DWG/DXF" in output
     assert "Показать это справочное сообщение и выйти." in output
+

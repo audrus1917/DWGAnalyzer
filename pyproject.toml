@@ -13,7 +13,9 @@ license-files = ["LICENSE"]
 authors = [
     {name = "Andrey Kozhevnikov"},
 ]
-dependencies = []
+dependencies = [
+    "ezdxf>=1.4,<2.0",
+]
 
 [project.optional-dependencies]
 dev = [
