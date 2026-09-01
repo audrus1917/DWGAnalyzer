@@ -101,3 +101,45 @@ class DrawingSummary:
     blocks: tuple[BlockSummary, ...] = ()
     entities: tuple[EntitySummary, ...] = ()
     entity_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class NamedCount:
+    """Count associated with a stable domain name."""
+
+    name: str
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisFinding:
+    """Machine-readable structural finding produced during analysis."""
+
+    code: str
+    subject: str | None = None
+    expected_count: int | None = None
+    actual_count: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DrawingAnalysis:
+    """Parser-independent inventory and consistency analysis of a drawing."""
+
+    source: str
+    entity_count: int
+    layout_count: int
+    layer_count: int
+    block_definition_count: int
+    text_entity_count: int
+    block_reference_count: int
+    attributed_block_reference_count: int
+    attribute_count: int
+    entities_without_layer: int
+    entity_types: tuple[NamedCount, ...] = ()
+    entities_by_layout: tuple[NamedCount, ...] = ()
+    entities_by_layer: tuple[NamedCount, ...] = ()
+    block_references: tuple[NamedCount, ...] = ()
+    used_blocks: tuple[str, ...] = ()
+    unused_blocks: tuple[str, ...] = ()
+    missing_blocks: tuple[str, ...] = ()
+    findings: tuple[AnalysisFinding, ...] = ()
