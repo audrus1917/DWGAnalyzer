@@ -85,3 +85,114 @@ msgstr "Для чтения чертежей DWG требуется ODA File Con
 
 msgid "Unable to convert DWG drawing: {path}"
 msgstr "Не удалось преобразовать чертёж DWG: {path}"
+
+msgid "Analyze drawings and display a report."
+msgstr "Проанализировать чертежи и вывести отчёт."
+
+msgid "DWG/DXF file, ZIP archive, or directory to analyze."
+msgstr "Файл DWG/DXF, ZIP-архив или каталог для анализа."
+
+msgid "Report format: text or json (default: text)."
+msgstr "Формат отчёта: text или json (по умолчанию: text)."
+
+msgid "Report language, for example en or ru."
+msgstr "Язык отчёта, например en или ru."
+
+msgid "Error: {message}"
+msgstr "Ошибка: {message}"
+
+msgid "None"
+msgstr "Нет"
+
+msgid "Drawing contains no entities."
+msgstr "Чертёж не содержит объектов."
+
+msgid "Entity count mismatch: expected {expected}, found {actual}."
+msgstr "Количество объектов не совпадает: ожидалось {expected}, найдено {actual}."
+
+msgid "Layout {layout} entity count mismatch: expected {expected}, found {actual}."
+msgstr "Количество объектов на листе {layout} не совпадает: ожидалось {expected}, найдено {actual}."
+
+msgid "Layout definition is missing: {name}."
+msgstr "Отсутствует определение листа: {name}."
+
+msgid "Layer definition is missing: {name}."
+msgstr "Отсутствует определение слоя: {name}."
+
+msgid "Block definition is missing: {name}."
+msgstr "Отсутствует определение блока: {name}."
+
+msgid "Analysis finding: {code}."
+msgstr "Результат проверки: {code}."
+
+msgid "Drawing: {source}"
+msgstr "Чертёж: {source}"
+
+msgid "Entities: {count}"
+msgstr "Объекты: {count}"
+
+msgid "Layouts: {count}"
+msgstr "Листы: {count}"
+
+msgid "Layers: {count}"
+msgstr "Слои: {count}"
+
+msgid "Block definitions: {count}"
+msgstr "Определения блоков: {count}"
+
+msgid "Text entities: {count}"
+msgstr "Текстовые объекты: {count}"
+
+msgid "Block references: {count}"
+msgstr "Вхождения блоков: {count}"
+
+msgid "Attributed block references: {count}"
+msgstr "Вхождения блоков с атрибутами: {count}"
+
+msgid "Attributes: {count}"
+msgstr "Атрибуты: {count}"
+
+msgid "Entities without a layer: {count}"
+msgstr "Объекты без слоя: {count}"
+
+msgid "Entity types"
+msgstr "Типы объектов"
+
+msgid "Entities by layout"
+msgstr "Объекты по листам"
+
+msgid "Entities by layer"
+msgstr "Объекты по слоям"
+
+msgid "Block reference counts"
+msgstr "Количество вхождений блоков"
+
+msgid "Used blocks"
+msgstr "Используемые блоки"
+
+msgid "Unused blocks"
+msgstr "Неиспользуемые блоки"
+
+msgid "Missing blocks"
+msgstr "Отсутствующие блоки"
+
+msgid "Findings"
+msgstr "Результаты проверки"
+
+msgid "Input: {path}"
+msgstr "Входные данные: {path}"
+
+msgid "Drawings discovered: {count}"
+msgstr "Найдено чертежей: {count}"
+
+msgid "Successfully analyzed: {count}"
+msgstr "Успешно проанализировано: {count}"
+
+msgid "Failed: {count}"
+msgstr "Ошибок: {count}"
+
+msgid "No drawings were found."
+msgstr "Чертежи не найдены."
+
+msgid "Failures"
+msgstr "Ошибки"
